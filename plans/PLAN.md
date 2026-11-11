@@ -1,327 +1,337 @@
-# SDR Viewer — план реализации
+# SDR Viewer — implementation plan
 
-Статус: **согласован**, решения — в разделе 12. Открытые вопросы из раздела 13 старт не блокируют.
+Status: **agreed**; decisions are in section 12. The open questions in
+section 13 do not block the start.
 
-## 1. Цель
+## 1. Goal
 
-Консольное (TUI) приложение на Rust для uConsole с платой HackerGadgets AIO V2.
-Приложение не просто рисует спектр, а **само следит за эфиром** и показывает
-человеку то, что он иначе пропустил бы: когда, где и как часто что-то передавалось.
+A console (TUI) application in Rust for the uConsole with the HackerGadgets
+AIO V2 board. The app does not just draw a spectrum: it **watches the air
+itself** and shows the person what they would otherwise miss — when, where
+and how often something was transmitted.
 
-Главный принцип: каждый экран отвечает на конкретный вопрос.
+Main principle: every screen answers one specific question.
 
-| Вопрос пользователя | Экран |
+| The user's question | Screen |
 |---|---|
-| Что в эфире прямо сейчас? | Спектр + водопад |
-| Что было, пока я не смотрел? | Журнал сигналов, лента каналов |
-| Какие частоты вообще заняты? | Плотность спектра, панорама (свип) |
-| Этот сигнал повторяется? С каким периодом? | График периодичности |
-| Появилось ли что-то новое, чего раньше не было? | Детектор новизны, оповещения |
-| Жива ли моя mesh-сеть? | Пульс Meshtastic |
-| Что именно передают? | Декодеры |
+| What is on the air right now? | Spectrum + waterfall |
+| What happened while I wasn't looking? | Signal log, channel strip |
+| Which frequencies are busy at all? | Spectral density, panorama (sweep) |
+| Does this signal repeat? With what period? | Periodicity graph |
+| Has something new appeared that wasn't there before? | Novelty detector, alerts |
+| Is my mesh network alive? | Meshtastic pulse |
+| What exactly is being sent? | Decoders |
 
-## 2. Железо и его ограничения
+## 2. Hardware and its limits
 
-Сведения ниже собраны с форума ClockworkPi и требуют проверки на реальном
-устройстве (фаза 0).
+The facts below were collected from the ClockworkPi forum and must be
+checked on the real device (phase 0).
 
-| Модуль | Что это | Как подключён | Важно |
+| Module | What it is | How it is connected | Note |
 |---|---|---|---|
-| RTL-SDR | RTL2832U + тюнер R860/R820T2 | USB | 8 бит, ~2,4 МГц полосы за раз, ~24–1766 МГц |
-| LoRa | SX1262 с TCXO | SPI (`spidev1.0`, IRQ 26, BUSY 24, RESET 25) | Один владелец: либо `meshtasticd`, либо мы |
-| GPS | GNSS-модуль | UART | Время и координаты |
-| RTC | Часы с батарейкой | I2C | Время без сети |
+| RTL-SDR | RTL2832U + R860/R820T2 tuner | USB | 8 bit, ~2.4 MHz of bandwidth at a time, ~24–1766 MHz |
+| LoRa | SX1262 with TCXO | SPI (`spidev1.0`, IRQ 26, BUSY 24, RESET 25) | One owner: either `meshtasticd` or us |
+| GPS | GNSS module | UART | Time and position |
+| RTC | Battery-backed clock | I2C | Time without a network |
 
-Три следствия, которые определяют архитектуру:
+Three consequences that shape the architecture:
 
-1. **Питание модулей выключено по умолчанию.** На V2 модули включаются через GPIO
-   (GPS — 27, LoRa — 16, SDR — 7, внутренний USB — 23; штатная утилита —
-   `hackergadgets/aiov2_ctl`). Приложение должно проверять это при старте и
-   понятно объяснять, что делать, а в идеале включать само.
-2. **RTL-SDR видит только ~2,4 МГц одновременно.** Проблема «смотрел не ту
-   частоту» решается не широким обзором, а свипом — перестройкой по диапазону.
-   Плата за это: во время свипа короткие посылки на других участках теряются.
-   Поэтому нужны два режима: «стоим и слушаем» и «обходим диапазон».
-3. **RTL-SDR открывает один процесс.** Внешние декодеры (rtl_433 и т. п.) не
-   могут параллельно взять устройство — данные им надо отдавать из нашего
-   приложения.
+1. **Module power is off by default.** On the V2 the modules are switched on
+   through GPIO (GPS — 27, LoRa — 16, SDR — 7, internal USB — 23; the stock
+   tool is `hackergadgets/aiov2_ctl`). The app must check this at start-up
+   and explain clearly what to do, and ideally switch them on itself.
+2. **The RTL-SDR sees only ~2.4 MHz at once.** "I was looking at the wrong
+   frequency" is solved not by a wide view but by a sweep — retuning across
+   a range. The price: during a sweep, short bursts elsewhere are lost.
+   Hence two modes: "stay and listen" and "walk the range".
+3. **Only one process can open the RTL-SDR.** External decoders (rtl_433
+   and the like) cannot take the device in parallel — our app has to feed
+   them the data.
 
-Экран uConsole — 1280×720. При шрифте 8×16 это около 160×45 знакомест;
-интерфейс проектируется под этот размер, минимум — 80×24.
+The uConsole screen is 1280×720. With an 8×16 font that is about 160×45
+cells; the interface is designed for that size, with 80×24 as the minimum.
 
-## 3. Стек
+## 3. Stack
 
-| Задача | Выбор | Запасной вариант |
+| Task | Choice | Fallback |
 |---|---|---|
 | TUI | `ratatui` + `crossterm` | — |
-| Доступ к RTL-SDR | `rtl-sdr-rs` (чистый Rust, без C-зависимостей) | FFI к `librtlsdr`; клиент `rtl_tcp` |
-| БПФ | `rustfft` / `realfft` | — |
-| Потоки и каналы | `std::thread` + `crossbeam-channel` | — |
-| Meshtastic | TCP API `meshtasticd` (порт 4403) + `prost` | Прямая работа с SX1262 (см. 7.2) |
-| GPS | `gpsd` (JSON по TCP) | Прямое чтение NMEA с UART |
-| Хранилище | SQLite (`rusqlite`, bundled) | — |
-| Конфигурация | TOML (`serde`) | — |
-| Запись IQ | SigMF (`.sigmf-data` + `.sigmf-meta`) | — |
-| Логи | `tracing` в файл (stdout занят интерфейсом) | — |
+| RTL-SDR access | `rtl-sdr-rs` (pure Rust, no C dependencies) | FFI to `librtlsdr`; an `rtl_tcp` client |
+| FFT | `rustfft` / `realfft` | — |
+| Threads and channels | `std::thread` + `crossbeam-channel` | — |
+| Meshtastic | `meshtasticd` TCP API (port 4403) + `prost` | Driving the SX1262 directly (see 7.2) |
+| GPS | `gpsd` (JSON over TCP) | Reading NMEA from the UART directly |
+| Storage | SQLite (`rusqlite`, bundled) | — |
+| Configuration | TOML (`serde`) | — |
+| IQ recording | SigMF (`.sigmf-data` + `.sigmf-meta`) | — |
+| Logs | `tracing` to a file (stdout belongs to the UI) | — |
 
-Асинхронный рантайм (tokio) не нужен: потоков немного, а DSP — это вычисления,
-а не ввод-вывод.
+No async runtime (tokio): there are few threads, and DSP is computation,
+not I/O.
 
-## 4. Архитектура
+## 4. Architecture
 
 ```
- Source ──IQ──▶ DSP ──кадры спектра──▶ ┬─▶ Кольцевой буфер водопада ─┐
- (rtl-sdr,                             ├─▶ Детектор событий ──▶ SQLite│
-  файл,                                ├─▶ Накопители (плотность,     ├─▶ UI
-  генератор)                           │    каналы, огибающие)        │
-        │                              └─▶ Детектор новизны ─▶ алерты ┘
-        └──IQ──▶ Декодеры (встроенные / внешние процессы) ──▶ сообщения ─▶ UI
+ Source ──IQ──▶ DSP ──spectrum frames──▶ ┬─▶ Waterfall ring buffer ─────┐
+ (rtl-sdr,                               ├─▶ Event detector ──▶ SQLite  │
+  file,                                  ├─▶ Accumulators (density,     ├─▶ UI
+  generator)                             │    channels, envelopes)      │
+        │                                └─▶ Novelty detector ─▶ alerts ┘
+        └──IQ──▶ Decoders (built-in / external processes) ──▶ messages ─▶ UI
 
- meshtasticd ──TCP──▶ Mesh-клиент ──▶ узлы, пакеты ──▶ UI
- gpsd ──────────────▶ время, координаты ──▶ метки событий
+ meshtasticd ──TCP──▶ Mesh client ──▶ nodes, packets ──▶ UI
+ gpsd ──────────────▶ time, position ──▶ event stamps
 ```
 
-Ключевые решения:
+Key decisions:
 
-- **`Source` — трейт.** Три реализации с первого дня: RTL-SDR, проигрывание
-  IQ-файла, синтетический генератор. Это позволяет разрабатывать и тестировать
-  без железа и воспроизводимо отлаживать детекторы.
-- **Единица обмена — кадр спектра** (вектор мощностей в дБ + метка времени +
-  центральная частота). Все анализаторы работают с кадрами, а не с сырым IQ.
-  Сырой IQ нужен только декодерам и записи.
-- **Интерфейс не блокирует приём.** Каналы ограниченной длины; если отрисовка
-  не успевает, отбрасываются кадры для экрана, а не для анализа.
-- **Кольцевой буфер IQ** на N секунд — чтобы по событию сохранить запись
-  «с начала», включая момент до срабатывания.
+- **`Source` is a trait.** Three implementations from day one: RTL-SDR,
+  IQ file playback, a synthetic generator. This lets us develop and test
+  without hardware and debug the detectors reproducibly.
+- **The unit of exchange is a spectrum frame** (a vector of powers in dB +
+  a timestamp + the centre frequency). All analysers work on frames, not raw
+  IQ. Raw IQ is needed only by decoders and recording.
+- **The UI never blocks reception.** Channels are bounded; if drawing falls
+  behind, frames are dropped for the screen, not for the analysis.
+- **An IQ ring buffer** of N seconds — so that an event can save a recording
+  "from the start", including the moment before the trigger.
 
-Структура — Cargo workspace:
+Layout — a Cargo workspace:
 
 ```
 crates/
-  sdr-core/      Source, типы кадров, кольцевые буферы
-  sdr-dsp/       БПФ, окна, усреднение, шумовой порог, автокорреляция
-  sdr-detect/    детектор событий, новизна, статистика занятости
-  sdr-decode/    декодеры и мост к внешним процессам
-  sdr-mesh/      клиент Meshtastic
+  sdr-core/      Source, frame types, ring buffers
+  sdr-dsp/       FFT, windows, averaging, noise floor, autocorrelation
+  sdr-detect/    event detector, novelty, occupancy statistics
+  sdr-decode/    decoders and the bridge to external processes
+  sdr-mesh/      Meshtastic client
   sdr-store/     SQLite, SigMF
-  sdr-tui/       экраны и виджеты
-  sdr-viewer/    бинарник, конфигурация, сборка всего вместе
+  sdr-tui/       screens and widgets
+  sdr-viewer/    the binary, configuration, wiring everything together
 ```
 
-## 5. Экраны
+## 5. Screens
 
-Переключение цифрами (на клавиатуре uConsole F-клавиши неудобны). Общие
-клавиши: стрелки / трекбол — курсор по частоте, `+`/`-` — масштаб, `g` —
-усиление, `f` — ввод частоты, `b` — закладки, `r` — запись, `?` — справка.
+Screens are switched with digits (F-keys are awkward on the uConsole
+keyboard). Common keys: arrows / trackball — frequency cursor, `+`/`-` —
+zoom, `g` — gain, `f` — enter a frequency, `b` — bookmarks, `r` — record,
+`?` — help.
 
-### 5.1. Спектр и водопад (основной)
-- Спектр: столбики из символов `▁▂▃▄▅▆▇█`, поверх — следы max-hold и среднего.
-- Водопад: полублоки `▀` с цветом фона и текста — два «пикселя» на знакоместо
-  по вертикали. Палитра truecolor.
-- Линия шумового порога, подписи закладок, курсор с частотой и уровнем.
+### 5.1. Spectrum and waterfall (main)
+- Spectrum: bars of `▁▂▃▄▅▆▇█`, with max-hold and average traces on top.
+- Waterfall: half blocks `▀` with background and foreground colours — two
+  "pixels" per cell vertically. Truecolor palette.
+- Noise-floor line, bookmark labels, a cursor with frequency and level.
 
-### 5.2. Лента каналов
-Слева имя или частота, справа история занятости `···▂██▃····▅█··`. Все строки
-выровнены по времени. Каналы берутся из частотного плана (конфиг) или
-создаются автоматически там, где детектор находит активность.
-Справа: доля занятости и время с последней активности.
+### 5.2. Channel strip
+Name or frequency on the left, occupancy history on the right
+`···▂██▃····▅█··`. All rows are aligned in time. Channels come from the
+frequency plan (config) or are created automatically where the detector
+finds activity. On the right: occupancy share and time since the last
+activity.
 
-### 5.3. Плотность спектра
-По горизонтали частота, по вертикали уровень, яркость — как часто сигнал
-достигал этого уровня. Двумерная гистограмма с затуханием по времени.
-Хорошо показывает редкие короткие сигналы, которые не видны на усреднённом
-спектре.
+### 5.3. Spectral density
+Frequency across, level up, brightness — how often the signal reached that
+level. A 2D histogram with decay over time. It shows rare short signals
+well, which are invisible on an averaged spectrum.
 
-### 5.4. Периодичность
-Автокорреляция огибающей выбранного канала. По горизонтали задержка, курсор
-автоматически встаёт на главный пик и подписывает его («2,04 с»).
-Рисуется точками Брайля.
+### 5.4. Periodicity
+Autocorrelation of the selected channel's envelope. Delay across; the cursor
+jumps to the main peak and labels it ("2.04 s"). Drawn with Braille dots.
 
-### 5.5. Журнал сигналов
-Строка на событие: время начала, центральная частота, длительность, ширина,
-пик над шумом, метка классификатора. Сортировка и фильтры. По выбору строки —
-фрагмент водопада из кольцевого буфера и кнопка «сохранить IQ».
+### 5.5. Signal log
+One row per event: start time, centre frequency, duration, width, peak
+above noise, classifier label. Sorting and filters. Selecting a row shows
+the waterfall fragment from the ring buffer and a "save IQ" button.
 
-### 5.6. Пульс Meshtastic
-Строка на узел, штрих на временной шкале за каждый принятый пакет. Справа —
-время с последнего пакета и SNR. Карточка пакета: тип, RSSI и SNR последнего
-перехода, число переходов (`hop_start − hop_limit`), ретранслятор.
+### 5.6. Meshtastic pulse
+One row per node, a tick on the timeline for every received packet. On the
+right — time since the last packet and SNR. Packet card: type, RSSI and SNR
+of the last hop, hop count (`hop_start − hop_limit`), relay.
 
-### 5.7. Панорама (свип)
-Обзор широкого диапазона (например 430–440 МГц или 24–1700 МГц) с накоплением
-max-hold и занятости. Enter по участку — перейти туда в режим «стоим и слушаем».
+### 5.7. Panorama (sweep)
+An overview of a wide range (e.g. 430–440 MHz or 24–1700 MHz) accumulating
+max-hold and occupancy. Enter on a segment — go there in "stay and listen"
+mode.
 
-### 5.8. Декодеры
-Лента расшифрованных сообщений со всех активных декодеров.
+### 5.8. Decoders
+A feed of decoded messages from all active decoders.
 
-## 6. Дополнительные идеи («что ещё помогло бы»)
+## 6. More ideas ("what else would help")
 
-Упорядочены по соотношению пользы к трудоёмкости.
+Ordered by value for the effort.
 
-1. **Детектор новизны.** Приложение запоминает «обычную» картину (фон по
-   частотам и времени суток) и подсвечивает то, чего раньше не было. Это
-   прямой ответ на исходную проблему.
-2. **Оповещения.** Правила вида «сигнал в 433,9–434,0 дольше 1 с и выше
-   20 дБ» → мигание строки состояния, звук, запись IQ.
-3. **Запись по событию.** Автоматическое сохранение IQ с предысторией из
-   кольцевого буфера. Позже запись можно спокойно разобрать.
-4. **Свип с памятью** (экран 5.7).
-5. **Частотный план и закладки.** Подписи на спектре: «PMR 3», «LPD 17»,
-   «авиа», «Meshtastic». Неизвестный сигнал сразу отличим от известного.
-6. **Карточка «что это?».** Для выбранного сигнала: ширина, скважность,
-   период, оценка типа модуляции (непрерывная несущая / AM / FM / OOK / FSK /
-   ЛЧМ LoRa) и список подходящих декодеров.
-7. **Занятость по времени суток.** Тепловая карта «час × канал» за дни и
-   недели — видно расписание передач.
-8. **Сводка «пока тебя не было».** При возврате к устройству: N новых
-   событий, M новых частот, самые активные каналы.
-9. **Привязка к GPS.** Координаты в каждом событии; экспорт в CSV/GeoJSON.
-   Позволяет понять, где сигнал сильнее, перемещаясь с устройством.
-10. **Прослушивание.** Демодуляция AM/NFM/WFM в динамик или наушники.
-11. **Повтор сессии.** Проигрывание сохранённой сессии с перемоткой.
-12. **Сравнение с эталоном.** Заморозить спектр и видеть разницу — удобно
-    для поиска помех и «жучков».
-13. **Управление питанием.** Включение модулей AIO V2 из приложения, заряд
-    батареи в строке состояния (приём заметно расходует батарею).
+1. **Novelty detector.** The app learns the "usual" picture (background by
+   frequency and time of day) and highlights what was not there before.
+   This is the direct answer to the original problem.
+2. **Alerts.** Rules like "a signal in 433.9–434.0 longer than 1 s and above
+   20 dB" → blinking status line, sound, IQ recording.
+3. **Recording on event.** Automatically save IQ with the pre-history from
+   the ring buffer. The recording can be examined at leisure later.
+4. **Sweep with memory** (screen 5.7).
+5. **Frequency plan and bookmarks.** Labels on the spectrum: "PMR 3",
+   "LPD 17", "airband", "Meshtastic". An unknown signal stands out from a
+   known one at once.
+6. **"What is this?" card.** For the selected signal: width, duty cycle,
+   period, a guess at the modulation (continuous carrier / AM / FM / OOK /
+   FSK / LoRa chirp) and a list of matching decoders.
+7. **Occupancy by time of day.** An "hour × channel" heat map over days and
+   weeks — transmission schedules become visible.
+8. **"While you were away" summary.** On returning to the device: N new
+   events, M new frequencies, the most active channels.
+9. **GPS tagging.** Coordinates in every event; export to CSV/GeoJSON. Lets
+   you see where a signal is stronger while moving with the device.
+10. **Listening.** AM/NFM/WFM demodulation to the speaker or headphones.
+11. **Session replay.** Playing back a saved session with seeking.
+12. **Comparison with a reference.** Freeze the spectrum and see the
+    difference — handy for hunting interference and "bugs".
+13. **Power management.** Switching the AIO V2 modules on from the app,
+    battery charge in the status line (reception drains the battery
+    noticeably).
 
-## 7. Декодирование и дешифровка
+## 7. Decoding and decryption
 
-Это два разных шага: **демодуляция и декодирование** (из радиосигнала в
-байты) и **дешифровка** (из зашифрованных байтов в смысл). Большинство
-интересных сигналов в этом диапазоне не зашифрованы вовсе.
+These are two different steps: **demodulation and decoding** (from the
+radio signal to bytes) and **decryption** (from encrypted bytes to
+meaning). Most interesting signals in this range are not encrypted at all.
 
-### 7.1. Что реально принять на RTL-SDR
+### 7.1. What an RTL-SDR can really receive
 
-| Сигнал | Частота | Шифрование | Подход |
+| Signal | Frequency | Encryption | Approach |
 |---|---|---|---|
-| Датчики ISM (погода, TPMS, пульты) | 433 / 868 МГц | нет | внешний `rtl_433` |
-| ADS-B (самолёты) | 1090 МГц | нет | свой декодер или `dump1090` |
-| AIS (суда) | 162 МГц | нет | свой декодер |
-| APRS / AX.25 | 144,8 МГц | нет | свой декодер (AFSK 1200) |
-| POCSAG (пейджеры) | разные | нет | свой декодер |
-| FM RDS | 88–108 МГц | нет | свой декодер |
-| LoRa / Meshtastic | 433 / 868 МГц | AES-CTR | см. 7.2 |
+| ISM sensors (weather, TPMS, remotes) | 433 / 868 MHz | none | external `rtl_433` |
+| ADS-B (aircraft) | 1090 MHz | none | own decoder or `dump1090` |
+| AIS (ships) | 162 MHz | none | own decoder |
+| APRS / AX.25 | 144.8 MHz | none | own decoder (AFSK 1200) |
+| POCSAG (pagers) | various | none | own decoder |
+| FM RDS | 88–108 MHz | none | own decoder |
+| LoRa / Meshtastic | 433 / 868 MHz | AES-CTR | see 7.2 |
 
-Предлагаемый порядок: сначала **мост к внешним декодерам** — приложение
-отдаёт им IQ через stdin и читает JSON (у `rtl_433` это штатный режим, он
-знает сотни протоколов). Затем свои декодеры на Rust для самых полезных
-протоколов.
+Proposed order: first a **bridge to external decoders** — the app feeds
+them IQ over stdin and reads JSON (a standard mode of `rtl_433`, which knows
+hundreds of protocols). Then own Rust decoders for the most useful
+protocols.
 
 ### 7.2. Meshtastic
 
-Как устроено шифрование:
+How the encryption works:
 
-- Заголовок пакета (16 байт: получатель, отправитель, идентификатор, флаги,
-  хеш канала, ретранслятор) **передаётся открыто**. Поэтому «пульс» работает
-  для любых узлов в зоне приёма, даже с неизвестными ключами.
-- Полезная нагрузка каналов шифруется AES-CTR (128 или 256 бит) ключом
-  канала. Nonce собирается из идентификатора пакета и номера отправителя.
-- Канал по умолчанию (`LongFast`) использует **общеизвестный ключ** — его
-  трафик читает любой.
-- Личные сообщения в новых прошивках шифруются на открытых ключах
-  (Curve25519). Чужие личные сообщения прочитать нельзя.
+- The packet header (16 bytes: destination, sender, id, flags, channel
+  hash, relay) **is sent in the clear**. So the "pulse" works for any nodes
+  in range, even with unknown keys.
+- Channel payloads are encrypted with AES-CTR (128 or 256 bit) using the
+  channel key. The nonce is built from the packet id and the sender number.
+- The default channel (`LongFast`) uses a **publicly known key** — anyone
+  can read its traffic.
+- Direct messages in recent firmware are encrypted with public keys
+  (Curve25519). Other people's direct messages cannot be read.
 
-Два способа получать пакеты:
+Two ways to get packets:
 
-| | A. Через `meshtasticd` | B. Напрямую с SX1262 |
+| | A. Through `meshtasticd` | B. Directly from the SX1262 |
 |---|---|---|
-| Как | TCP API, protobuf | свой драйвер SPI, приём всех кадров |
-| Плюсы | просто, узел остаётся участником сети, есть база узлов | видим все пакеты, включая чужие каналы и нерасшифрованные |
-| Минусы | видим только то, что отдаёт демон | узел перестаёт быть участником сети; много работы |
+| How | TCP API, protobuf | own SPI driver, receiving every frame |
+| Pros | simple, the node stays a member of the network, a node database exists | we see every packet, including other channels and undecrypted ones |
+| Cons | we see only what the daemon hands out | the node stops being a member of the network; a lot of work |
 
-Рекомендация: **A в первой версии**, B — отдельным режимом «сниффер» позже.
-Ключи каналов для расшифровки пользователь задаёт в конфиге.
+Recommendation: **A in the first version**, B later as a separate "sniffer"
+mode. Channel keys for decryption are set by the user in the config.
 
-Третий путь — программный приём LoRa на RTL-SDR — возможен (полоса 125–250 кГц
-помещается), но трудоёмок и чувствительностью уступает SX1262. В план не входит.
+A third way — software LoRa reception on the RTL-SDR — is possible (the
+125–250 kHz bandwidth fits), but laborious and less sensitive than the
+SX1262. Not in the plan.
 
-### 7.3. Границы
+### 7.3. Boundaries
 
-Приложение расшифровывает только то, для чего пользователь сам указал ключ,
-и трафик с общеизвестными ключами. Подбор ключей и обход шифрования не
-планируются. Правила приёма и раскрытия чужих сообщений зависят от страны —
-это ответственность пользователя.
+The app decrypts only what the user has provided a key for, and traffic
+with publicly known keys. Key guessing and bypassing encryption are not
+planned. The rules on receiving and disclosing other people's messages
+differ by country — that is the user's responsibility.
 
-## 8. Этапы
+## 8. Phases
 
-Каждый этап заканчивается работающей программой.
+Every phase ends with a working program.
 
-| # | Этап | Результат |
+| # | Phase | Result |
 |---|---|---|
-| 0 | Проверка железа | Заметка: какой модуль uConsole, какой тюнер, работает ли `rtl-sdr-rs`, как включается питание, цвета и шрифты в терминале |
-| 1 | Каркас | Workspace, CI, `Source` (генератор + файл), пустой TUI с вкладками |
-| 2 | Спектр и водопад | Экран 5.1 на синтетике и файлах, затем на RTL-SDR |
-| 3 | Детектор и журнал | Шумовой порог, события, SQLite, экран 5.5 с фрагментом водопада |
-| 4 | Накопители | Лента каналов, плотность, периодичность (5.2–5.4) |
-| 5 | Meshtastic | Клиент `meshtasticd`, экран 5.6 |
-| 6 | Свип и новизна | Панорама 5.7, детектор новизны, оповещения, запись по событию |
-| 7 | Декодеры | Мост к `rtl_433`, экран 5.8, затем свои декодеры |
-| 8 | Доводка | GPS, закладки, звук, занятость по суткам, пакет `.deb` |
+| 0 | Hardware check | A note: which uConsole module, which tuner, does `rtl-sdr-rs` work, how power is switched on, colours and fonts in the terminal |
+| 1 | Skeleton | Workspace, CI, `Source` (generator + file), an empty TUI with tabs |
+| 2 | Spectrum and waterfall | Screen 5.1 on synthetic data and files, then on the RTL-SDR |
+| 3 | Detector and log | Noise floor, events, SQLite, screen 5.5 with a waterfall fragment |
+| 4 | Accumulators | Channel strip, density, periodicity (5.2–5.4) |
+| 5 | Meshtastic | `meshtasticd` client, screen 5.6 |
+| 6 | Sweep and novelty | Panorama 5.7, novelty detector, alerts, recording on event |
+| 7 | Decoders | Bridge to `rtl_433`, screen 5.8, then own decoders |
+| 8 | Polish | GPS, bookmarks, sound, occupancy by time of day, `.deb` package |
 
-Первая полезная версия — после этапа 3.
+The first useful version comes after phase 3.
 
-## 9. Тестирование
+## 9. Testing
 
-- **DSP и детекторы** — модульные тесты на синтетике с известным ответом
-  (тон на заданной частоте, пачки с заданным периодом).
-- **Регрессии** — набор коротких IQ-записей реальных сигналов в репозитории
-  (или Git LFS), на которых детектор должен находить известные события.
-- **TUI** — снимки отрисовки через `ratatui::TestBackend` + `insta`.
-- **Декодеры** — эталонные записи с известным содержимым.
-- **На устройстве** — ручной чек-лист на каждый этап и замер загрузки CPU.
+- **DSP and detectors** — unit tests on synthetic data with a known answer
+  (a tone at a given frequency, bursts with a given period).
+- **Regressions** — a set of short IQ recordings of real signals in the
+  repository (or Git LFS) on which the detector must find known events.
+- **TUI** — render snapshots through `ratatui::TestBackend` + `insta`.
+- **Decoders** — reference recordings with known contents.
+- **On the device** — a manual checklist for every phase and a CPU load
+  measurement.
 
-## 10. Сборка и доставка
+## 10. Build and delivery
 
-- CI (GitHub Actions): `fmt`, `clippy`, тесты, кросс-сборка под `aarch64`.
-- Кросс-компиляция через `cross`; сборка на самом устройстве тоже должна
-  работать.
-- Артефакт релиза: статически слинкованный бинарник, позже `.deb` с
-  udev-правилами для RTL-SDR и чёрным списком модуля ядра `dvb_usb_rtl28xxu`
-  (без этого ядро занимает устройство).
+- CI (GitHub Actions): `fmt`, `clippy`, tests, cross-build for `aarch64`.
+- Cross-compilation through `cross`; building on the device itself must
+  work too.
+- Release artefact: a statically linked binary, later a `.deb` with udev
+  rules for the RTL-SDR and a blacklist for the `dvb_usb_rtl28xxu` kernel
+  module (without it the kernel grabs the device).
 
-## 11. Риски
+## 11. Risks
 
-| Риск | Что делаем |
+| Risk | What we do |
 |---|---|
-| `rtl-sdr-rs` не дружит с тюнером R860 | Проверка в фазе 0; запасной путь — `librtlsdr` |
-| Производительность CM4 при 2,4 Мвыб/с | Настраиваемые размер БПФ и частота кадров; замер в фазе 0 |
-| SX1262 нельзя делить с `meshtasticd` | В первой версии работаем через демон |
-| 8-битный АЦП: слабые сигналы рядом с сильными теряются | Ручное усиление, индикатор перегрузки |
-| Ложные срабатывания детектора | Адаптивный порог, гистерезис, минимальная длительность; настройка на записях |
-| Рост базы и записей IQ | Лимиты и автоочистка |
+| `rtl-sdr-rs` does not get on with the R860 tuner | Check in phase 0; fallback — `librtlsdr` |
+| CM4 performance at 2.4 MS/s | Configurable FFT size and frame rate; measure in phase 0 |
+| The SX1262 cannot be shared with `meshtasticd` | Work through the daemon in the first version |
+| 8-bit ADC: weak signals next to strong ones get lost | Manual gain, overload indicator |
+| False detector triggers | Adaptive threshold, hysteresis, minimum duration; tuning on recordings |
+| Growth of the database and IQ recordings | Limits and automatic clean-up |
 
-## 12. Принятые решения
+## 12. Decisions
 
-| Вопрос | Решение |
+| Question | Decision |
 |---|---|
-| Вычислительный модуль | CM4, 4 ГБ ОЗУ; цель сборки `aarch64-unknown-linux-gnu` |
-| Где запускается | Эмулятор терминала: truecolor и любые символы Unicode; режим для «голой» консоли не делаем |
-| Регион | Израиль (см. ниже) |
-| Внешние декодеры | Допустимы; мост к `rtl_433` — необязательная возможность |
-| Порядок этапов | Как в разделе 8: журнал сигналов (этап 3) раньше Meshtastic (этап 5) |
-| Meshtastic | Через `meshtasticd` (по умолчанию, возражений не было) |
+| Compute module | CM4, 4 GB RAM; build target `aarch64-unknown-linux-gnu` |
+| Where it runs | A terminal emulator: truecolor and any Unicode characters; no mode for the bare Linux console |
+| Region | Israel (see below) |
+| External decoders | Allowed; the `rtl_433` bridge is an optional feature |
+| Phase order | As in section 8: the signal log (phase 3) before Meshtastic (phase 5) |
+| Meshtastic | Through `meshtasticd` (the default, no objections) |
+| Language | UI in English; docs, README and code comments in English (the shared conventions in `~/projects/CLAUDE.md`) |
 
-### Регион: Израиль
+### Region: Israel
 
-- Отдельного региона Israel в Meshtastic нет, и участники сообщества расходятся
-  в том, какие настройки законны. Поэтому приложение **не зашивает** частоту
-  LoRa: она читается из `meshtasticd`, а в частотном плане задаётся в конфиге.
-- Приложение только принимает и ничего не передаёт. Настройка передатчика
-  `meshtasticd` (частота, мощность, скважность) остаётся на пользователе.
-- Частотный план по умолчанию (уточняется в фазе 0 по реальному эфиру):
-  FM 87,5–108 МГц, авиадиапазон 118–137 МГц, любительские 144–146 и
-  430–440 МГц, морской УКВ 156–162 МГц (AIS 161,975 / 162,025), ISM
-  433,05–434,79 МГц, диапазон 915–920 МГц, ADS-B 1090 МГц.
+- Meshtastic has no separate Israel region, and community members disagree
+  on which settings are legal. So the app **does not hard-code** the LoRa
+  frequency: it is read from `meshtasticd`, and in the frequency plan it is
+  set in the config.
+- The app only receives and transmits nothing. Configuring the
+  `meshtasticd` transmitter (frequency, power, duty cycle) stays with the
+  user.
+- Default frequency plan (to be refined in phase 0 against the real air):
+  FM 87.5–108 MHz, airband 118–137 MHz, amateur 144–146 and 430–440 MHz,
+  marine VHF 156–162 MHz (AIS 161.975 / 162.025), ISM 433.05–434.79 MHz,
+  the 915–920 MHz band, ADS-B 1090 MHz.
 
-## 13. Остаются открытыми
+## 13. Still open
 
-Не блокируют старт; до ответа действует вариант по умолчанию.
+They do not block the start; until answered, the default holds.
 
-1. **На какой частоте работает твоя mesh-сеть?** Нужно для закладки и для
-   сопоставления пакетов Meshtastic с событиями на водопаде.
-2. **Какие декодеры важнее всего?** *По умолчанию: порядок из 7.1.*
-3. **Язык интерфейса.** *По умолчанию: английский, документация на русском.*
-4. **Звук (прослушивание AM/FM).** *По умолчанию: да, на этапе 8.*
-5. **Работа в фоне (демон + TUI-клиент).** *По умолчанию: нет в первой версии.*
-6. **Лицензия.** В репозитории GPLv3, она совместима с GPL-зависимостями
-   (`rtl_433`, `librtlsdr`). *По умолчанию: остаёмся на GPLv3.*
+1. **What frequency does your mesh network use?** Needed for a bookmark and
+   for matching Meshtastic packets with events on the waterfall.
+2. **Which decoders matter most?** *Default: the order in 7.1.*
+3. **Sound (listening to AM/FM).** *Default: yes, in phase 8.*
+4. **Running in the background (daemon + TUI client).** *Default: not in
+   the first version.*
+5. **License.** The repository has GPLv3, which is compatible with GPL
+   dependencies (`rtl_433`, `librtlsdr`). *Default: stay on GPLv3.*

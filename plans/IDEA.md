@@ -1,29 +1,48 @@
 # SDR Viewer
 
-### Описание
-Надо написать консольное приложение для uConsole. 
-Приложение берёт данные с платы AIO V2 и отображает их в виде псевдографики.
-Идея в том, что SDR получает много данных, а человеческий мозг не в состоянии их проанализировать.
-Например, где-то могут передаваться сигналы, а человек их пропустил, потому что смотрел не ту частоту, или не понял, что это сигналы.
-Можно помочь человеку с этим и отображать какие-то метрики, которые не дадут пропустить нужные сигналы.
+The original idea, as first written down. The agreed plan is
+[PLAN.md](PLAN.md).
 
-### Требования
-Что можно было бы отображать:
-- Спектр сигнала гистограммой
-- Водопад (цветной спектр по времени)
+### Description
 
-Дальше бредовые идеи:
-- Лента каналов:	Слева частота или имя, справа полоска истории ···▂██▃····▅█··. Все строки выровнены по времени
-- Плотность спектра:	По горизонтали частота, по вертикали уровень, яркость ячейки показывает, как часто сигнал достигал этого уровня
-- График периодичности:	По горизонтали задержка, по вертикали автокорреляция огибающей. Курсор подписывает пик, например 2,04 с
-- Журнал сигналов:	Одна строка на событие — время начала, центральная частота, длительность, примерная ширина и пик над фоном. Выбираешь строку и видишь фрагмент водопада из кольцевого буфера
-- Пульс Meshtastic:	Отдельная строка на узел, каждое локально принятое радиосообщение оставляет штрих на временной шкале. Справа — время с последнего пакета и SNR. В карточке пакета можно показать RSSI и SNR последнего радиоперехода. Это важно для пакетов, пришедших через ретранслятор
+A console application for the uConsole.
+It takes data from the AIO V2 board and shows it as text-mode graphics.
+The point is that an SDR receives a lot of data, and the human brain cannot
+analyse it all. For example, signals may be transmitted somewhere and a
+person misses them because they were looking at the wrong frequency, or did
+not recognise them as signals.
+The app can help with this by showing metrics that do not let the wanted
+signals slip by.
 
-Придумай, что ещё помогло бы пользователю?
+### Requirements
 
-### Дешифровка
-Было бы хорошо также уметь дешифровывать принятые цифровые радиосигналы (посмотреть, как их шифруют)
+What could be shown:
+- The signal spectrum as a histogram
+- A waterfall (the spectrum in colour over time)
 
-### Детали
-- Операционная система: https://github.com/clockworkpi/uConsole/tree/master#uconsole-os-images
-- Стек: Rust
+Wilder ideas:
+- Channel strip: the frequency or name on the left, a history bar on the
+  right `···▂██▃····▅█··`. All rows are aligned in time.
+- Spectral density: frequency across, level up, the brightness of a cell
+  shows how often the signal reached that level.
+- Periodicity graph: delay across, autocorrelation of the envelope up. A
+  cursor labels the peak, e.g. 2.04 s.
+- Signal log: one row per event — start time, centre frequency, duration,
+  approximate width and peak above the noise floor. Pick a row to see the
+  waterfall fragment from the ring buffer.
+- Meshtastic pulse: one row per node; every locally received radio message
+  leaves a tick on the timeline. On the right — time since the last packet
+  and SNR. A packet card can show the RSSI and SNR of the last radio hop.
+  This matters for packets that came through a repeater.
+
+What else would help the user?
+
+### Decoding
+
+It would also be good to decode received digital radio signals (and to see
+how they are encrypted).
+
+### Details
+
+- Operating system: https://github.com/clockworkpi/uConsole/tree/master#uconsole-os-images
+- Stack: Rust
