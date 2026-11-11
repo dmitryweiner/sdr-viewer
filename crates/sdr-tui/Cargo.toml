@@ -1,0 +1,16 @@
+[package]
+name = "sdr-tui"
+description = "Screens, keys and widgets of the console interface."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sdr-core = { workspace = true }
+ratatui = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+
+[lints]
+workspace = true
