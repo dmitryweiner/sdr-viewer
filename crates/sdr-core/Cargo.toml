@@ -1,0 +1,12 @@
+[package]
+name = "sdr-core"
+description = "IQ sources, frame types and the helpers every other crate shares."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+num-complex = { workspace = true }
+
+[lints]
+workspace = true

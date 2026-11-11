@@ -1,0 +1,14 @@
+---
+source: crates/sdr-tui/src/ui.rs
+expression: "render(&app(), 40, 10).backend()"
+---
+"The terminal is 40×10; SDR Viewer needs "
+"at least 80×24.                         "
+"                                        "
+"                                        "
+"                                        "
+"                                        "
+"                                        "
+"                                        "
+"                                        "
+"                                        "

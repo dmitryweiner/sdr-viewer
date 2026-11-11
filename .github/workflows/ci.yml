@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: ./scripts/check.sh
+
+  # The uConsole's CM4 is aarch64. A static musl binary runs on any of its
+  # OS images regardless of their glibc; built and tested on a native arm64
+  # runner, so no cross toolchain is needed.
+  aarch64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --target aarch64-unknown-linux-musl
+      - run: cargo build --release --target aarch64-unknown-linux-musl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdr-viewer-aarch64
+          path: target/aarch64-unknown-linux-musl/release/sdr-viewer

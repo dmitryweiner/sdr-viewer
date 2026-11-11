@@ -279,10 +279,11 @@ The first useful version comes after phase 3.
 
 ## 10. Build and delivery
 
-- CI (GitHub Actions): `fmt`, `clippy`, tests, cross-build for `aarch64`.
-- Cross-compilation through `cross`; building on the device itself must
-  work too.
-- Release artefact: a statically linked binary, later a `.deb` with udev
+- CI (GitHub Actions): `fmt`, `clippy`, tests; tests and a release build
+  for `aarch64-unknown-linux-musl` on a native arm64 runner (no `cross`
+  needed). Building on the device itself must work too.
+- Release artefact: a statically linked (musl) binary, so it runs on any
+  uConsole image whatever its glibc; later a `.deb` with udev
   rules for the RTL-SDR and a blacklist for the `dvb_usb_rtl28xxu` kernel
   module (without it the kernel grabs the device).
 
@@ -308,6 +309,8 @@ The first useful version comes after phase 3.
 | Phase order | As in section 8: the signal log (phase 3) before Meshtastic (phase 5) |
 | Meshtastic | Through `meshtasticd` (the default, no objections) |
 | Language | UI in English; docs, README and code comments in English (the shared conventions in `~/projects/CLAUDE.md`) |
+| aarch64 build | Static musl binary built on GitHub's native arm64 runner instead of `cross` |
+| Phase order on start | Phase 1 before phase 0: no SSH access to the device yet; phase 0 follows `docs/hardware-check.md` when there is |
 
 ### Region: Israel
 
