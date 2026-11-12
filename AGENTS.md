@@ -84,7 +84,9 @@ touching USB.
   `~/sdr-viewer-check/sdr-viewer`.
 - `~/sdr-viewer-check/capture-433.cu8` — 10 s at 433.92 MHz, 2.4 MS/s,
   gain 30 dB, antenna on: LPD433 activity over a −71 dBFS floor. The
-  reference recording until the detector has its own.
+  detector finds 824 events in it: mostly 40–50 ms bursts ~9 kHz wide on
+  the 25 kHz LPD grid (433.075 MHz + n × 25 kHz) over some 66 channels — a
+  frequency hopper. The reference recording until the detector has its own.
 - Not set up yet: `meshtasticd` (LoRa is on `/dev/spidev4.0`), `gpsd`
   (installed, not configured), `aiov2_ctl`.
 - The terminal there: lxterminal, truecolor; the user sets the font size.
@@ -162,7 +164,8 @@ Measured on the dev Mac (Apple Silicon), release build:
 | Generator, demo scene (2 tones + noise) | ~16 ns/sample = ~4% of a P-core at 2.4 MS/s; noise is 1.7, tones 10.5 |
 | App with the generator, spectrum screen at 160×45 (smoke) | ~4% of one core with the detector (3% without), ~1 MB/s to the terminal |
 | Live reception on the CM4, RTL-SDR at 2.4 MS/s, spectrum at 160×45 | **31%** of one core (0.6 s of 15 in the kernel); 30 s of samples arrive in 30.0 s; opening the device takes 1.15 s |
-| The same on the CM4 | **37%** of one core with the generator, **25%** playing a `.cu8`; ~1 MB/s to the terminal. Not split yet into FFT, drawing and escape codes; the terminal emulator's own cost is not measured (the smoke has no window) |
+| App with the detector on the CM4, 160×45 (smoke, PR #10) | **21%** of one core playing a `.cu8`, **26%** with the generator; 0.12 MB/s to the terminal. Lower than the row below, measured before PR #9: the detector is not what costs |
+| The same on the CM4, before the detector | **37%** of one core with the generator, **25%** playing a `.cu8`; ~1 MB/s to the terminal. Not split yet into FFT, drawing and escape codes; the terminal emulator's own cost is not measured (the smoke has no window) |
 | Generator alone in the app, before the spectrum (phase 1) | 6%; **8% on the CM4** |
 | App playing a `.cu8` file | ~2% of one core |
 | Static aarch64 binary from CI | 2.2 MB |

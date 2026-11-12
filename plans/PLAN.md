@@ -389,6 +389,14 @@ How the detector works (`crates/sdr-detect`), as built:
   pure tone reads ~10 kHz wide (the window's skirts); a signal that never
   ends is one open event forever.
 
+On the device's recording (`capture-433.cu8`, 10 s) it finds 824 events:
+most are 40–50 ms long and ~9 kHz wide, exactly on the 25 kHz LPD grid
+over some 66 channels — a frequency hopper nobody had noticed on the
+waterfall. 90 are one bin for one frame at 8–10.5 dB above the floor: more
+than Gaussian noise gives at this threshold, so either the edges of weak
+bursts or noise that is not Gaussian. Open: whether the log hides them by
+default (a minimum level or length) or the threshold goes up.
+
 What phase 3 started from: `SpectrumFrame`s at 10 a second from any
 source; 100 ms frames average a short burst down (a 10 ms burst reads
 10 dB low), so the detector will likely want its own, faster frames from
