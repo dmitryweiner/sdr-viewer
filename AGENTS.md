@@ -98,9 +98,11 @@ touching USB.
   no data and reset the hub.
 - A new binary: download the PR's `sdr-viewer-aarch64` artifact
   (`gh run download RUN -n sdr-viewer-aarch64`) and `scp` it to
-  `~/sdr-viewer-check/sdr-viewer`. What lies there now is PR #15's build
-  (the threshold line on the spectrum, the IQ ring, `r` in the log), with
-  that PR's `smoke.py`. Saving IQ was tried there on the recording with
+  `~/sdr-viewer-check/sdr-viewer`. What lies there now is PR #16's build
+  (the threshold line on the spectrum, the IQ ring, the picture and `r` in
+  the log), with PR #15's `smoke.py` (arrow keys). Nobody has looked at
+  that build in the device's own terminal yet: how lxterminal's font draws
+  the Braille threshold line and the picture is for the user's eye. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
 - The default database `~/.local/share/sdr-viewer/events.db` does not
@@ -237,6 +239,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | App playing a `.cu8` file | ~2% of one core |
 | The event database on the CM4 (`smoke.py --keys 5`, the recording, with and without `--db`) | nothing measurable: 22% against 21–22% of one core. The file grows ~93 bytes an event: on the recording's band (~80 events a second) that is ~660 MB a day of reception |
 | The IQ ring buffer (30 s; with and without `--iq-buffer 0`) | `bench_ring` on the Mac: 0.3 ns/sample; 153 MB resident after 40 s, as computed (144 MB + the app). **On the CM4**, the recording, 15 s: spectrum (`--keys 1`) 32 → 34% of a core, log (`--keys 5`) 21 → 22%. With a bounds check and a wrap test per sample it was 4 points, not 1–2 |
+| The picture of the selected event on the CM4 (the recording, 15 s, `smoke.py --keys 5` plus down arrows) | the log alone **22%** of a core; a row held with its picture **19%** (the list stands still); a new picture every 0.36 s (40 downs) **26%** |
 | Static aarch64 binary from CI | 4.6 MB with SQLite compiled in (2.4 before) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:
