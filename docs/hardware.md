@@ -100,12 +100,23 @@ and everything behind it, run at 12M. 2.4 MS/s of 8-bit IQ is 38 Mbit/s.
 | 16.2 s | hub `1-1` is back at **full speed**: "not running at top speed" |
 | 145.8 s | the RTL-SDR appears (full speed) |
 
-So something around 7–13 s of boot resets the hub, and it does not
-negotiate high speed again. No under-voltage (`vcgencmd get_throttled` =
-`0x0`). Not known yet: what resets it (the keyboard's firmware start, a
-GPIO script, `uconsole-4g-cm4.service`, the AIO board's own power
-sequencing), and whether re-enumerating the root port brings 480M back.
-Lower sample rates were not tried after the hub reset.
+It is not a boot script. Rebinding the controller on a running system
+(`echo fe980000.usb > /sys/bus/platform/drivers/dwc2/unbind`, then `bind`)
+repeats it every time: the hub enumerates high-speed, **no device behind it
+appears for 5 s**, the hub disconnects, the port is power-cycled, and the
+hub returns at full speed with everything behind it. The same happens with
+the SDR's power off (GPIO 7 low), so the RTL-SDR is not the cause: the
+high-speed link to the hub `05e3:0608` itself does not hold.
+
+At full speed no sample rate works: `rtl_sdr` hung with 0 bytes at 2.4 and
+1.024 MS/s, and returned 0 bytes at 250 kS/s. No under-voltage
+(`vcgencmd get_throttled` = `0x0`). USB is set up by
+`dtoverlay=dwc2,dr_mode=host` in `config.txt` (image 2025-12-30).
+
+Not known: whether the cause is mechanical (this is the board's first
+power-up in this device — seating of the AIO board and its connector) or
+the `dwc2` driver, and whether the hub held high speed before the AIO
+board was fitted.
 
 ## 6. LoRa
 
