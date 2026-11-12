@@ -354,6 +354,26 @@ mod tests {
     }
 
     #[test]
+    fn a_log_with_a_clock_shows_the_date_and_time_of_day_at_the_minimum_size() {
+        use crate::log::WallClock;
+        use crate::log::tests::{event, noon};
+        use std::time::Duration;
+        let mut app = app();
+        app.screen = Screen::Log;
+        app.log.set_clock(WallClock {
+            stream_start: noon(),
+            utc_offset_s: 7200,
+        });
+        app.log.on_events([event(64_500, 2_300, 924.5, 21.0)]);
+        app.log.set_open(vec![event(0, 3_725_000, 500.0, 40.3)]);
+        app.log.load_history([(
+            noon() - Duration::from_secs(86_400),
+            event(2_040, 307, 1_200.0, 46.2),
+        )]);
+        insta::assert_snapshot!(render(&app, 80, 24).backend());
+    }
+
+    #[test]
     fn a_held_log_marks_the_selected_row_and_says_how_to_let_go() {
         let mut app = app_with_events();
         app.log.move_selection(1);

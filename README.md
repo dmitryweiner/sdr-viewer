@@ -59,7 +59,12 @@ With `--rtlsdr` every detected event is also kept in a SQLite file:
 `--db FILE` names another file — and keeps the events of a recording or of
 the generator too, which are not kept otherwise; `--no-db` keeps nothing.
 Events are written once a second; those still on when the app quits are
-ended there and written.
+ended there and written. Events older than 7 days are deleted when the app
+starts.
+
+With a database the log shows the local date and time of day instead of
+the time in the stream, and starts with what earlier runs found in the
+last 7 days (up to the 10 000 newest).
 
 ```sh
 sqlite3 ~/.local/share/sdr-viewer/events.db "

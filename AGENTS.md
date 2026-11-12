@@ -17,7 +17,7 @@ Phases of the plan (its section 14 has the detail):
 | 0 Hardware check | done — `docs/hardware.md` |
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
-| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen and the SQLite event database work; next the log reading earlier sessions from the database (wall-clock time), the waterfall fragment of an event, the floor line |
+| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept) and the log's history with wall-clock time work; next the waterfall fragment of an event and "save IQ" (needs the IQ ring buffer), the floor line on the spectrum |
 | 4–8 | not started |
 
 ## Commands
@@ -52,7 +52,8 @@ request gets no run: open a draft one to get a binary.
   the release binary in a real pty: presses keys, quits with `q`, fails on
   a crash or non-zero exit, prints the CPU used and the bytes sent to the
   terminal. Enter is `\r` (`--keys $'f100M\r'`). `--bin PATH` runs a given
-  binary; on the uConsole it needs only Python 3. The default keys end
+  binary; on the uConsole it needs only Python 3. `--words` prints the
+  pieces of text the app wrote, to grep for what must be on the screen. The default keys end
   on a placeholder screen: to measure a screen pass `--keys 1` (spectrum)
   or `--keys 5` (log), and compare builds side by side in one sitting.
 - `scripts/term-check.sh` — can this terminal show truecolor, bars, half
@@ -137,8 +138,9 @@ a crate is added in the phase that needs it):
   (samples → detector frames at 100 a second → events, and their averages
   → screen frames at 10 a second; one pass of FFTs), `reader` (the source
   thread: carry out `Command`s, read, run the pipeline, send `Update`s,
-  hand ended events to the store), `writer` (the thread that writes them
-  to the database once a second),
+  hand ended events to the store), `keep` (open the database, read the
+  week's history, start the writer thread, which first deletes what is
+  older), `writer` (that thread's loop: one write a second),
   `snapshot` (`--snapshot`), `main` (terminal loop, redraws only when
   something changed).
 
@@ -162,6 +164,9 @@ a crate is added in the phase that needs it):
   change of the tables raises `SCHEMA_VERSION` and migrates older files;
   a file from a newer build is refused, never rewritten.
 - An event's wall-clock time is its session's start plus its stream time.
+  The log shows wall-clock time only when there is a database (`WallClock`
+  with the local UTC offset, taken once at the start through `chrono` —
+  the only place the time zone is asked for).
 - The main loop does not redraw for events alone: they show with the next
   frame or status (10 a second).
   An event's times are stream time (`SpectrumFrame::time`), not the clock.

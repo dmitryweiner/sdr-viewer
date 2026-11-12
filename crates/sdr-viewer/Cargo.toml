@@ -14,6 +14,7 @@ sdr-store = { workspace = true }
 sdr-tui = { workspace = true }
 ratatui = { workspace = true }
 clap = { workspace = true }
+chrono = { workspace = true }
 
 [lints]
 workspace = true

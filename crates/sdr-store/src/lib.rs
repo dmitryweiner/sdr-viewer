@@ -169,14 +169,35 @@ impl Store {
         Ok(u64::try_from(count).unwrap_or(0))
     }
 
-    /// The latest `limit` events of all sessions, the newest first.
-    pub fn recent(&self, limit: usize) -> Result<Vec<StoredEvent>, StoreError> {
+    /// Deletes the events that began before `before`, and the sessions
+    /// left without any; returns how many events went. The file does not
+    /// shrink: SQLite fills the freed pages with what comes next.
+    pub fn prune(&mut self, before: SystemTime) -> Result<u64, StoreError> {
+        let transaction = self.connection.transaction()?;
+        let removed = transaction.execute(
+            "DELETE FROM events WHERE start_unix_ms < ?1",
+            [unix_ms(before)],
+        )?;
+        transaction.execute(
+            "DELETE FROM sessions WHERE started_unix_ms < ?1
+             AND NOT EXISTS (SELECT 1 FROM events WHERE session_id = sessions.id)",
+            [unix_ms(before)],
+        )?;
+        transaction.commit()?;
+        Ok(removed as u64)
+    }
+
+    /// The latest `limit` events of all sessions that began at `since` or
+    /// later, the newest first.
+    pub fn recent(&self, since: SystemTime, limit: usize) -> Result<Vec<StoredEvent>, StoreError> {
         let mut select = self.connection.prepare_cached(
             "SELECT session_id, start_unix_ms, stream_start_us, duration_us,
                     low_hz, high_hz, peak_hz, peak_dbfs, above_floor_db
-             FROM events ORDER BY start_unix_ms DESC, id DESC LIMIT ?1",
+             FROM events WHERE start_unix_ms >= ?1
+             ORDER BY start_unix_ms DESC, id DESC LIMIT ?2",
         )?;
-        let rows = select.query_map([i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = select.query_map(params![unix_ms(since), limit], |row| {
             Ok(StoredEvent {
                 session: SessionId(row.get(0)?),
                 start: UNIX_EPOCH + Duration::from_millis(unsigned(row.get(1)?)),
@@ -272,7 +293,7 @@ mod tests {
     fn a_new_database_is_empty() {
         let store = Store::in_memory().unwrap();
         assert_eq!(store.count().unwrap(), 0);
-        assert!(store.recent(10).unwrap().is_empty());
+        assert!(store.recent(UNIX_EPOCH, 10).unwrap().is_empty());
     }
 
     #[test]
@@ -282,7 +303,7 @@ mod tests {
         let events = [event(1_500, 12.5), event(63_000, 30.0)];
         store.add_events(session, &events).unwrap();
         assert_eq!(store.count().unwrap(), 2);
-        let got = store.recent(10).unwrap();
+        let got = store.recent(UNIX_EPOCH, 10).unwrap();
         assert_eq!(got.len(), 2);
         // The newest first.
         assert_eq!(got[0].event, events[1]);
@@ -305,13 +326,56 @@ mod tests {
         store
             .add_events(morning, &[event(5_000, 10.0), event(600_000, 11.0)])
             .unwrap();
-        let got = store.recent(2).unwrap();
+        let got = store.recent(UNIX_EPOCH, 2).unwrap();
         let above: Vec<f32> = got
             .iter()
             .map(|stored| stored.event.above_floor_db)
             .collect();
         assert_eq!(above, [20.0, 11.0]);
         assert_eq!(got[1].session, morning);
+    }
+
+    #[test]
+    fn recent_leaves_out_what_began_before_since() {
+        let mut store = Store::in_memory().unwrap();
+        let session = store.begin_session(noon(), &source()).unwrap();
+        store
+            .add_events(session, &[event(1_000, 10.0), event(2_000, 11.0)])
+            .unwrap();
+        let got = store.recent(noon() + Duration::from_secs(2), 10).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].event.above_floor_db, 11.0);
+    }
+
+    #[test]
+    fn pruning_deletes_old_events_and_the_sessions_left_empty() {
+        let mut store = Store::in_memory().unwrap();
+        let hour = Duration::from_secs(3600);
+        let old = store.begin_session(noon() - 3 * hour, &source()).unwrap();
+        let straddling = store.begin_session(noon() - hour, &source()).unwrap();
+        store
+            .add_events(old, &[event(0, 10.0), event(1_000, 11.0)])
+            .unwrap();
+        // One before noon, one after: 90 minutes into the session.
+        store
+            .add_events(straddling, &[event(60_000, 12.0), event(5_400_000, 13.0)])
+            .unwrap();
+        assert_eq!(store.prune(noon()).unwrap(), 3);
+        let got = store.recent(UNIX_EPOCH, 10).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].event.above_floor_db, 13.0);
+        assert_eq!(got[0].session, straddling);
+        let sessions: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(sessions, 1);
+        // Nothing more to delete, and a session just begun is not empty
+        // rubbish.
+        let fresh = store.begin_session(noon(), &source()).unwrap();
+        assert_eq!(store.prune(noon()).unwrap(), 0);
+        store.add_events(fresh, &[event(0, 14.0)]).unwrap();
+        assert_eq!(store.count().unwrap(), 2);
     }
 
     #[test]

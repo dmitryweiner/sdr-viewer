@@ -6,16 +6,21 @@
 #   scripts/smoke.py                         # generator, 160x45, keys 1-8, ? and Tab
 #   scripts/smoke.py --size 80x24 --secs 5
 #   scripts/smoke.py --keys '25?' -- capture.cu8 --rate 2.048M
+#   scripts/smoke.py --keys 5 --words -- --db /tmp/e.db | grep -E '^[0-9:.]+$'
 #
 # Prints e.g. "ok: exit 0, 3.0 s, cpu 41% of one core (user 1.10 s, sys 0.13 s)".
 # Arguments after `--` go to sdr-viewer. Builds with `cargo build --release`
 # first unless --no-build or --bin (a binary elsewhere, e.g. on the uConsole:
 # `scripts/smoke.py --bin ./sdr-viewer`; needs only Python 3).
+# --words also prints every distinct piece of text the app wrote, one per
+# line, escape sequences taken as the breaks: not the screen (a terminal
+# redraws in pieces), but enough to grep for what must be on it.
 import argparse
 import fcntl
 import json
 import os
 import pty
+import re
 import select
 import struct
 import subprocess
@@ -39,6 +44,8 @@ def main():
     parser.add_argument("--keys", default="12345678?\t", help="keys pressed one by one")
     parser.add_argument("--no-build", action="store_true")
     parser.add_argument("--bin", help="run this binary instead of building one")
+    parser.add_argument("--words", action="store_true",
+                        help="print the pieces of text written to the terminal")
     parser.add_argument("app_args", nargs="*")
     args = parser.parse_args()
 
@@ -100,6 +107,10 @@ def main():
         sys.stdout.write(output.decode(errors="replace")[-2000:])
         return 1
     print("ok:", report)
+    if args.words:
+        text = re.sub(rb"\x1b\[[0-9;?]*[A-Za-z]", b"\n", bytes(output)).decode(errors="replace")
+        for word in sorted({line.strip() for line in text.splitlines()} - {""}):
+            print(word)
     return 0
 
 
