@@ -10,4 +10,4 @@ pub mod source;
 pub mod units;
 
 pub use frame::SpectrumFrame;
-pub use source::{Iq, Source, SourceError, SourceInfo};
+pub use source::{GainChange, Iq, Source, SourceError, SourceInfo};

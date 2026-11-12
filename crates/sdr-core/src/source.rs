@@ -44,6 +44,15 @@ impl From<io::Error> for SourceError {
     }
 }
 
+/// What to do with a receiver's gain.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GainChange {
+    /// Leave it to the receiver.
+    Auto,
+    /// So many of the receiver's own steps up (or down, if negative).
+    Step(i32),
+}
+
 /// A stream of IQ samples: the RTL-SDR, a recording, or the generator.
 pub trait Source: Send {
     fn info(&self) -> SourceInfo;
@@ -54,6 +63,11 @@ pub trait Source: Send {
 
     /// Moves the centre frequency.
     fn tune(&mut self, center_hz: f64) -> Result<(), SourceError>;
+
+    /// Changes the gain; sources without one refuse.
+    fn set_gain(&mut self, _change: GainChange) -> Result<(), SourceError> {
+        Err(SourceError::Unsupported("this source has no gain"))
+    }
 }
 
 impl<S: Source + ?Sized> Source for Box<S> {
@@ -67,5 +81,9 @@ impl<S: Source + ?Sized> Source for Box<S> {
 
     fn tune(&mut self, center_hz: f64) -> Result<(), SourceError> {
         (**self).tune(center_hz)
+    }
+
+    fn set_gain(&mut self, change: GainChange) -> Result<(), SourceError> {
+        (**self).set_gain(change)
     }
 }

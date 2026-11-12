@@ -16,7 +16,7 @@ const GUTTER: u16 = 5;
 
 const HELD: Color = Color::Rgb(70, 70, 80);
 
-pub(crate) fn draw(frame: &mut Frame, view: &SpectrumView, area: Rect) {
+pub(crate) fn draw(frame: &mut Frame, view: &SpectrumView, input: Option<&str>, area: Rect) {
     let (Some(latest), Some(range)) = (view.latest(), view.range()) else {
         frame.render_widget(
             Paragraph::new("Waiting for samples…")
@@ -42,10 +42,13 @@ pub(crate) fn draw(frame: &mut Frame, view: &SpectrumView, area: Rect) {
     let width = usize::from(plot(bars).width);
     let cursor = view.cursor.map(|at| cursor_column(at, width));
 
-    draw_header(frame, view, latest, cursor, width, plot(header));
+    match input {
+        Some(typed) => draw_input(frame, typed, plot(header)),
+        None => draw_header(frame, view, latest, cursor, width, plot(header)),
+    }
     draw_scale(frame, range, bars);
     draw_bars(frame, view, latest, range, cursor, plot(bars));
-    draw_axis(frame, latest, cursor, plot(axis));
+    draw_axis(frame, view, latest, cursor, plot(axis));
     draw_waterfall(frame, view, range, plot(waterfall));
 }
 
@@ -59,12 +62,18 @@ fn draw_header(
 ) {
     let (label, hz, db) = match cursor {
         Some(column) => {
-            let hz = latest.hz_at((column as f64 + 0.5) / width as f64);
-            ("cursor", hz, columns(&latest.power_db, width)[column])
+            let hz = view.hz(latest, (column as f64 + 0.5) / width as f64);
+            let db = columns(view.visible(&latest.power_db), width)[column];
+            ("cursor", hz, db)
         }
         None => {
-            let (bin, db) = strongest(&latest.power_db);
-            ("peak", latest.bin_hz(bin), db)
+            let visible = view.visible(&latest.power_db);
+            let (bin, db) = strongest(visible);
+            (
+                "peak",
+                view.hz(latest, bin as f64 / visible.len() as f64),
+                db,
+            )
         }
     };
     let mut spans = vec![
@@ -72,10 +81,23 @@ fn draw_header(
         Span::raw(format_hz(hz)).bold(),
         Span::raw(format!("  {db:.1} dBFS")),
     ];
+    if view.magnification() > 1 {
+        spans.push(Span::raw(format!("  ×{}", view.magnification())).cyan());
+    }
     if view.paused {
         spans.push(Span::raw("  paused").yellow());
     }
     frame.render_widget(Line::from(spans), area);
+}
+
+/// The frequency being typed, in place of the header.
+fn draw_input(frame: &mut Frame, typed: &str, area: Rect) {
+    let line = Line::from(vec![
+        Span::raw("frequency ").dark_gray(),
+        Span::raw(format!("{typed}▏")).bold(),
+        Span::raw("  e.g. 433.92M · Enter tunes · Esc cancels").dark_gray(),
+    ]);
+    frame.render_widget(line, area);
 }
 
 fn strongest(power_db: &[f32]) -> (usize, f32) {
@@ -118,8 +140,8 @@ fn draw_bars(
 ) {
     let width = usize::from(area.width);
     let rows = usize::from(area.height);
-    let now = columns(&latest.power_db, width);
-    let held = columns(view.max_hold(), width);
+    let now = columns(view.visible(&latest.power_db), width);
+    let held = columns(view.visible(view.max_hold()), width);
     let buffer = frame.buffer_mut();
     for (column, (&now, &held)) in now.iter().zip(&held).enumerate() {
         let (now, held) = (level(now, range), level(held, range));
@@ -151,8 +173,14 @@ fn draw_bars(
 
 /// Frequencies of the left edge, the centre and the right edge, and the
 /// cursor's mark.
-fn draw_axis(frame: &mut Frame, latest: &SpectrumFrame, cursor: Option<usize>, area: Rect) {
-    let [left, center, right] = [0.0, 0.5, 1.0].map(|at| format_hz(latest.hz_at(at)));
+fn draw_axis(
+    frame: &mut Frame,
+    view: &SpectrumView,
+    latest: &SpectrumFrame,
+    cursor: Option<usize>,
+    area: Rect,
+) {
+    let [left, center, right] = [0.0, 0.5, 1.0].map(|at| format_hz(view.hz(latest, at)));
     frame.render_widget(Line::from(left).dark_gray(), area);
     frame.render_widget(Line::from(center).dark_gray().centered(), area);
     frame.render_widget(Line::from(right).dark_gray().right_aligned(), area);
@@ -170,7 +198,7 @@ fn draw_waterfall(frame: &mut Frame, view: &SpectrumView, range: (f32, f32), are
     let mut rows = view
         .frames()
         .take(usize::from(area.height) * 2)
-        .map(|frame| columns(&frame.power_db, width));
+        .map(|frame| columns(view.visible(&frame.power_db), width));
     let buffer = frame.buffer_mut();
     for y in 0..area.height {
         let Some(upper) = rows.next() else { break };

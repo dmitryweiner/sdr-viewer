@@ -8,6 +8,18 @@ strings and code comments are in English; the user talks to agents in
 Russian. The shared conventions are in `~/projects/CLAUDE.md` (written for
 web apps: TDD, scripts, docs, license and branches apply here too).
 
+## Where things stand
+
+Phases of the plan (its section 14 has the detail):
+
+| Phase | State |
+|---|---|
+| 0 Hardware check | done — `docs/hardware.md` |
+| 1 Skeleton | done |
+| 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
+| 3 Detector and log | **next** |
+| 4–8 | not started |
+
 ## Commands
 
 - `./scripts/check.sh` — `fmt --check` + `clippy -D warnings` + tests, the
@@ -15,72 +27,101 @@ web apps: TDD, scripts, docs, license and branches apply here too).
 - `cargo run --release [-- FILE --rate 2.4M --center 433.92M --loop]` — the
   app; without a file the demo generator runs.
 - `cargo run --release -- --rtlsdr --center 433.92M [--gain 30] [--rate 2.4M]`
-  — receive from an RTL-SDR. **On the user's uConsole** only through
-  `~/sdr-viewer-check/sdr-viewer-rx.sh ARGS` (below).
-- `cargo run --release -- [FILE …] --snapshot 160x45 [--secs 10]` — no
-  terminal: analyses the start of the stream unpaced, prints the spectrum
-  screen as text and the max-hold peaks. The way to look at a recording or
-  at the picture from a script.
-- `scripts/smoke.py [--size 80x24] [--keys '12?'] [--secs 5] [-- ARGS]` —
-  the release binary in a real pty: presses keys, quits, fails on a crash or
-  non-zero exit, prints the CPU used. `--bin PATH` runs a given binary (on
-  the uConsole: only Python 3 needed).
-- `scripts/hub-speed.sh` — installed on the device as
-  `/usr/local/sbin/sdr-hub-speed` (root): `high [--while-pid PID]` puts the
-  hub at 480M for the RTL-SDR and unbinds the kernel's DVB driver, `full`
-  returns to 12M, `status`. Works through the flag `/run/sdr-viewer-high-speed`
-  that the device's udev rule checks, so a reboot always gives 12M.
-- `scripts/sdr-viewer-rx.sh ARGS` — on the device: `high` for as long as
-  `sdr-viewer --rtlsdr ARGS` runs, then back. The built-in keyboard is dead
-  meanwhile (about 6 s to switch each way); say so before running it.
-- `scripts/hs-probe.sh` — superseded by the two above; kept for its
-  `rtl_sdr`/`rtl_test` cross-check with librtlsdr.
-- `scripts/term-check.sh` — can this terminal show truecolor, bars, half
-  blocks, Braille (phase 0, on the device).
+  — receive from an RTL-SDR. On the user's uConsole only through
+  `sdr-viewer-rx.sh` (see "The user's device").
+- `cargo run --release -- [FILE … | --rtlsdr …] --snapshot 160x45 [--secs 10]`
+  — no terminal: analyses the start of the stream (unpaced for files and
+  the generator), prints the spectrum screen as text and the max-hold
+  peaks. The way to look at a recording, at the air, or at the picture from
+  a script. Below 80x24 it prints only "too small".
 - `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
   of the generator per sample.
 
-CI (`.github/workflows/ci.yml`): `check.sh` on Linux x86-64; tests and a
-static `aarch64-unknown-linux-musl` release build on a native arm64 runner,
-uploaded as the artifact `sdr-viewer-aarch64`.
+CI (`.github/workflows/ci.yml`) runs on pull requests and on `main`:
+`check.sh` on Linux x86-64; tests and a static `aarch64-unknown-linux-musl`
+release build on a native arm64 runner, uploaded as the artifact
+`sdr-viewer-aarch64` — the binary for the device. A branch without a pull
+request gets no run: open a draft one to get a binary.
 
-## Plans
+## Scripts
+
+- `scripts/check.sh` — above.
+- `scripts/smoke.py [--size 80x24] [--keys '12?'] [--secs 5] [-- ARGS]` —
+  the release binary in a real pty: presses keys, quits with `q`, fails on
+  a crash or non-zero exit, prints the CPU used and the bytes sent to the
+  terminal. Enter is `\r` (`--keys $'f100M\r'`). `--bin PATH` runs a given
+  binary; on the uConsole it needs only Python 3.
+- `scripts/term-check.sh` — can this terminal show truecolor, bars, half
+  blocks, Braille.
+- `scripts/hub-speed.sh` — for the user's device, installed there as
+  `/usr/local/sbin/sdr-hub-speed` (root): `high [--while-pid PID]` puts the
+  hub at 480M for the RTL-SDR and unbinds the kernel's DVB driver, `full`
+  returns to 12M, `status`.
+- `scripts/sdr-viewer-rx.sh ARGS` — on the device: `high` for as long as
+  `sdr-viewer --rtlsdr ARGS` runs, then back, however the app exits.
+- `scripts/hs-probe.sh` — the first 480M probe with `rtl_sdr`/`rtl_test`;
+  kept as a cross-check against librtlsdr.
+
+## The user's device
+
+`ssh dmw@192.168.1.246` (key login; `sudo` works without a password).
+Allowed without asking: read-only checks, our files in
+`~/sdr-viewer-check/`, and installing `aiov2_ctl`, `rtl-sdr`,
+`meshtasticd`, `gpsd`. Anything else that changes the system — ask first.
+Everything found there is in `docs/hardware.md`; read its section 5 before
+touching USB.
+
+- **The hub is defective and deliberately held at 12 Mbit/s** by the user's
+  udev rule; at 480M the built-in keyboard and trackball die, at 12M the
+  RTL-SDR delivers nothing. Receive only through
+  `~/sdr-viewer-check/sdr-viewer-rx.sh ARGS`; it switches the hub for the
+  time the app runs (about 6 s each way). Tell the user before every run:
+  their keyboard drops.
+- Never run plain `rtl_*` tools or `sdr-viewer --rtlsdr` at 12M: they get
+  no data and reset the hub.
+- A new binary: download the PR's `sdr-viewer-aarch64` artifact
+  (`gh run download RUN -n sdr-viewer-aarch64`) and `scp` it to
+  `~/sdr-viewer-check/sdr-viewer`.
+- `~/sdr-viewer-check/capture-433.cu8` — 10 s at 433.92 MHz, 2.4 MS/s,
+  gain 30 dB, antenna on: LPD433 activity over a −71 dBFS floor. The
+  reference recording until the detector has its own.
+- Not set up yet: `meshtasticd` (LoRa is on `/dev/spidev4.0`), `gpsd`
+  (installed, not configured), `aiov2_ctl`.
+- The terminal there: lxterminal, truecolor; the user sets the font size.
+
+## Plans and docs
 
 | File | What |
 |---|---|
 | [plans/IDEA.md](plans/IDEA.md) | The original idea, as first written |
-| [plans/PLAN.md](plans/PLAN.md) | The agreed plan: screens, architecture, phases, decisions |
-| [docs/hardware-check.md](docs/hardware-check.md) | Phase 0 checklist to run on the uConsole |
-| [docs/hardware.md](docs/hardware.md) | What phase 0 found on the device so far |
-
-Phase status: 0, 1 — done; 2 — the screen works on the generator, files
-and the RTL-SDR; zoom, gain and frequency keys are still to do (the defective hub is forced
-to 12 Mbit/s on purpose and the RTL-SDR works only at 480M, where the
-keyboard dies; never undo the workaround or run `rtl_*` tools there
-without asking), findings in `docs/hardware.md`; 1 — done.
-The device is reached with `ssh dmw@192.168.1.246` (key login; sudo works
-without a password — install or change only what the user allowed); our files there live in `~/sdr-viewer-check/`.
+| [plans/PLAN.md](plans/PLAN.md) | The agreed plan: screens, architecture, phases, decisions (12), open questions (13), progress (14) |
+| [docs/hardware.md](docs/hardware.md) | What phase 0 found on the device, and what is installed there |
+| [docs/hardware-check.md](docs/hardware-check.md) | The phase 0 checklist, for another device |
 
 ## Layout
 
 A Cargo workspace under `crates/` (the plan's section 4 lists all eight;
 a crate is added in the phase that needs it):
 
-- `sdr-core` — `Source` trait and `Iq` samples; `generator` (seeded tones,
-  gated bursts, noise), `file` (raw IQ formats, looping), `pace` (real-time
-  playback, `Clock` trait), `rate` (`RateMeter`), `units` (parse/format Hz).
-  `frame` (`SpectrumFrame`: dBFS per bin, lowest frequency first).
+- `sdr-core` — `Source` trait (`read`, `tune`, `set_gain`) and `Iq`
+  samples; `generator` (seeded tones, gated bursts, noise), `file` (raw IQ
+  formats, looping), `pace` (real-time playback, `Clock` trait), `rate`
+  (`RateMeter`), `units` (parse/format Hz), `frame` (`SpectrumFrame`: dBFS
+  per bin, lowest frequency first).
 - `sdr-dsp` — `analyzer`: Hann window, FFT, power averaged over a number
-  of blocks into one `SpectrumFrame`.
+  of blocks into one `SpectrumFrame` (2048 bins, 10 frames a second in the
+  app).
 - `sdr-rtl` — `RtlSource`: the RTL-SDR through `rtl-sdr-rs` (pure Rust on
-  `nusb`), queued transfers, gain to the tuner's nearest step, retuning.
-- `sdr-tui` — `app` (state and keys, no drawing), `ui` (frame of the
-  interface, `render_text`), `spectrum` (the spectrum screen's state and
-  drawing arithmetic: columns, scale, palette), `spectrum_ui` (drawing it).
-  Snapshot tests in `src/snapshots/`.
+  `nusb`), queued transfers, gain along the tuner's own steps, retuning.
+- `sdr-tui` — `app` (state, keys and the `Command`s they ask of the
+  source; no drawing), `ui` (frame of the interface, `render_text`),
+  `spectrum` (the spectrum screen's state and arithmetic: columns, scale,
+  zoom, palette), `spectrum_ui` (drawing it). Snapshot tests in
+  `src/snapshots/`.
 - `sdr-viewer` — the binary: `cli` (arguments → source), `reader` (the
-  source thread: read, analyse, send `Update`s), `snapshot` (`--snapshot`),
-  `main` (terminal loop, redraws only when something changed).
+  source thread: carry out `Command`s, read, analyse, send `Update`s),
+  `snapshot` (`--snapshot`), `main` (terminal loop, redraws only when
+  something changed).
 
 ## Invariants
 
@@ -95,6 +136,9 @@ a crate is added in the phase that needs it):
   never decibels. Frames run from the lowest frequency up, the centre is
   bin `len / 2`.
 - The palette's brightness only grows with the level (a test holds it).
+- The interface never touches the source: keys become `Command`s, the
+  reader thread carries them out and answers with `Update::Source` or
+  `Update::Notice`.
 - `unsafe_code = "forbid"` across the workspace.
 - `ui` snapshots change only on purpose: review `cargo insta review` (or
   `INSTA_UPDATE=always cargo test` and read the diff) before committing.
@@ -113,7 +157,26 @@ Measured on the dev Mac (Apple Silicon), release build:
 | The same on the CM4 | **37%** of one core with the generator, **25%** playing a `.cu8`; ~1 MB/s to the terminal. Not split yet into FFT, drawing and escape codes; the terminal emulator's own cost is not measured (the smoke has no window) |
 | Generator alone in the app, before the spectrum (phase 1) | 6%; **8% on the CM4** |
 | App playing a `.cu8` file | ~2% of one core |
-| Release binary (macOS) | 1.3 MB |
+| Static aarch64 binary from CI | 2.2 MB |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:
-measure on the device, the Mac's numbers do not scale (`docs/hardware.md`).
+measure on the device, the Mac's numbers do not scale.
+
+## Pitfalls that already cost time
+
+- **A reset that looks like a fault may be a workaround.** The hub's fall
+  to 12M was first taken for a hardware failure; it was the user's own
+  udev rule. Look in `/etc/udev/rules.d` and ask before diagnosing.
+- **A background SSH command keeps running after its first step is
+  killed.** A `for` loop over sample rates went on for ten minutes and
+  reset the hub again; give every device command its own `timeout -s KILL`.
+- **`gh run download` without a run id takes the latest run that has the
+  artifact** — another branch's binary. Always pass the id.
+- **One synchronous USB transfer at a time loses ~10% of the samples** at
+  2.4 MS/s on the CM4; check that N seconds of samples arrive in N seconds.
+- **The scale must fit the receiver**: with 70 dB the floor of an 8-bit
+  receiver glowed and real signals drowned; a photo of the device showed
+  it, the snapshot tests did not.
+- **`cargo fmt` reflows code**, so a scripted edit anchored on the text as
+  written stops matching: assert the anchor occurs exactly once.
+- **zsh**: `"$H:path"` applies a modifier to `$H`; write `"${H}:path"`.

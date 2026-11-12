@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::source::{Iq, Source, SourceError, SourceInfo};
+use crate::source::{GainChange, Iq, Source, SourceError, SourceInfo};
 
 /// Time as a parameter, so tests do not sleep.
 pub trait Clock: Send {
@@ -84,6 +84,10 @@ impl<S: Source, C: Clock> Source for Paced<S, C> {
 
     fn tune(&mut self, center_hz: f64) -> Result<(), SourceError> {
         self.inner.tune(center_hz)
+    }
+
+    fn set_gain(&mut self, change: GainChange) -> Result<(), SourceError> {
+        self.inner.set_gain(change)
     }
 }
 

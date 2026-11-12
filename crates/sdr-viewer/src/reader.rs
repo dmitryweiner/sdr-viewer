@@ -3,13 +3,13 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
 use sdr_core::rate::RateMeter;
-use sdr_core::{Iq, Source, SpectrumFrame};
+use sdr_core::{Iq, Source, SourceInfo, SpectrumFrame};
 use sdr_dsp::{Analyzer, AnalyzerConfig};
-use sdr_tui::{SourceState, SourceStatus};
+use sdr_tui::{Command, SourceState, SourceStatus};
 
 /// Samples per read: ~7 ms at 2.4 MS/s.
 const CHUNK: usize = 16 * 1024;
@@ -30,12 +30,22 @@ pub const FRAMES_PER_SECOND: f64 = 10.0;
 pub enum Update {
     Status(SourceStatus),
     Frame(SpectrumFrame),
+    /// The source after a command changed it.
+    Source(SourceInfo),
+    /// A command the source refused, in its words.
+    Notice(String),
 }
 
 /// Reads until the source ends or fails, or `stop` is set, sending spectrum
-/// frames and the source's status to `updates`. What the interface has no
-/// room for is dropped: reception never waits for drawing.
-pub fn run(mut source: impl Source, updates: SyncSender<Update>, stop: Arc<AtomicBool>) {
+/// frames and the source's status to `updates`, and carrying out `commands`
+/// between reads. Frames and status the interface has no room for are
+/// dropped: reception never waits for drawing.
+pub fn run(
+    mut source: impl Source,
+    updates: SyncSender<Update>,
+    commands: Receiver<Command>,
+    stop: Arc<AtomicBool>,
+) {
     let started = Instant::now();
     let mut meter = RateMeter::new(REPORT_EVERY);
     let mut buf = vec![Iq::new(0.0, 0.0); CHUNK];
@@ -45,6 +55,17 @@ pub fn run(mut source: impl Source, updates: SyncSender<Update>, stop: Arc<Atomi
         let _ = updates.try_send(Update::Status(SourceStatus { rate, state }));
     };
     while !stop.load(Ordering::Relaxed) {
+        for command in commands.try_iter() {
+            let done = match command {
+                Command::Tune(center_hz) => source.tune(center_hz),
+                Command::Gain(change) => source.set_gain(change),
+            };
+            // The answer to a key press must not get lost: wait for room.
+            let _ = updates.send(match done {
+                Ok(()) => Update::Source(source.info()),
+                Err(err) => Update::Notice(err.to_string()),
+            });
+        }
         match source.read(&mut buf) {
             Ok(0) => {
                 report(SourceState::Ended, 0.0);
@@ -69,10 +90,12 @@ pub fn run(mut source: impl Source, updates: SyncSender<Update>, stop: Arc<Atomi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sdr_core::GainChange;
     use sdr_core::file::{FileSource, SampleFormat};
+    use sdr_core::generator::{Generator, GeneratorConfig};
     use sdr_core::{SourceError, SourceInfo};
     use std::io::Cursor;
-    use std::sync::mpsc::sync_channel;
+    use std::sync::mpsc::{channel, sync_channel};
 
     fn info() -> SourceInfo {
         SourceInfo {
@@ -83,9 +106,79 @@ mod tests {
     }
 
     fn updates(source: impl Source) -> Vec<Update> {
+        updates_after(source, &[])
+    }
+
+    /// Everything the reader sends when `commands` are waiting at its start.
+    fn updates_after(source: impl Source, commands: &[Command]) -> Vec<Update> {
         let (tx, rx) = sync_channel(64);
-        run(source, tx, Arc::new(AtomicBool::new(false)));
+        let (command_tx, command_rx) = channel();
+        for command in commands {
+            command_tx.send(*command).unwrap();
+        }
+        run(source, tx, command_rx, Arc::new(AtomicBool::new(false)));
         rx.try_iter().collect()
+    }
+
+    /// A generator that ends after a number of reads.
+    struct Brief(Generator, usize);
+
+    impl Source for Brief {
+        fn info(&self) -> SourceInfo {
+            self.0.info()
+        }
+        fn read(&mut self, buf: &mut [Iq]) -> Result<usize, SourceError> {
+            if self.1 == 0 {
+                return Ok(0);
+            }
+            self.1 -= 1;
+            self.0.read(buf)
+        }
+        fn tune(&mut self, center_hz: f64) -> Result<(), SourceError> {
+            self.0.tune(center_hz)
+        }
+    }
+
+    #[test]
+    fn a_tune_command_moves_the_source_and_the_frames_that_follow() {
+        let source = Brief(Generator::new(GeneratorConfig::demo()), 40);
+        let got = updates_after(source, &[Command::Tune(100e6)]);
+        match &got[0] {
+            Update::Source(info) => assert_eq!(info.center_hz, 100e6),
+            other => panic!("{other:?}"),
+        }
+        let centers: Vec<f64> = got
+            .iter()
+            .filter_map(|update| match update {
+                Update::Frame(frame) => Some(frame.center_hz),
+                _ => None,
+            })
+            .collect();
+        assert!(!centers.is_empty());
+        assert!(centers.iter().all(|&center| center == 100e6));
+    }
+
+    #[test]
+    fn a_refused_command_comes_back_as_a_notice_and_reading_goes_on() {
+        let source = FileSource::new(
+            Cursor::new(vec![0u8; 100]),
+            SampleFormat::Cu8,
+            info(),
+            false,
+        );
+        let commands = [Command::Tune(100e6), Command::Gain(GainChange::Step(1))];
+        let got = updates_after(source, &commands);
+        assert_eq!(
+            got,
+            [
+                Update::Notice("not supported: a recording cannot be retuned".into()),
+                Update::Notice("not supported: this source has no gain".into()),
+                Update::Status(SourceStatus {
+                    rate: 0.0,
+                    state: SourceState::Ended
+                }),
+            ]
+        );
     }
 
     fn last_status(source: impl Source) -> SourceStatus {
@@ -108,7 +201,7 @@ mod tests {
             .into_iter()
             .filter_map(|update| match update {
                 Update::Frame(frame) => Some(frame),
-                Update::Status(_) => None,
+                _ => None,
             })
             .collect();
         assert_eq!(frames.len(), 300_000 / (FFT_SIZE * 5));
@@ -153,8 +246,9 @@ mod tests {
     #[test]
     fn stops_when_asked() {
         let (tx, rx) = sync_channel(4);
+        let (_command_tx, command_rx) = channel();
         let source = FileSource::new(Cursor::new(vec![0u8; 8]), SampleFormat::Cu8, info(), true);
-        run(source, tx, Arc::new(AtomicBool::new(true)));
+        run(source, tx, command_rx, Arc::new(AtomicBool::new(true)));
         assert!(rx.try_recv().is_err());
     }
 }

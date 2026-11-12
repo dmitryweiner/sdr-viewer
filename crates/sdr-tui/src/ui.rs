@@ -14,14 +14,19 @@ use crate::app::{App, Screen, SourceState};
 pub const MIN_WIDTH: u16 = 80;
 pub const MIN_HEIGHT: u16 = 24;
 
-const KEYS: [(&str, &str); 8] = [
+const KEYS: [(&str, &str); 13] = [
+    ("?", "this help"),
     ("1–8", "switch screens"),
     ("Tab, Shift+Tab", "next, previous screen"),
     ("←, →", "spectrum: move the cursor (Shift: faster)"),
+    ("Enter", "spectrum: tune to the cursor"),
+    ("f", "spectrum: type a frequency"),
+    ("[, ]", "spectrum: tune down, up by half the view"),
+    ("+, -", "spectrum: zoom in, out"),
+    ("g, G, a", "spectrum: gain up, down, automatic"),
     ("Space", "spectrum: pause"),
     ("m", "spectrum: reset max hold"),
     ("Esc", "close help, put the cursor away, quit"),
-    ("?", "this help"),
     ("q", "quit"),
 ];
 
@@ -39,7 +44,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     .areas(area);
     frame.render_widget(tab_bar(app.screen), tabs);
     if app.screen == Screen::Spectrum {
-        crate::spectrum_ui::draw(frame, &app.spectrum, body);
+        crate::spectrum_ui::draw(frame, &app.spectrum, app.input.as_deref(), body);
     } else {
         frame.render_widget(placeholder(app.screen), body);
     }
@@ -118,10 +123,13 @@ fn placeholder(screen: Screen) -> Paragraph<'static> {
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let separator = || Span::raw(" │ ").dark_gray();
-    let state = match &app.status.state {
-        SourceState::Running => Span::raw(format!("rx {}", format_rate(app.status.rate))),
-        SourceState::Ended => Span::raw("ended").yellow(),
-        SourceState::Failed(message) => Span::raw(format!("error: {message}")).red(),
+    let state = match (&app.notice, &app.status.state) {
+        (Some(notice), _) => Span::raw(notice.clone()).red(),
+        (None, state) => match state {
+            SourceState::Running => Span::raw(format!("rx {}", format_rate(app.status.rate))),
+            SourceState::Ended => Span::raw("ended").yellow(),
+            SourceState::Failed(message) => Span::raw(format!("error: {message}")).red(),
+        },
     };
     let left = Line::from(vec![
         Span::raw(app.source.description.clone()).bold(),
@@ -262,6 +270,41 @@ mod tests {
         app.spectrum.cursor = Some(0.305);
         app.spectrum.paused = true;
         insta::assert_snapshot!(render(&app, 160, 45).backend());
+    }
+
+    #[test]
+    fn zoomed_in_on_the_carrier_while_typing_a_frequency() {
+        let mut app = app_with_signal();
+        app.spectrum.cursor = Some(0.305);
+        app.spectrum.zoom_in();
+        app.spectrum.zoom_in();
+        app.input = Some("433.5M".into());
+        insta::assert_snapshot!(render(&app, 80, 24).backend());
+    }
+
+    #[test]
+    fn a_zoomed_view_names_its_magnification_and_its_own_edges() {
+        let mut app = app_with_signal();
+        app.spectrum.zoom_in();
+        let text = render_text(&app, 80, 24);
+        assert!(text.contains("×2"), "{text}");
+        // Half of 1.024 MHz around 433.92.
+        assert!(
+            text.contains("433.664 MHz") && text.contains("434.176 MHz"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_notice_takes_the_place_of_the_source_state() {
+        let mut app = app();
+        app.notice = Some("not supported: a recording cannot be retuned".into());
+        let text = render_text(&app, 100, 24);
+        assert!(
+            text.contains("│ not supported: a recording cannot be retuned"),
+            "{text}"
+        );
+        assert!(!text.contains("rx 2.398"), "{text}");
     }
 
     #[test]

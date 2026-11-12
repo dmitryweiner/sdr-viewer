@@ -115,7 +115,7 @@ crates/
 Screens are switched with digits (F-keys are awkward on the uConsole
 keyboard). Common keys: arrows / trackball — frequency cursor, `+`/`-` —
 zoom, `g` — gain, `f` — enter a frequency, `b` — bookmarks, `r` — record,
-`?` — help.
+`?` — help. The keys as built are listed in the README.
 
 ### 5.1. Spectrum and waterfall (main)
 - Spectrum: bars of `▁▂▃▄▅▆▇█`, with max-hold and average traces on top.
@@ -341,3 +341,37 @@ They do not block the start; until answered, the default holds.
    the first version.*
 5. **License.** The repository has GPLv3, which is compatible with GPL
    dependencies (`rtl_433`, `librtlsdr`). *Default: stay on GPLv3.*
+
+## 14. Progress
+
+As of 2026-11-12.
+
+| # | Phase | State |
+|---|---|---|
+| 0 | Hardware check | Done: `docs/hardware.md`. CM4 with 8 GB, R820T tuner, `rtl-sdr-rs` works, truecolor terminal. The device's hub is defective: see the decision "Defective USB hub" |
+| 1 | Skeleton | Done: workspace, CI with a static aarch64 binary, generator and file sources, tabs |
+| 2 | Spectrum and waterfall | Done on the generator, recordings and the RTL-SDR: bars with max hold, waterfall, a scale that follows the noise floor, cursor, tuning (`f`, `[` `]`, Enter), gain, zoom, pause, `--snapshot` |
+| 3 | Detector and log | Next |
+| 4–8 | | Not started |
+
+Left out of phase 2 on purpose, with where it goes:
+
+- **Bookmark labels and the frequency plan on the spectrum** — phase 8
+  with bookmarks, as section 8 says; needs the TOML config, which nothing
+  has needed yet.
+- **The noise-floor line and the average trace** — phase 3: the detector
+  computes the floor per bin, and the line should show that one, not a
+  second estimate.
+- **An overload indicator and the count of dropped transfers** — phase 3,
+  next to the detector's own health numbers.
+- **The terminal emulator's cost on the device** — not measured (the smoke
+  has no window); the user reports the picture does not stutter at 10
+  frames a second.
+- **A short reference recording in the repository** — phase 3, cut from
+  `capture-433.cu8` on the device once the detector says which second has
+  a known event.
+
+What phase 3 can start from: `SpectrumFrame`s at 10 a second from any
+source; 100 ms frames average a short burst down (a 10 ms burst reads
+10 dB low), so the detector will likely want its own, faster frames from
+the same `Analyzer` — measure on the CM4 first.
