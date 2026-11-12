@@ -302,7 +302,7 @@ The first useful version comes after phase 3.
 
 | Question | Decision |
 |---|---|
-| Compute module | CM4, 4 GB RAM; build target `aarch64-unknown-linux-gnu` |
+| Compute module | CM4, 8 GB RAM (measured, `docs/hardware.md`); build target `aarch64-unknown-linux-musl` |
 | Where it runs | A terminal emulator: truecolor and any Unicode characters; no mode for the bare Linux console |
 | Region | Israel (see below) |
 | External decoders | Allowed; the `rtl_433` bridge is an optional feature |
