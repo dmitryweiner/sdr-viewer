@@ -50,8 +50,8 @@ pub fn run(
     let (Some(latest), Some((bottom, _))) = (app.spectrum.latest(), app.spectrum.range()) else {
         return Ok(text);
     };
-    // The scale starts 5 dB under the floor.
-    let floor = bottom + 5.0;
+    // The scale starts 2 dB under the floor.
+    let floor = bottom + 2.0;
     let peaks = peaks(
         app.spectrum.max_hold(),
         floor + MIN_ABOVE_FLOOR_DB,

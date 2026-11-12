@@ -10,8 +10,11 @@ use sdr_core::SpectrumFrame;
 pub const HISTORY: usize = 256;
 
 /// How far below the noise floor the scale starts, and its height, in dB.
-const BELOW_FLOOR_DB: f32 = 5.0;
-const RANGE_DB: f32 = 70.0;
+/// 50 dB is about what an 8-bit receiver can show above its noise; with a
+/// wider scale the floor glows and real signals drown in it (seen on the
+/// device with the first recording).
+const BELOW_FLOOR_DB: f32 = 2.0;
+const RANGE_DB: f32 = 50.0;
 
 /// How fast the scale follows the noise floor: the share of a new frame.
 const FLOOR_FOLLOW: f32 = 0.1;
@@ -137,9 +140,9 @@ pub const BARS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇
 /// Dark blue for the floor through green and yellow to white for the top.
 /// Brightness only ever grows, so stronger always reads as brighter.
 const HEAT: [(u8, u8, u8); 7] = [
-    (0, 0, 24),
-    (20, 30, 140),
-    (0, 120, 170),
+    (0, 0, 12),
+    (10, 25, 110),
+    (0, 110, 170),
     (40, 180, 80),
     (230, 200, 0),
     (255, 235, 120),
@@ -195,9 +198,9 @@ mod tests {
         let mut view = SpectrumView::default();
         assert_eq!(view.range(), None);
         view.on_frame(frame(vec![-90.0, -90.0, -90.0, -90.0, -20.0]));
-        assert_eq!(view.range(), Some((-95.0, -25.0)));
+        assert_eq!(view.range(), Some((-92.0, -42.0)));
         view.on_frame(frame(vec![-80.0; 5]));
-        assert_eq!(view.range(), Some((-94.0, -24.0)));
+        assert_eq!(view.range(), Some((-91.0, -41.0)));
     }
 
     #[test]
@@ -209,7 +212,7 @@ mod tests {
         view.on_frame(retuned);
         assert_eq!(view.frames().count(), 1);
         assert_eq!(view.max_hold(), [-90.0; 4]);
-        assert_eq!(view.range(), Some((-95.0, -25.0)));
+        assert_eq!(view.range(), Some((-92.0, -42.0)));
     }
 
     #[test]
@@ -278,7 +281,7 @@ mod tests {
 
     #[test]
     fn heat_runs_from_dark_to_white_getting_brighter() {
-        assert_eq!(heat(0.0), Color::Rgb(0, 0, 24));
+        assert_eq!(heat(0.0), Color::Rgb(0, 0, 12));
         assert_eq!(heat(1.0), Color::Rgb(255, 255, 255));
         assert_eq!(heat(-1.0), heat(0.0));
         assert_eq!(heat(2.0), heat(1.0));
