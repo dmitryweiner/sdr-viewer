@@ -49,7 +49,7 @@ has the reasons):
   peaks and the detector's events. The way to look at a recording, at the air, or at the picture from
   a script. Below 80x24 it prints only "too small".
 - `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
-  of the generator per sample.
+  of the generator and of the IQ ring per sample.
 
 CI (`.github/workflows/ci.yml`) runs on pull requests and on `main`:
 `check.sh` on Linux x86-64; tests and a static `aarch64-unknown-linux-musl`
@@ -100,8 +100,11 @@ touching USB.
   no data and reset the hub.
 - A new binary: download the PR's `sdr-viewer-aarch64` artifact
   (`gh run download RUN -n sdr-viewer-aarch64`) and `scp` it to
-  `~/sdr-viewer-check/sdr-viewer`. What lies there now is PR #13's build
-  (history and wall-clock time in the log), with that PR's `smoke.py`.
+  `~/sdr-viewer-check/sdr-viewer`. What lies there now is PR #15's build
+  (the threshold line on the spectrum, the IQ ring, `r` in the log), with
+  that PR's `smoke.py`. Saving IQ was tried there on the recording with
+  `--iq-dir iq-test`, removed afterwards; the default
+  `~/.local/share/sdr-viewer/iq` does not exist yet.
 - The default database `~/.local/share/sdr-viewer/events.db` does not
   exist on the device yet: since the database was added nobody has
   received from the RTL-SDR there, so that path is proven only by tests.
@@ -228,7 +231,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | Generator alone in the app, before the spectrum (phase 1) | 6%; **8% on the CM4** |
 | App playing a `.cu8` file | ~2% of one core |
 | The event database on the CM4 (`smoke.py --keys 5`, the recording, with and without `--db`) | nothing measurable: 22% against 21–22% of one core. The file grows ~93 bytes an event: on the recording's band (~80 events a second) that is ~660 MB a day of reception |
-| The IQ ring buffer (30 s, `smoke.py --keys 1` with and without `--iq-buffer 0`) | Mac: nothing measurable (18 and 17% without, 20 and 15% with); 153 MB resident after 40 s, as computed (144 MB + the app). Not yet measured on the CM4 |
+| The IQ ring buffer (30 s; with and without `--iq-buffer 0`) | `bench_ring` on the Mac: 0.3 ns/sample; 153 MB resident after 40 s, as computed (144 MB + the app). **On the CM4**, the recording, 15 s: spectrum (`--keys 1`) 32 → 34% of a core, log (`--keys 5`) 21 → 22%. With a bounds check and a wrap test per sample it was 4 points, not 1–2 |
 | Static aarch64 binary from CI | 4.6 MB with SQLite compiled in (2.4 before) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:
