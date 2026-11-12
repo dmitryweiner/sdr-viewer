@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{Receiver, Sender, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
 
 use sdr_core::rate::RateMeter;
@@ -43,18 +43,30 @@ pub enum Update {
 /// between reads. Frames and status the interface has no room for are
 /// dropped: reception never waits for drawing. Ended events wait for room
 /// instead, and the last of them go out before the end is reported.
+///
+/// `store`, if there is one, gets every ended event, and when reading
+/// stops — however it stops — the events still on, ended there.
 pub fn run(
     mut source: impl Source,
     updates: SyncSender<Update>,
     commands: Receiver<Command>,
     stop: Arc<AtomicBool>,
+    store: Option<Sender<Vec<Event>>>,
 ) {
     let started = Instant::now();
     let mut meter = RateMeter::new(REPORT_EVERY);
     let mut buf = vec![Iq::new(0.0, 0.0); CHUNK];
     let mut pipeline = Pipeline::new(source.info().sample_rate);
+    // Ended events: those of the latest read, and those the interface has
+    // not taken yet.
+    let mut fresh: Vec<Event> = Vec::new();
     let mut events: Vec<Event> = Vec::new();
     let status = |state, rate| Update::Status(SourceStatus { rate, state });
+    let keep = |events: Vec<Event>| {
+        if let (Some(store), false) = (&store, events.is_empty()) {
+            let _ = store.send(events);
+        }
+    };
     while !stop.load(Ordering::Relaxed) {
         for command in commands.try_iter() {
             let done = match command {
@@ -75,15 +87,17 @@ pub fn run(
                 let _ = updates.send(Update::OpenEvents(pipeline.open_events()));
                 // The end must not get lost either: wait for room.
                 let _ = updates.send(status(SourceState::Ended, 0.0));
-                return;
+                break;
             }
             Ok(n) => {
                 pipeline.push(&buf[..n], &source.info(), |output| match output {
                     Output::Frame(frame) => {
                         let _ = updates.try_send(Update::Frame(frame));
                     }
-                    Output::Event(event) => events.push(event),
+                    Output::Event(event) => fresh.push(event),
                 });
+                keep(fresh.clone());
+                events.append(&mut fresh);
                 if !events.is_empty() {
                     let batch = Update::Events(std::mem::take(&mut events));
                     if let Err(TrySendError::Full(Update::Events(waiting))) =
@@ -101,10 +115,11 @@ pub fn run(
             }
             Err(err) => {
                 let _ = updates.send(status(SourceState::Failed(err.to_string()), 0.0));
-                return;
+                break;
             }
         }
     }
+    keep(pipeline.finish());
 }
 
 #[cfg(test)]
@@ -137,7 +152,13 @@ mod tests {
         for command in commands {
             command_tx.send(*command).unwrap();
         }
-        run(source, tx, command_rx, Arc::new(AtomicBool::new(false)));
+        run(
+            source,
+            tx,
+            command_rx,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        );
         rx.try_iter().collect()
     }
 
@@ -231,6 +252,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_store_gets_ended_events_and_at_the_end_those_still_on() {
+        let (tx, _rx) = sync_channel(1024);
+        let (_command_tx, command_rx) = channel();
+        let (store_tx, store_rx) = channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        run(demo(), tx, command_rx, stop, Some(store_tx));
+        let stored: Vec<Event> = store_rx.iter().flatten().collect();
+        // The burst, then the carrier, ended where reading stopped.
+        assert_eq!(stored.len(), 2, "{stored:?}");
+        assert!((stored[0].peak_hz - 434.2e6).abs() < 1_200.0);
+        assert!((stored[1].peak_hz - 433.5e6).abs() < 1_200.0);
+        assert!((stored[1].duration.as_secs_f64() - 1.36).abs() < 0.02);
+    }
+
+    #[test]
+    fn the_store_gets_its_events_even_when_the_interface_takes_none() {
+        // Nobody reads the updates and there is room for one.
+        let (tx, rx) = sync_channel(1);
+        let (_command_tx, command_rx) = channel();
+        let (store_tx, store_rx) = channel();
+        let (over_tx, over_rx) = channel();
+        let source = Announced(demo(), over_tx);
+        let reader = std::thread::spawn(move || {
+            let stop = Arc::new(AtomicBool::new(false));
+            run(source, tx, command_rx, stop, Some(store_tx));
+        });
+        over_rx.recv().unwrap();
+        // The burst is stored before the interface has taken anything.
+        assert_eq!(store_rx.recv().unwrap().len(), 1);
+        drop(rx);
+        reader.join().unwrap();
+        assert_eq!(store_rx.iter().flatten().count(), 1);
+    }
+
     /// Tells when the stream has been read to its end.
     struct Announced(Brief, std::sync::mpsc::Sender<()>);
 
@@ -260,7 +316,13 @@ mod tests {
         let (over_tx, over_rx) = channel();
         let source = Announced(demo(), over_tx);
         let reader = std::thread::spawn(move || {
-            run(source, tx, command_rx, Arc::new(AtomicBool::new(false)));
+            run(
+                source,
+                tx,
+                command_rx,
+                Arc::new(AtomicBool::new(false)),
+                None,
+            );
         });
         over_rx.recv().unwrap();
         let got: Vec<Update> = rx.iter().collect();
@@ -346,7 +408,13 @@ mod tests {
         let (tx, rx) = sync_channel(4);
         let (_command_tx, command_rx) = channel();
         let source = FileSource::new(Cursor::new(vec![0u8; 8]), SampleFormat::Cu8, info(), true);
-        run(source, tx, command_rx, Arc::new(AtomicBool::new(true)));
+        run(
+            source,
+            tx,
+            command_rx,
+            Arc::new(AtomicBool::new(true)),
+            None,
+        );
         assert!(rx.try_recv().is_err());
     }
 }

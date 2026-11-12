@@ -10,6 +10,7 @@ sdr-core = { workspace = true }
 sdr-detect = { workspace = true }
 sdr-dsp = { workspace = true }
 sdr-rtl = { workspace = true }
+sdr-store = { workspace = true }
 sdr-tui = { workspace = true }
 ratatui = { workspace = true }
 clap = { workspace = true }

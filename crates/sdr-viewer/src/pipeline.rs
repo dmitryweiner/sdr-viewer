@@ -58,6 +58,13 @@ impl Pipeline {
         });
     }
 
+    /// Ends the events still going on and returns them: reading is over.
+    pub fn finish(&mut self) -> Vec<Event> {
+        let mut events = Vec::new();
+        self.detector.finish(|event| events.push(event));
+        events
+    }
+
     /// The events still going on, as far as they have got.
     pub fn open_events(&self) -> Vec<Event> {
         self.detector.open()
@@ -95,6 +102,8 @@ mod tests {
         let open = pipeline.open_events();
         assert_eq!(open.len(), 1, "{open:?}");
         assert!((open[0].peak_hz - 433.5e6).abs() < 1_200.0);
+        assert_eq!(pipeline.finish(), open);
+        assert!(pipeline.open_events().is_empty());
     }
 
     #[test]
