@@ -10,6 +10,7 @@ repository = "https://github.com/dmitryweiner/sdr-viewer"
 
 [workspace.dependencies]
 sdr-core = { path = "crates/sdr-core" }
+sdr-detect = { path = "crates/sdr-detect" }
 sdr-dsp = { path = "crates/sdr-dsp" }
 sdr-rtl = { path = "crates/sdr-rtl" }
 sdr-tui = { path = "crates/sdr-tui" }

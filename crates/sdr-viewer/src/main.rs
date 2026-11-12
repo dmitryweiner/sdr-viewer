@@ -1,6 +1,7 @@
 //! SDR Viewer: watches the air and shows what a person would miss.
 
 mod cli;
+mod pipeline;
 mod reader;
 mod snapshot;
 

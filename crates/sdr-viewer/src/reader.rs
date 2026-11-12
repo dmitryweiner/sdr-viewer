@@ -8,22 +8,15 @@ use std::time::{Duration, Instant};
 
 use sdr_core::rate::RateMeter;
 use sdr_core::{Iq, Source, SourceInfo, SpectrumFrame};
-use sdr_dsp::{Analyzer, AnalyzerConfig};
 use sdr_tui::{Command, SourceState, SourceStatus};
+
+use crate::pipeline::{Output, Pipeline};
 
 /// Samples per read: ~7 ms at 2.4 MS/s.
 const CHUNK: usize = 16 * 1024;
 
 /// How often the measured rate is reported.
 const REPORT_EVERY: Duration = Duration::from_millis(500);
-
-/// Bins per spectrum frame: ~1.2 kHz each at 2.4 MS/s, and more than twice
-/// the columns of the widest terminal we design for.
-pub const FFT_SIZE: usize = 2048;
-
-/// Spectrum frames per second: one waterfall row each, and as often as a
-/// terminal is worth redrawing.
-pub const FRAMES_PER_SECOND: f64 = 10.0;
 
 /// What the reader tells the interface.
 #[derive(Debug, PartialEq)]
@@ -49,8 +42,7 @@ pub fn run(
     let started = Instant::now();
     let mut meter = RateMeter::new(REPORT_EVERY);
     let mut buf = vec![Iq::new(0.0, 0.0); CHUNK];
-    let config = AnalyzerConfig::for_rate(source.info().sample_rate, FFT_SIZE, FRAMES_PER_SECOND);
-    let mut analyzer = Analyzer::new(config);
+    let mut pipeline = Pipeline::new(source.info().sample_rate);
     let report = |state, rate| {
         let _ = updates.try_send(Update::Status(SourceStatus { rate, state }));
     };
@@ -72,8 +64,13 @@ pub fn run(
                 return;
             }
             Ok(n) => {
-                analyzer.push(&buf[..n], &source.info(), |frame| {
-                    let _ = updates.try_send(Update::Frame(frame));
+                pipeline.push(&buf[..n], &source.info(), |output| match output {
+                    Output::Frame(frame) => {
+                        let _ = updates.try_send(Update::Frame(frame));
+                    }
+                    // The detector already runs; the signal log that shows
+                    // its events is the next step of phase 3.
+                    Output::Event(_) => {}
                 });
                 if meter.record(started.elapsed(), n as u64) {
                     report(SourceState::Running, meter.rate());
@@ -90,6 +87,7 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::FFT_SIZE;
     use sdr_core::GainChange;
     use sdr_core::file::{FileSource, SampleFormat};
     use sdr_core::generator::{Generator, GeneratorConfig};
