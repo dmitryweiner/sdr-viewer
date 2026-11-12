@@ -1,5 +1,7 @@
 //! A synthetic source: tones and bursts over Gaussian noise, fully repeatable.
 
+use num_complex::Complex64;
+
 use crate::rng::SplitMix64;
 use crate::source::{Iq, Source, SourceError, SourceInfo};
 
@@ -63,17 +65,33 @@ pub struct Generator {
     /// Index of the next sample: the generator's clock.
     index: u64,
     tones: Vec<ToneState>,
-    noise_sigma: f32,
+    /// Gaussian values already scaled to the noise level; empty for no noise.
+    noise: Vec<f32>,
 }
 
+/// A tone is a unit vector turned by a fixed angle every sample: one complex
+/// multiplication instead of a sine and a cosine (on the CM4 the
+/// trigonometry made the generator 70% of a core, `docs/hardware.md`).
 struct ToneState {
     amplitude: f32,
-    phase: f64,
-    /// Radians per sample at the current centre frequency.
-    step: f64,
-    /// (period, on) in samples, so gating is exact.
-    gate: Option<(u64, u64)>,
+    phasor: Complex64,
+    /// The turn per sample at the current centre frequency.
+    rotation: Complex64,
+    gate: Option<GateState>,
 }
+
+/// A gate counted in samples, so it is exact and needs no division.
+struct GateState {
+    period: u64,
+    on: u64,
+    position: u64,
+}
+
+/// Rounding makes a phasor's length drift; it is pulled back to 1 this often.
+const RENORMALIZE_EVERY: u64 = 1024;
+
+/// Size of the noise table, a power of two; 16 KiB fits the CM4's L1 cache.
+const NOISE_TABLE: usize = 4096;
 
 impl Generator {
     pub fn new(config: GeneratorConfig) -> Self {
@@ -83,55 +101,93 @@ impl Generator {
             .iter()
             .map(|tone| ToneState {
                 amplitude: 10f32.powf(tone.level_dbfs / 20.0),
-                phase: 0.0,
-                step: 0.0,
-                gate: tone.gate.map(|gate| {
-                    let period = ((gate.period_s * rate).round() as u64).max(1);
-                    (period, (gate.on_s * rate).round() as u64)
+                phasor: Complex64::new(1.0, 0.0),
+                rotation: Complex64::new(1.0, 0.0),
+                gate: tone.gate.map(|gate| GateState {
+                    period: ((gate.period_s * rate).round() as u64).max(1),
+                    on: (gate.on_s * rate).round() as u64,
+                    position: 0,
                 }),
             })
             .collect();
-        // Complex noise: the power splits evenly between I and Q.
-        let noise_sigma = config
+        let mut rng = SplitMix64::new(config.seed);
+        let noise = config
             .noise_dbfs
-            .map_or(0.0, |db| (10f32.powf(db / 10.0) / 2.0).sqrt());
+            .map_or_else(Vec::new, |db| noise_table(&mut rng, db));
         let mut generator = Generator {
-            rng: SplitMix64::new(config.seed),
+            rng,
             index: 0,
             tones,
-            noise_sigma,
+            noise,
             config,
         };
-        generator.update_steps();
+        generator.update_rotations();
         generator
     }
 
-    fn update_steps(&mut self) {
+    fn update_rotations(&mut self) {
         let rate = f64::from(self.config.sample_rate);
         for (state, tone) in self.tones.iter_mut().zip(&self.config.tones) {
-            state.step = std::f64::consts::TAU * (tone.freq_hz - self.config.center_hz) / rate;
+            let step = std::f64::consts::TAU * (tone.freq_hz - self.config.center_hz) / rate;
+            state.rotation = Complex64::from_polar(1.0, step);
         }
     }
 
     fn next_sample(&mut self) -> Iq {
+        let renormalize = self.index.is_multiple_of(RENORMALIZE_EVERY);
         let mut sample = Iq::new(0.0, 0.0);
         for tone in &mut self.tones {
-            let on = tone
-                .gate
-                .is_none_or(|(period, on)| self.index % period < on);
-            if on {
-                let (sin, cos) = tone.phase.sin_cos();
-                sample += Iq::new(cos as f32, sin as f32) * tone.amplitude;
+            let on = match &mut tone.gate {
+                None => true,
+                Some(gate) => {
+                    let on = gate.position < gate.on;
+                    gate.position += 1;
+                    if gate.position == gate.period {
+                        gate.position = 0;
+                    }
+                    on
+                }
+            };
+            if renormalize {
+                tone.phasor /= tone.phasor.norm();
             }
-            tone.phase = (tone.phase + tone.step).rem_euclid(std::f64::consts::TAU);
+            if on {
+                sample += Iq::new(tone.phasor.re as f32, tone.phasor.im as f32) * tone.amplitude;
+            }
+            tone.phasor *= tone.rotation;
         }
-        if self.noise_sigma > 0.0 {
-            let (i, q) = self.rng.next_gaussian_pair();
-            sample += Iq::new(i as f32, q as f32) * self.noise_sigma;
+        if !self.noise.is_empty() {
+            // One random word picks both values; the table is far shorter
+            // than any FFT that will look at the noise is sensitive to.
+            let bits = self.rng.next_u64();
+            let i = self.noise[bits as usize % NOISE_TABLE];
+            let q = self.noise[(bits >> 32) as usize % NOISE_TABLE];
+            sample += Iq::new(i, q);
         }
         self.index += 1;
         sample
     }
+}
+
+/// Gaussian values with exactly zero mean, scaled so that I and Q drawn from
+/// the table carry `noise_dbfs` of power between them.
+fn noise_table(rng: &mut SplitMix64, noise_dbfs: f32) -> Vec<f32> {
+    let mut values: Vec<f64> = (0..NOISE_TABLE / 2)
+        .flat_map(|_| {
+            let (a, b) = rng.next_gaussian_pair();
+            [a, b]
+        })
+        .collect();
+    let n = values.len() as f64;
+    let mean = values.iter().sum::<f64>() / n;
+    values.iter_mut().for_each(|v| *v -= mean);
+    let variance = values.iter().map(|v| v * v).sum::<f64>() / n;
+    // Complex noise: the power splits evenly between I and Q.
+    let sigma = (10f64.powf(f64::from(noise_dbfs) / 10.0) / 2.0).sqrt();
+    values
+        .iter()
+        .map(|v| (v * sigma / variance.sqrt()) as f32)
+        .collect()
 }
 
 impl Source for Generator {
@@ -152,7 +208,7 @@ impl Source for Generator {
 
     fn tune(&mut self, center_hz: f64) -> Result<(), SourceError> {
         self.config.center_hz = center_hz;
-        self.update_steps();
+        self.update_rotations();
         Ok(())
     }
 }
@@ -286,6 +342,41 @@ mod tests {
         assert_eq!(generator.info().center_hz, CENTER + 150_000.0);
         let samples = take(&mut generator, 10_000);
         assert!((frequency_offset(&samples) + 50_000.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_tone_keeps_its_amplitude_and_frequency_over_a_long_run() {
+        let mut generator = Generator::new(config(None, vec![tone(CENTER + 123_456.7, 0.0)]));
+        let mut samples = Vec::new();
+        for _ in 0..50 {
+            samples = take(&mut generator, 100_000);
+        }
+        assert!(samples.iter().all(|s| (s.norm() - 1.0).abs() < 1e-5));
+        assert!((frequency_offset(&samples) - 123_456.7).abs() < 0.1);
+    }
+
+    #[test]
+    fn noise_is_white_and_i_is_independent_of_q() {
+        let mut generator = Generator::new(config(Some(0.0), vec![]));
+        let samples = take(&mut generator, 400_000);
+        let n = samples.len() as f64;
+        // Each of these is ~N(0, 1/sqrt(n)) = 0.0016 for independent values.
+        let i_q: f64 = samples.iter().map(|s| f64::from(s.re * s.im)).sum::<f64>() / n * 2.0;
+        let lag1: f64 = samples
+            .windows(2)
+            .map(|w| f64::from(w[0].re * w[1].re))
+            .sum::<f64>()
+            / n
+            * 2.0;
+        let lag7: f64 = samples
+            .windows(8)
+            .map(|w| f64::from(w[0].im * w[7].im))
+            .sum::<f64>()
+            / n
+            * 2.0;
+        for (name, value) in [("I·Q", i_q), ("lag 1", lag1), ("lag 7", lag7)] {
+            assert!(value.abs() < 0.01, "{name}: {value}");
+        }
     }
 
     #[test]
