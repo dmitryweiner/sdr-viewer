@@ -101,8 +101,8 @@ Layout — a Cargo workspace:
 ```
 crates/
   sdr-core/      Source, frame types, ring buffers
-  sdr-dsp/       FFT, windows, averaging, noise floor, autocorrelation
-  sdr-detect/    event detector, novelty, occupancy statistics
+  sdr-dsp/       FFT, windows, averaging, autocorrelation
+  sdr-detect/    noise floor, event detector, novelty, occupancy statistics
   sdr-decode/    decoders and the bridge to external processes
   sdr-mesh/      Meshtastic client
   sdr-store/     SQLite, SigMF
@@ -356,14 +356,38 @@ As of 2026-11-12.
 | 3 | Detector and log | In progress. Done: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. Next: the waterfall fragment and "save IQ" of an event, the floor line on the spectrum |
 | 4–8 | | Not started |
 
+Left in phase 3, in the agreed order:
+
+1. **The noise-floor line on the spectrum** — the detector's floor per
+   bin, sent to the interface with the frames; the spectrum's own estimate
+   (which sets the scale) stays or goes once the line is there.
+2. **The waterfall fragment of the selected event and "save IQ"** — needs
+   the IQ ring buffer of section 4, so that an event has its samples from
+   before the trigger. Not started; SigMF for the saved file.
+3. **A short reference recording in the repository** — see below.
+4. **An overload indicator and the count of dropped transfers.**
+
+Known limits of what phase 3 has built so far:
+
+- The log's time of day uses the UTC offset taken at the start: a change
+  to or from summer time while the app runs is not followed.
+- Without a database (a recording, the generator) the log shows stream
+  time and has no history.
+- The log holds the 10 000 newest events in memory; older ones are only
+  in the database, and nothing in the app pages through them yet.
+- The classifier label of screen 5.5 does not exist: nothing classifies.
+- Receiving from the RTL-SDR with the database has not been run on the
+  device; the pieces were checked there on the recording and the
+  generator with `--db`.
+
 Left out of phase 2 on purpose, with where it goes:
 
 - **Bookmark labels and the frequency plan on the spectrum** — phase 8
   with bookmarks, as section 8 says; needs the TOML config, which nothing
   has needed yet.
-- **The noise-floor line and the average trace** — phase 3: the detector
-  computes the floor per bin, and the line should show that one, not a
-  second estimate.
+- **The noise-floor line and the average trace** — phase 3 (item 1
+  above): the detector computes the floor per bin, and the line should
+  show that one, not a second estimate.
 - **An overload indicator and the count of dropped transfers** — phase 3,
   next to the detector's own health numbers.
 - **The terminal emulator's cost on the device** — not measured (the smoke

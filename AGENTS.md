@@ -20,6 +20,17 @@ Phases of the plan (its section 14 has the detail):
 | 3 Detector and log | **in progress**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept) and the log's history with wall-clock time work; next the waterfall fragment of an event and "save IQ" (needs the IQ ring buffer), the floor line on the spectrum |
 | 4–8 | not started |
 
+Left in phase 3, in the order agreed with the user (the plan's section 14
+has the reasons):
+
+1. The noise-floor line on the spectrum — the detector's own floor
+   (`Detector::floor_db`), which does not reach the interface yet.
+2. The waterfall fragment of the selected event and "save IQ" — needs the
+   IQ ring buffer of the plan's section 4, which does not exist yet.
+3. A short reference recording in the repository for the detector's
+   regression tests, cut from `capture-433.cu8`.
+4. An overload indicator and the count of dropped transfers.
+
 ## Commands
 
 - `./scripts/check.sh` — `fmt --check` + `clippy -D warnings` + tests, the
@@ -29,8 +40,8 @@ Phases of the plan (its section 14 has the detail):
 - `cargo run --release -- --rtlsdr --center 433.92M [--gain 30] [--rate 2.4M]`
   — receive from an RTL-SDR. Events go to
   `~/.local/share/sdr-viewer/events.db` (`--db FILE` elsewhere, and for a
-  recording or the generator too; `--no-db` nowhere). On the user's uConsole only through
-  `sdr-viewer-rx.sh` (see "The user's device").
+  recording or the generator too; `--no-db` nowhere). On the user's
+  uConsole only through `sdr-viewer-rx.sh` (see "The user's device").
 - `cargo run --release -- [FILE … | --rtlsdr …] --snapshot 160x45 [--secs 10]`
   — no terminal: analyses the start of the stream (unpaced for files and
   the generator), prints the spectrum screen as text, the max-hold
@@ -86,7 +97,13 @@ touching USB.
   no data and reset the hub.
 - A new binary: download the PR's `sdr-viewer-aarch64` artifact
   (`gh run download RUN -n sdr-viewer-aarch64`) and `scp` it to
-  `~/sdr-viewer-check/sdr-viewer`.
+  `~/sdr-viewer-check/sdr-viewer`. What lies there now is PR #13's build
+  (history and wall-clock time in the log), with that PR's `smoke.py`.
+- The default database `~/.local/share/sdr-viewer/events.db` does not
+  exist on the device yet: since the database was added nobody has
+  received from the RTL-SDR there, so that path is proven only by tests.
+  Checks with a database used `--db test.db` in `~/sdr-viewer-check/` and
+  removed it.
 - `~/sdr-viewer-check/capture-433.cu8` — 10 s at 433.92 MHz, 2.4 MS/s,
   gain 30 dB, antenna on: LPD433 activity over a −71 dBFS floor. The
   detector finds 824 events in it: mostly 40–50 ms bursts ~9 kHz wide on
