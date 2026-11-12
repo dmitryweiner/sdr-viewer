@@ -3,6 +3,8 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use sdr_core::SourceInfo;
 
+use crate::spectrum::SpectrumView;
+
 /// The screens of the plan (section 5), in the order of their digit keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -110,7 +112,12 @@ pub struct App {
     pub quit: bool,
     pub source: SourceInfo,
     pub status: SourceStatus,
+    pub spectrum: SpectrumView,
 }
+
+/// Cursor steps as shares of the width: fine, and coarse with Shift.
+const CURSOR_STEP: f64 = 0.005;
+const CURSOR_LEAP: f64 = 0.05;
 
 impl App {
     pub fn new(source: SourceInfo) -> Self {
@@ -123,6 +130,7 @@ impl App {
                 rate: 0.0,
                 state: SourceState::Running,
             },
+            spectrum: SpectrumView::default(),
         }
     }
 
@@ -134,6 +142,7 @@ impl App {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Esc if self.help => self.help = false,
+            KeyCode::Esc if self.spectrum.cursor.is_some() => self.spectrum.cursor = None,
             KeyCode::Esc => self.quit = true,
             KeyCode::Char('?') => self.help = !self.help,
             KeyCode::Tab => self.step_screen(1),
@@ -141,6 +150,22 @@ impl App {
             KeyCode::Char(c @ '1'..='8') => {
                 self.screen = Screen::ALL[usize::from(c as u8 - b'1')];
             }
+            _ if self.screen == Screen::Spectrum => self.on_spectrum_key(key),
+            _ => {}
+        }
+    }
+
+    fn on_spectrum_key(&mut self, key: KeyEvent) {
+        let step = if key.modifiers.contains(KeyModifiers::SHIFT) {
+            CURSOR_LEAP
+        } else {
+            CURSOR_STEP
+        };
+        match key.code {
+            KeyCode::Left => self.spectrum.move_cursor(-step),
+            KeyCode::Right => self.spectrum.move_cursor(step),
+            KeyCode::Char(' ') => self.spectrum.paused = !self.spectrum.paused,
+            KeyCode::Char('m') => self.spectrum.reset_max_hold(),
             _ => {}
         }
     }
@@ -210,6 +235,35 @@ mod tests {
         assert!(!app.help && !app.quit);
         press(&mut app, KeyCode::Esc);
         assert!(app.quit);
+    }
+
+    #[test]
+    fn spectrum_keys_move_the_cursor_pause_and_reset() {
+        let mut app = app();
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.spectrum.cursor, Some(0.5));
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.spectrum.cursor, Some(0.505));
+        app.on_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+        assert_eq!(app.spectrum.cursor, Some(0.455));
+        press(&mut app, KeyCode::Char(' '));
+        assert!(app.spectrum.paused);
+        press(&mut app, KeyCode::Char(' '));
+        assert!(!app.spectrum.paused);
+        // Escape puts the cursor away before it quits.
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.spectrum.cursor, None);
+        assert!(!app.quit);
+    }
+
+    #[test]
+    fn spectrum_keys_do_nothing_on_other_screens() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('5'));
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(app.spectrum.cursor, None);
+        assert!(!app.spectrum.paused);
     }
 
     #[test]

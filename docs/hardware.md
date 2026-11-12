@@ -111,10 +111,13 @@ controller rebound, everything restored on exit): the RTL-SDR enumerates
 high-speed; `rtl_sdr` at 2.4 MS/s wrote 48 000 000 bytes in 10.9 s
 including start-up; `rtl_test` over 8 s lost 5 samples per million. The
 recording (433.92 MHz, gain 30 dB) is noise at about −39 dBFS, bytes
-113–142, no clipping; whether an antenna was connected is not known. The
+113–142, no clipping; the antenna was connected. Its spectrum (`--snapshot`) shows
+real air: a noise floor of −71 dBFS per bin and about ten signals 22–28 dB
+above it in max hold, several on the 25 kHz grid of the LPD433 channels
+(434.153, 434.178, 434.228, 434.253 MHz) — so the tuner is where it was
+asked to be. The
 tuner prints `[R82XX] PLL not locked!` on opening — common with this tuner
-and the data flows, but whether it is tuned where asked needs a spectrum
-(phase 2). Our app plays that recording on the CM4 at 5% of one core.
+and harmless: the data flows and the tuning is right (above). Our app plays that recording on the CM4 at 5% of one core.
 
 Agreed with the user (2026-11-12): until the mainboard is replaced the app
 gets a **"reception without the keyboard" mode** — it lets the hub run at

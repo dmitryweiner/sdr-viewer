@@ -1,0 +1,13 @@
+[package]
+name = "sdr-dsp"
+description = "From IQ samples to spectrum frames: windows, FFT, averaging."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sdr-core = { workspace = true }
+rustfft = { workspace = true }
+
+[lints]
+workspace = true

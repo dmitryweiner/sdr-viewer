@@ -10,6 +10,7 @@ sdr-core = { workspace = true }
 ratatui = { workspace = true }
 
 [dev-dependencies]
+sdr-dsp = { workspace = true }
 insta = { workspace = true }
 
 [lints]
