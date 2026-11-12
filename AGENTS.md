@@ -17,8 +17,19 @@ Phases of the plan (its section 14 has the detail):
 | 0 Hardware check | done — `docs/hardware.md` |
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
-| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen and the SQLite event database work; next the log reading earlier sessions from the database (wall-clock time), the waterfall fragment of an event, the floor line |
+| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept) and the log's history with wall-clock time work; next the waterfall fragment of an event and "save IQ" (needs the IQ ring buffer), the floor line on the spectrum |
 | 4–8 | not started |
+
+Left in phase 3, in the order agreed with the user (the plan's section 14
+has the reasons):
+
+1. The noise-floor line on the spectrum — the detector's own floor
+   (`Detector::floor_db`), which does not reach the interface yet.
+2. The waterfall fragment of the selected event and "save IQ" — needs the
+   IQ ring buffer of the plan's section 4, which does not exist yet.
+3. A short reference recording in the repository for the detector's
+   regression tests, cut from `capture-433.cu8`.
+4. An overload indicator and the count of dropped transfers.
 
 ## Commands
 
@@ -29,8 +40,8 @@ Phases of the plan (its section 14 has the detail):
 - `cargo run --release -- --rtlsdr --center 433.92M [--gain 30] [--rate 2.4M]`
   — receive from an RTL-SDR. Events go to
   `~/.local/share/sdr-viewer/events.db` (`--db FILE` elsewhere, and for a
-  recording or the generator too; `--no-db` nowhere). On the user's uConsole only through
-  `sdr-viewer-rx.sh` (see "The user's device").
+  recording or the generator too; `--no-db` nowhere). On the user's
+  uConsole only through `sdr-viewer-rx.sh` (see "The user's device").
 - `cargo run --release -- [FILE … | --rtlsdr …] --snapshot 160x45 [--secs 10]`
   — no terminal: analyses the start of the stream (unpaced for files and
   the generator), prints the spectrum screen as text, the max-hold
@@ -52,7 +63,8 @@ request gets no run: open a draft one to get a binary.
   the release binary in a real pty: presses keys, quits with `q`, fails on
   a crash or non-zero exit, prints the CPU used and the bytes sent to the
   terminal. Enter is `\r` (`--keys $'f100M\r'`). `--bin PATH` runs a given
-  binary; on the uConsole it needs only Python 3. The default keys end
+  binary; on the uConsole it needs only Python 3. `--words` prints the
+  pieces of text the app wrote, to grep for what must be on the screen. The default keys end
   on a placeholder screen: to measure a screen pass `--keys 1` (spectrum)
   or `--keys 5` (log), and compare builds side by side in one sitting.
 - `scripts/term-check.sh` — can this terminal show truecolor, bars, half
@@ -85,7 +97,13 @@ touching USB.
   no data and reset the hub.
 - A new binary: download the PR's `sdr-viewer-aarch64` artifact
   (`gh run download RUN -n sdr-viewer-aarch64`) and `scp` it to
-  `~/sdr-viewer-check/sdr-viewer`.
+  `~/sdr-viewer-check/sdr-viewer`. What lies there now is PR #13's build
+  (history and wall-clock time in the log), with that PR's `smoke.py`.
+- The default database `~/.local/share/sdr-viewer/events.db` does not
+  exist on the device yet: since the database was added nobody has
+  received from the RTL-SDR there, so that path is proven only by tests.
+  Checks with a database used `--db test.db` in `~/sdr-viewer-check/` and
+  removed it.
 - `~/sdr-viewer-check/capture-433.cu8` — 10 s at 433.92 MHz, 2.4 MS/s,
   gain 30 dB, antenna on: LPD433 activity over a −71 dBFS floor. The
   detector finds 824 events in it: mostly 40–50 ms bursts ~9 kHz wide on
@@ -137,8 +155,9 @@ a crate is added in the phase that needs it):
   (samples → detector frames at 100 a second → events, and their averages
   → screen frames at 10 a second; one pass of FFTs), `reader` (the source
   thread: carry out `Command`s, read, run the pipeline, send `Update`s,
-  hand ended events to the store), `writer` (the thread that writes them
-  to the database once a second),
+  hand ended events to the store), `keep` (open the database, read the
+  week's history, start the writer thread, which first deletes what is
+  older), `writer` (that thread's loop: one write a second),
   `snapshot` (`--snapshot`), `main` (terminal loop, redraws only when
   something changed).
 
@@ -162,6 +181,9 @@ a crate is added in the phase that needs it):
   change of the tables raises `SCHEMA_VERSION` and migrates older files;
   a file from a newer build is refused, never rewritten.
 - An event's wall-clock time is its session's start plus its stream time.
+  The log shows wall-clock time only when there is a database (`WallClock`
+  with the local UTC offset, taken once at the start through `chrono` —
+  the only place the time zone is asked for).
 - The main loop does not redraw for events alone: they show with the next
   frame or status (10 a second).
   An event's times are stream time (`SpectrumFrame::time`), not the clock.

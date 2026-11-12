@@ -7,7 +7,14 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use sdr_core::units::format_hz;
 
-use crate::log::{LogView, Row, format_duration, format_time, format_width};
+use crate::log::{
+    LogView, Row, WallClock, format_clock, format_duration, format_time, format_width,
+};
+
+/// Columns for when an event began: the time in the stream, or the date
+/// and the time of day.
+const STREAM_TIME_WIDTH: usize = 10;
+const CLOCK_WIDTH: usize = 16;
 
 pub(crate) fn draw(frame: &mut Frame, log: &LogView, area: Rect) {
     let [summary, header, list] = Layout::vertical([
@@ -23,9 +30,14 @@ pub(crate) fn draw(frame: &mut Frame, log: &LogView, area: Rect) {
         frame.render_widget(Paragraph::new(text).centered().dark_gray(), list);
         return;
     }
+    let clock = log.clock();
+    let time_width = match clock {
+        Some(_) => CLOCK_WIDTH,
+        None => STREAM_TIME_WIDTH,
+    };
     frame.render_widget(
         Line::from(format!(
-            "  {:>10}  {:>8}  {:>13}  {:>9}  {:>10}  above floor",
+            "  {:>time_width$}  {:>8}  {:>13}  {:>9}  {:>10}  above floor",
             "start", "duration", "centre", "width", "peak"
         ))
         .dark_gray(),
@@ -40,7 +52,7 @@ pub(crate) fn draw(frame: &mut Frame, log: &LogView, area: Rect) {
         .enumerate()
         .skip(first)
         .take(height)
-        .map(|(index, row)| row_line(row, selected == Some(index)))
+        .map(|(index, row)| row_line(row, clock, time_width, selected == Some(index)))
         .collect();
     frame.render_widget(Paragraph::new(lines), list);
 }
@@ -73,16 +85,24 @@ fn summary_line(log: &LogView, shown: usize) -> Line<'static> {
     Line::from(spans)
 }
 
-fn row_line(row: &Row, selected: bool) -> Line<'static> {
+fn row_line(
+    row: &Row,
+    clock: Option<WallClock>,
+    time_width: usize,
+    selected: bool,
+) -> Line<'static> {
     let event = &row.event;
     let mark = if row.on {
         Span::raw("● ").green()
     } else {
         Span::raw("  ")
     };
+    let start = match (row.at, clock) {
+        (Some(at), Some(clock)) => format_clock(at, clock.utc_offset_s),
+        _ => format_time(event.start),
+    };
     let text = format!(
-        "{:>10}  {:>8}  {:>13}  {:>9}  {:>5.1} dBFS  +{:.1} dB",
-        format_time(event.start),
+        "{start:>time_width$}  {:>8}  {:>13}  {:>9}  {:>5.1} dBFS  +{:.1} dB",
         format_duration(event.duration),
         format_hz(event.center_hz()),
         format_width(event.width_hz()),

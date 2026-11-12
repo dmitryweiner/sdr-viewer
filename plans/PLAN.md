@@ -101,8 +101,8 @@ Layout — a Cargo workspace:
 ```
 crates/
   sdr-core/      Source, frame types, ring buffers
-  sdr-dsp/       FFT, windows, averaging, noise floor, autocorrelation
-  sdr-detect/    event detector, novelty, occupancy statistics
+  sdr-dsp/       FFT, windows, averaging, autocorrelation
+  sdr-detect/    noise floor, event detector, novelty, occupancy statistics
   sdr-decode/    decoders and the bridge to external processes
   sdr-mesh/      Meshtastic client
   sdr-store/     SQLite, SigMF
@@ -313,6 +313,7 @@ The first useful version comes after phase 3.
 | Language | UI in English; docs, README and code comments in English (the shared conventions in `~/projects/CLAUDE.md`) |
 | aarch64 build | Static musl binary built on GitHub's native arm64 runner instead of `cross` |
 | Weak one-frame events | The detector's threshold stays at 8 dB and everything it finds goes into the database; the log hides the weak ones with a filter (minimum level above the floor) whose threshold the user changes from the log screen |
+| How long events are kept | 7 days: older events are deleted when the app starts. Nothing is filtered on the way in (~93 bytes an event, ~660 MB a day on a band as busy as the LPD recording, so the file settles under ~5 GB there) |
 | Phase order on start | Phase 1 before phase 0: no SSH access to the device yet; phase 0 follows `docs/hardware-check.md` when there is |
 
 ### Region: Israel
@@ -340,10 +341,7 @@ They do not block the start; until answered, the default holds.
 3. **Sound (listening to AM/FM).** *Default: yes, in phase 8.*
 4. **Running in the background (daemon + TUI client).** *Default: not in
    the first version.*
-5. **How long events are kept.** The database only grows: ~93 bytes an
-   event, ~660 MB a day on a band as busy as the LPD recording. *Default
-   until decided: nothing is deleted; the file can be removed by hand.*
-6. **License.** The repository has GPLv3, which is compatible with GPL
+5. **License.** The repository has GPLv3, which is compatible with GPL
    dependencies (`rtl_433`, `librtlsdr`). *Default: stay on GPLv3.*
 
 ## 14. Progress
@@ -355,17 +353,41 @@ As of 2026-11-12.
 | 0 | Hardware check | Done: `docs/hardware.md`. CM4 with 8 GB, R820T tuner, `rtl-sdr-rs` works, truecolor terminal. The device's hub is defective: see the decision "Defective USB hub" |
 | 1 | Skeleton | Done: workspace, CI with a static aarch64 binary, generator and file sources, tabs |
 | 2 | Spectrum and waterfall | Done on the generator, recordings and the RTL-SDR: bars with max hold, waterfall, a scale that follows the noise floor, cursor, tuning (`f`, `[` `]`, Enter), gain, zoom, pause, `--snapshot` |
-| 3 | Detector and log | In progress. Done: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Next: the log showing wall-clock time and earlier sessions from the database, the waterfall fragment and "save IQ" of an event, the floor line on the spectrum |
+| 3 | Detector and log | In progress. Done: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. Next: the waterfall fragment and "save IQ" of an event, the floor line on the spectrum |
 | 4–8 | | Not started |
+
+Left in phase 3, in the agreed order:
+
+1. **The noise-floor line on the spectrum** — the detector's floor per
+   bin, sent to the interface with the frames; the spectrum's own estimate
+   (which sets the scale) stays or goes once the line is there.
+2. **The waterfall fragment of the selected event and "save IQ"** — needs
+   the IQ ring buffer of section 4, so that an event has its samples from
+   before the trigger. Not started; SigMF for the saved file.
+3. **A short reference recording in the repository** — see below.
+4. **An overload indicator and the count of dropped transfers.**
+
+Known limits of what phase 3 has built so far:
+
+- The log's time of day uses the UTC offset taken at the start: a change
+  to or from summer time while the app runs is not followed.
+- Without a database (a recording, the generator) the log shows stream
+  time and has no history.
+- The log holds the 10 000 newest events in memory; older ones are only
+  in the database, and nothing in the app pages through them yet.
+- The classifier label of screen 5.5 does not exist: nothing classifies.
+- Receiving from the RTL-SDR with the database has not been run on the
+  device; the pieces were checked there on the recording and the
+  generator with `--db`.
 
 Left out of phase 2 on purpose, with where it goes:
 
 - **Bookmark labels and the frequency plan on the spectrum** — phase 8
   with bookmarks, as section 8 says; needs the TOML config, which nothing
   has needed yet.
-- **The noise-floor line and the average trace** — phase 3: the detector
-  computes the floor per bin, and the line should show that one, not a
-  second estimate.
+- **The noise-floor line and the average trace** — phase 3 (item 1
+  above): the detector computes the floor per bin, and the line should
+  show that one, not a second estimate.
 - **An overload indicator and the count of dropped transfers** — phase 3,
   next to the detector's own health numbers.
 - **The terminal emulator's cost on the device** — not measured (the smoke
