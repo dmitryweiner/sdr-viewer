@@ -188,7 +188,8 @@ Measured on the dev Mac (Apple Silicon), release build:
 | What that splits into on the CM4 | the detector ~3 points; the spectrum screen ~15 (0.9 MB/s to the terminal); the log on a busy band ~5. The terminal emulator's own cost is not measured (the smoke has no window) |
 | Generator alone in the app, before the spectrum (phase 1) | 6%; **8% on the CM4** |
 | App playing a `.cu8` file | ~2% of one core |
-| Static aarch64 binary from CI | 2.2 MB |
+| The event database on the CM4 (`smoke.py --keys 5`, the recording, with and without `--db`) | nothing measurable: 22% against 21–22% of one core. The file grows ~93 bytes an event: on the recording's band (~80 events a second) that is ~660 MB a day of reception |
+| Static aarch64 binary from CI | 4.6 MB with SQLite compiled in (2.4 before) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:
 measure on the device, the Mac's numbers do not scale.

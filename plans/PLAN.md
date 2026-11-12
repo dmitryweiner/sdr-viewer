@@ -340,7 +340,10 @@ They do not block the start; until answered, the default holds.
 3. **Sound (listening to AM/FM).** *Default: yes, in phase 8.*
 4. **Running in the background (daemon + TUI client).** *Default: not in
    the first version.*
-5. **License.** The repository has GPLv3, which is compatible with GPL
+5. **How long events are kept.** The database only grows: ~93 bytes an
+   event, ~660 MB a day on a band as busy as the LPD recording. *Default
+   until decided: nothing is deleted; the file can be removed by hand.*
+6. **License.** The repository has GPLv3, which is compatible with GPL
    dependencies (`rtl_433`, `librtlsdr`). *Default: stay on GPLv3.*
 
 ## 14. Progress
