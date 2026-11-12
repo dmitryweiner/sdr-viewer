@@ -50,10 +50,17 @@ impl IqRing {
         if capacity > 0 {
             // Of more than fits only the end is worth writing.
             let skip = samples.len().saturating_sub(capacity);
-            let mut at = ((self.next + skip as u64) % capacity as u64) as usize;
-            for sample in &samples[skip..] {
-                self.samples[at] = [quantize(sample.re), quantize(sample.im)];
-                at = if at + 1 == capacity { 0 } else { at + 1 };
+            let at = ((self.next + skip as u64) % capacity as u64) as usize;
+            // Up to the end of the ring, then on from its start: two plain
+            // runs, which the compiler turns into vector code.
+            let (to_end, from_start) =
+                samples[skip..].split_at((capacity - at).min(count as usize - skip));
+            let (wrapped, tail) = self.samples.split_at_mut(at);
+            for (slot, sample) in tail.iter_mut().zip(to_end) {
+                *slot = [quantize(sample.re), quantize(sample.im)];
+            }
+            for (slot, sample) in wrapped.iter_mut().zip(from_start) {
+                *slot = [quantize(sample.re), quantize(sample.im)];
             }
             self.held = (self.held + samples.len()).min(capacity);
         }
@@ -88,9 +95,11 @@ impl IqRing {
     }
 }
 
-/// A part of a sample as `rtl_sdr` writes it: 127.5 is zero.
+/// A part of a sample as `rtl_sdr` writes it: 127.5 is zero. Rounded to
+/// the nearest by the half added before the cast, which cuts the fraction
+/// off and stops at 0 and 255.
 fn quantize(part: f32) -> u8 {
-    (part * 127.5 + 127.5).round().clamp(0.0, 255.0) as u8
+    (part * 127.5 + 128.0) as u8
 }
 
 #[cfg(test)]
@@ -175,6 +184,40 @@ mod tests {
         assert_eq!(IqRing::for_seconds(30.0, 2_400_000).capacity(), 72_000_000);
         assert_eq!(IqRing::for_seconds(0.0, 2_400_000).capacity(), 0);
         assert_eq!(IqRing::for_seconds(-1.0, 2_400_000).capacity(), 0);
+    }
+
+    #[test]
+    fn a_sample_goes_to_the_nearest_step() {
+        let mut ring = IqRing::new(2);
+        // Steps are 1/127.5 apart; 0.3 and 0.7 of a step above byte 130.
+        let at = |steps: f32| (130.0 + steps - 127.5) / 127.5;
+        ring.push(&[Iq::new(at(0.3), at(0.7)), Iq::new(at(-0.3), at(-0.7))]);
+        assert_eq!(ring.copy(0..2), [[130, 131], [130, 129]]);
+    }
+
+    /// `cargo test --release -p sdr-core -- --ignored --nocapture bench_ring`
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn bench_ring() {
+        let samples = vec![Iq::new(0.25, -0.5); 16 * 1024];
+        let mut ring = IqRing::new(72_000_000);
+        // Once around, so that no page is new.
+        for _ in 0..72_000_000 / samples.len() + 1 {
+            ring.push(&samples);
+        }
+        let started = std::time::Instant::now();
+        let rounds = 2_000;
+        for _ in 0..rounds {
+            ring.push(std::hint::black_box(&samples));
+        }
+        let took = started.elapsed();
+        std::hint::black_box(ring.copy(0..u64::MAX));
+        let per_sample = took.as_secs_f64() / (rounds * samples.len()) as f64;
+        println!(
+            "ring: {:.2} ns/sample = {:.2}% of a core at 2.4 MS/s",
+            per_sample * 1e9,
+            per_sample * 2.4e6 * 100.0
+        );
     }
 
     #[test]
