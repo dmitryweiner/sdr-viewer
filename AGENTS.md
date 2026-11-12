@@ -36,9 +36,10 @@ uploaded as the artifact `sdr-viewer-aarch64`.
 | [docs/hardware-check.md](docs/hardware-check.md) | Phase 0 checklist to run on the uConsole |
 | [docs/hardware.md](docs/hardware.md) | What phase 0 found on the device so far |
 
-Phase status: 0 — partly done, findings in `docs/hardware.md`; 1 — done.
-The device is reached with `ssh dmw@192.168.1.246` (key login, no sudo
-without the user); our files there live in `~/sdr-viewer-check/`.
+Phase status: 0 — blocked on USB (the hub runs at 12 Mbit/s, the RTL-SDR
+delivers nothing), findings in `docs/hardware.md`; 1 — done.
+The device is reached with `ssh dmw@192.168.1.246` (key login; sudo works
+without a password — install or change only what the user allowed); our files there live in `~/sdr-viewer-check/`.
 
 ## Layout
 
@@ -74,11 +75,10 @@ Measured on the dev Mac (Apple Silicon), release build:
 | What | Cost |
 |---|---|
 | `./scripts/check.sh` after touching `sdr-core` | ~2 s |
-| Generator, demo scene (2 tones + noise) | ~40 ns/sample = ~10% of a P-core at 2.4 MS/s; noise is 22, tones 15 |
-| App with the generator (smoke) | ~25–30% of one core — the reader thread likely runs on an E-core |
+| Generator, demo scene (2 tones + noise) | ~16 ns/sample = ~4% of a P-core at 2.4 MS/s; noise is 1.7, tones 10.5 |
+| App with the generator (smoke) | ~6% of one core; **8% on the CM4** |
 | App playing a `.cu8` file | ~2% of one core |
 | Release binary (macOS) | 1.3 MB |
 
-On the CM4 (Cortex-A72) the app with the generator takes **70% of one
-core** (~290 ns/sample, 7× the Mac). To make the generator cheaper: rotate tone phasors instead of
-`sin_cos`, and draw noise from a precomputed Gaussian table.
+Before phasors and the noise table the generator took 70% of a CM4 core:
+measure on the device, the Mac's numbers do not scale (`docs/hardware.md`).

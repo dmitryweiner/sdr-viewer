@@ -5,9 +5,13 @@ What was found on the user's uConsole on 2026-11-12, following
 was installed or changed on the device apart from `~/sdr-viewer-check/`
 (our binary and two scripts).
 
-Status: **partly done**. Still to do, in order: the terminal check on the
-device's own screen (2), a real IQ stream from the RTL-SDR (5), Meshtastic
-and GPS (6, 7) — nothing for them is installed yet.
+Status: **blocked on USB** (section 5): the RTL-SDR delivers no samples
+because the internal hub falls back to 12 Mbit/s after boot. Meshtastic and
+GPS (6, 7) are not set up yet.
+
+Installed on the device since, with the user's permission: `rtl-sdr`
+2.0.2, `gpsd` 3.25, `gpsd-clients` (Debian packages). `sudo` works without
+a password there.
 
 ## 1. System
 
@@ -24,21 +28,30 @@ and GPS (6, 7) — nothing for them is installed yet.
 Not installed: `rtl-sdr` tools, `rtl_433`, `meshtasticd`, `gpsd`,
 `aiov2_ctl`, Rust. Python 3, `pinctrl` and `gpioget` are there.
 
+## 2. Terminal
+
+`scripts/term-check.sh` in lxterminal on the device's screen (the user's
+photo, 2026-11-12): `COLORTERM=truecolor`, the gradient is smooth, bars,
+half blocks, Braille and box lines all draw.
+
+**The default font gives 79 × 20 cells**, below the app's 80 × 24 minimum,
+so out of the box the app only says "too small". The plan's 160 × 45
+needs an 8 × 16 px font. Open: ship a font setting / launcher with the
+app, or make the layout work from about 79 × 20.
+
 ## 3. Our binary and its cost
 
 The static musl binary from CI (`sdr-viewer-aarch64`) runs as is.
+`smoke.py --keys '' --secs 20`: the app with the demo generator at
+2.4 MS/s, 160×45, idle.
 
-| What | Cost on the CM4 |
-|---|---|
-| App with the demo generator at 2.4 MS/s, 160×45, idle (`smoke.py --keys '' --secs 20`) | **70% of one core** (13.9 s user in 20 s ≈ 290 ns/sample) |
-| The same on the dev Mac | ~25–30% of an E-core, ~40 ns/sample on a P-core |
+| Generator | CM4, one core | Dev Mac |
+|---|---|---|
+| `sin_cos` per tone, Box–Muller per sample (phase 1) | **70%** (~290 ns/sample) | 25–30% |
+| Phasors and a noise table | **8%** | 6% |
 
-So the generator is ~7× dearer here than on the Mac and leaves little of
-its core. It is a development source, not what runs on the device, but
-phase 2 tests on the device will use it: make it cheaper first (phasor
-rotation instead of `sin_cos`, a noise table instead of Box–Muller per
-sample), or run it at a lower rate there. The terminal's own cost was not
-measured: the smoke runs in a pty without a window.
+The terminal's own cost was not measured: the smoke runs in a pty without
+a window.
 
 ## 4. AIO V2 power
 
@@ -58,20 +71,41 @@ switch them without root.
 
 ## 5. RTL-SDR
 
-- On the bus: `0bda:2838 Realtek RTL2838 DVB-T`; the user may open it
-  (ACL `user:dmw:rw-`), no udev rule of ours is needed.
-- **The kernel holds it**: `dvb_usb_rtl28xxu` is bound to interface 0
-  (with `rtl2832`, `rtl2832_sdr`), and nothing in `/etc/modprobe.d`
-  blacklists it. The app must detach the kernel driver when opening, or
-  the package must ship the blacklist (plan, section 10).
-- **The internal hub runs at 12 Mbit/s.** `lsusb -t`: the root port is
-  480M, but the Genesys hub `05e3:0608` under it, and the RTL-SDR behind
-  it, are at 12M (full speed). 2.4 MS/s of 8-bit IQ is 38 Mbit/s and does
-  not fit into 12. To be confirmed with a real stream — if it holds, the
-  usable sample rate on this device is far below the plan's 2.4 MS/s, and
-  the reason (hub, cable, `dwc2` settings) has to be found first.
-- Tuner (R860 or R820T2) and whether `rtl-sdr-rs` works with it: not
-  checked yet, needs a tool on the device.
+- On the bus: `0bda:2838`, strings `HackerGadgets` / `AIO_V2 Ext`, serial
+  25120901. Tuner: **Rafael Micro R820T** (`rtl_test -t`), 29 gain steps,
+  0–49.6 dB.
+- The user may open it (ACL `user:dmw:rw-`); no udev rule of ours needed.
+- The kernel's `dvb_usb_rtl28xxu` is bound to it and nothing blacklists it,
+  but `librtlsdr` detaches the driver itself, without root, and reattaches
+  it on exit. Our source must do the same.
+- Whether `rtl-sdr-rs` works with it: not checked yet.
+
+### The hub falls back to 12 Mbit/s — no samples arrive
+
+`rtl_sdr -f 433.92M -s 2400000 -n 12000000` wrote **0 bytes** in two
+minutes and ignored SIGTERM; it had to be killed. During the attempt the
+whole hub disconnected and came back twice (the keyboard is on the same
+hub and drops with it).
+
+`lsusb -t`: the root port is 480M; the Genesys hub `05e3:0608` under it,
+and everything behind it, run at 12M. 2.4 MS/s of 8-bit IQ is 38 Mbit/s.
+
+`dmesg` shows it is not so from power-on:
+
+| Time | Event |
+|---|---|
+| 3.0 s | hub `1-1` enumerates **high-speed**; the RTL-SDR and the second hub too |
+| 7.3–8.2 s | the RTL-SDR, the keyboard (still its bootloader `1eaf:0003`) and the second hub disconnect |
+| 13.2 s | hub `1-1` disconnects; `usb1-port1: attempt power cycle` |
+| 16.2 s | hub `1-1` is back at **full speed**: "not running at top speed" |
+| 145.8 s | the RTL-SDR appears (full speed) |
+
+So something around 7–13 s of boot resets the hub, and it does not
+negotiate high speed again. No under-voltage (`vcgencmd get_throttled` =
+`0x0`). Not known yet: what resets it (the keyboard's firmware start, a
+GPIO script, `uconsole-4g-cm4.service`, the AIO board's own power
+sequencing), and whether re-enumerating the root port brings 480M back.
+Lower sample rates were not tried after the hub reset.
 
 ## 6. LoRa
 
@@ -81,4 +115,6 @@ not installed, nothing listens on 4403.
 
 ## 7. GPS and clock
 
-`gpsd` is not installed; `/dev/ttyS0` exists. Not checked further.
+`gpsd` is installed now but not configured. `/dev/ttyS0` exists, and
+`serial-getty@ttyS0` and `ModemManager` are running — either may hold the
+GPS UART. Not checked further.
