@@ -172,8 +172,8 @@ Measured on the dev Mac (Apple Silicon), release build:
 | Generator, demo scene (2 tones + noise) | ~16 ns/sample = ~4% of a P-core at 2.4 MS/s; noise is 1.7, tones 10.5 |
 | App with the generator, spectrum screen at 160×45 (`smoke.py --keys 1`) | 7–13% of one core depending on the day; the detector adds nothing measurable (three builds side by side: 13, 13, 13%). ~0.8 MB/s to the terminal |
 | Live reception on the CM4, RTL-SDR at 2.4 MS/s, spectrum at 160×45 | **31%** of one core (0.6 s of 15 in the kernel); 30 s of samples arrive in 30.0 s; opening the device takes 1.15 s |
-| App with the detector on the CM4, 160×45 (smoke, PR #10) | **21%** of one core playing a `.cu8`, **26%** with the generator; 0.12 MB/s to the terminal. Lower than the row below, measured before PR #9: the detector is not what costs |
-| The same on the CM4, before the detector | **37%** of one core with the generator, **25%** playing a `.cu8`; ~1 MB/s to the terminal. Not split yet into FFT, drawing and escape codes; the terminal emulator's own cost is not measured (the smoke has no window) |
+| On the CM4, three builds side by side, 160×45, 15 s each (`smoke.py --keys 1` spectrum / `--keys 5`) | playing `capture-433.cu8`: spectrum **30%** before the detector, **32%** with it, **33%** with the log; screen 5 **15%** (placeholder), **18%** (placeholder + detector), **23%** (the log, ~80 events a second). Generator: spectrum 37 / 38 / 28% (the last looks like an outlier), screen 5 22 / 25 / 24% |
+| What that splits into on the CM4 | the detector ~3 points; the spectrum screen ~15 (0.9 MB/s to the terminal); the log on a busy band ~5. The terminal emulator's own cost is not measured (the smoke has no window) |
 | Generator alone in the app, before the spectrum (phase 1) | 6%; **8% on the CM4** |
 | App playing a `.cu8` file | ~2% of one core |
 | Static aarch64 binary from CI | 2.2 MB |
