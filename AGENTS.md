@@ -17,19 +17,17 @@ Phases of the plan (its section 14 has the detail):
 | 0 Hardware check | done — `docs/hardware.md` |
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
-| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept) and the log's history with wall-clock time work; next the waterfall fragment of an event and "save IQ" (needs the IQ ring buffer), the floor line on the spectrum |
+| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time and the detector's threshold line on the spectrum work; next the waterfall fragment of an event and "save IQ" (needs the IQ ring buffer) |
 | 4–8 | not started |
 
 Left in phase 3, in the order agreed with the user (the plan's section 14
 has the reasons):
 
-1. The noise-floor line on the spectrum — the detector's own floor
-   (`Detector::floor_db`), which does not reach the interface yet.
-2. The waterfall fragment of the selected event and "save IQ" — needs the
+1. The waterfall fragment of the selected event and "save IQ" — needs the
    IQ ring buffer of the plan's section 4, which does not exist yet.
-3. A short reference recording in the repository for the detector's
+2. A short reference recording in the repository for the detector's
    regression tests, cut from `capture-433.cu8`.
-4. An overload indicator and the count of dropped transfers.
+3. An overload indicator and the count of dropped transfers.
 
 ## Commands
 
@@ -138,7 +136,8 @@ a crate is added in the phase that needs it):
 - `sdr-detect` — `floor` (`NoiseFloor`: per-segment medians followed over
   time, slow up and fast down) and `detector` (`Detector`: bins above the
   floor joined across frequency and time into `Event`s; keying splash of a
-  strong signal masked).
+  strong signal masked; `Levels`: its floor per bin and its threshold,
+  for the screen).
 - `sdr-store` — `Store`: the SQLite event database (`rusqlite`, SQLite
   compiled in), `sessions` and `events`, the layout's version in
   `user_version`.
@@ -153,7 +152,8 @@ a crate is added in the phase that needs it):
   `src/snapshots/`.
 - `sdr-viewer` — the binary: `cli` (arguments → source), `pipeline`
   (samples → detector frames at 100 a second → events, and their averages
-  → screen frames at 10 a second; one pass of FFTs), `reader` (the source
+  → screen frames at 10 a second, each with the detector's `Levels`; one
+  pass of FFTs), `reader` (the source
   thread: carry out `Command`s, read, run the pipeline, send `Update`s,
   hand ended events to the store), `keep` (open the database, read the
   week's history, start the writer thread, which first deletes what is
@@ -188,6 +188,10 @@ a crate is added in the phase that needs it):
   frame or status (10 a second).
   An event's times are stream time (`SpectrumFrame::time`), not the clock.
 - The palette's brightness only grows with the level (a test holds it).
+- The spectrum has two floors on purpose: the scale follows the frame's
+  median (fast), the threshold line and "above floor" use the detector's
+  floor, which comes with every frame. A bar always wins its cell over the
+  line.
 - The interface never touches the source: keys become `Command`s, the
   reader thread carries them out and answers with `Update::Source` or
   `Update::Notice`.
@@ -204,7 +208,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 |---|---|
 | `./scripts/check.sh` after touching `sdr-core` | ~2 s |
 | Generator, demo scene (2 tones + noise) | ~16 ns/sample = ~4% of a P-core at 2.4 MS/s; noise is 1.7, tones 10.5 |
-| App with the generator, spectrum screen at 160×45 (`smoke.py --keys 1`) | 7–13% of one core depending on the day; the detector adds nothing measurable (three builds side by side: 13, 13, 13%). ~0.8 MB/s to the terminal |
+| App with the generator, spectrum screen at 160×45 (`smoke.py --keys 1`) | 7–15% of one core depending on the day; the detector adds nothing measurable (three builds side by side: 13, 13, 13%), nor does the threshold line (12 and 15% before, 15 and 15% with it). ~0.8 MB/s to the terminal |
 | Live reception on the CM4, RTL-SDR at 2.4 MS/s, spectrum at 160×45 | **31%** of one core (0.6 s of 15 in the kernel); 30 s of samples arrive in 30.0 s; opening the device takes 1.15 s |
 | On the CM4, three builds side by side, 160×45, 15 s each (`smoke.py --keys 1` spectrum / `--keys 5`) | playing `capture-433.cu8`: spectrum **30%** before the detector, **32%** with it, **33%** with the log; screen 5 **15%** (placeholder), **18%** (placeholder + detector), **23%** (the log, ~80 events a second). Generator: spectrum 37 / 38 / 28% (the last looks like an outlier), screen 5 22 / 25 / 24% |
 | What that splits into on the CM4 | the detector ~3 points; the spectrum screen ~15 (0.9 MB/s to the terminal); the log on a busy band ~5. The terminal emulator's own cost is not measured (the smoke has no window) |

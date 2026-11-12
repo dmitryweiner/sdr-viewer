@@ -1,5 +1,6 @@
-//! Drawing the spectrum screen: bars with max hold on top, the waterfall
-//! below, two waterfall rows per character cell.
+//! Drawing the spectrum screen: bars with max hold and the detector's
+//! threshold behind them, the waterfall below, two waterfall rows per
+//! character cell.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -9,12 +10,17 @@ use ratatui::widgets::Paragraph;
 use sdr_core::SpectrumFrame;
 use sdr_core::units::format_hz;
 
-use crate::spectrum::{BARS, SpectrumView, bar_eighths, columns, cursor_column, heat, level};
+use crate::spectrum::{
+    BARS, LINE, SpectrumView, bar_eighths, columns, cursor_column, heat, level, line_cell,
+};
 
 /// Columns left of the plot for the dB labels: "-100 ".
 const GUTTER: u16 = 5;
 
 const HELD: Color = Color::Rgb(70, 70, 80);
+
+/// The detector's threshold: unlike anything the palette gives a bar.
+const THRESHOLD: Color = Color::Rgb(160, 100, 50);
 
 pub(crate) fn draw(frame: &mut Frame, view: &SpectrumView, input: Option<&str>, area: Rect) {
     let (Some(latest), Some(range)) = (view.latest(), view.range()) else {
@@ -60,11 +66,13 @@ fn draw_header(
     width: usize,
     area: Rect,
 ) {
-    let (label, hz, db) = match cursor {
+    let floor = view.floor().map(|floor| view.visible(floor));
+    let (label, hz, db, floor) = match cursor {
         Some(column) => {
             let hz = view.hz(latest, (column as f64 + 0.5) / width as f64);
             let db = columns(view.visible(&latest.power_db), width)[column];
-            ("cursor", hz, db)
+            let floor = floor.map(|floor| columns(floor, width)[column]);
+            ("cursor", hz, db, floor)
         }
         None => {
             let visible = view.visible(&latest.power_db);
@@ -73,6 +81,7 @@ fn draw_header(
                 "peak",
                 view.hz(latest, bin as f64 / visible.len() as f64),
                 db,
+                floor.map(|floor| floor[bin]),
             )
         }
     };
@@ -81,6 +90,9 @@ fn draw_header(
         Span::raw(format_hz(hz)).bold(),
         Span::raw(format!("  {db:.1} dBFS")),
     ];
+    if let Some(floor) = floor {
+        spans.push(Span::raw(format!("  {:+.0} dB above floor", db - floor)).dark_gray());
+    }
     if view.magnification() > 1 {
         spans.push(Span::raw(format!("  ×{}", view.magnification())).cyan());
     }
@@ -142,15 +154,26 @@ fn draw_bars(
     let rows = usize::from(area.height);
     let now = columns(view.visible(&latest.power_db), width);
     let held = columns(view.visible(view.max_hold()), width);
+    let threshold = view
+        .threshold()
+        .map(|threshold| columns(view.visible(&threshold), width));
     let buffer = frame.buffer_mut();
     for (column, (&now, &held)) in now.iter().zip(&held).enumerate() {
         let (now, held) = (level(now, range), level(held, range));
+        let line = threshold
+            .as_ref()
+            .map(|threshold| line_cell(level(threshold[column], range), rows));
         for row in 0..rows {
             let x = area.x + column as u16;
             let y = area.y + (rows - 1 - row) as u16;
             let fill = bar_eighths(now, rows, row);
             let held_fill = bar_eighths(held, rows, row);
             let cell = &mut buffer[(x, y)];
+            // The threshold's line runs behind the bars and over what
+            // max hold fills.
+            let line = line
+                .filter(|&(line_row, _)| line_row == row)
+                .map(|(_, quarter)| LINE[quarter]);
             if fill > 0 {
                 // What max hold reached shows behind the top of the bar.
                 let behind = if held_fill == 8 && fill < 8 {
@@ -160,6 +183,10 @@ fn draw_bars(
                 };
                 cell.set_symbol(BARS[fill])
                     .set_style(Style::new().fg(heat(now)).bg(behind));
+            } else if let Some(line) = line.filter(|_| held_fill == 0 || held_fill == 8) {
+                let behind = if held_fill == 8 { HELD } else { Color::Reset };
+                cell.set_symbol(line)
+                    .set_style(Style::new().fg(THRESHOLD).bg(behind));
             } else if held_fill > 0 {
                 cell.set_symbol(BARS[held_fill])
                     .set_style(Style::new().fg(HELD));

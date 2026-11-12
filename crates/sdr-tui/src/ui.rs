@@ -221,6 +221,7 @@ mod tests {
     fn app_with_signal() -> App {
         use sdr_core::generator::{Gate, Generator, GeneratorConfig, Tone};
         use sdr_core::{Iq, Source};
+        use sdr_detect::{Detector, DetectorConfig};
         use sdr_dsp::{Analyzer, AnalyzerConfig};
 
         let mut app = app();
@@ -250,11 +251,13 @@ mod tests {
             fft_size: 1024,
             average: 100,
         });
+        let mut detector = Detector::new(DetectorConfig::default());
         let mut buf = vec![Iq::new(0.0, 0.0); 1_024_000];
         for _ in 0..2 {
             generator.read(&mut buf).unwrap();
             analyzer.push(&buf, &generator.info(), |frame| {
-                app.spectrum.on_frame(frame)
+                detector.push(&frame, |_| {});
+                app.spectrum.on_frame(frame, detector.levels());
             });
         }
         app
@@ -331,6 +334,41 @@ mod tests {
         assert!(luma(carrier, y) > luma(carrier + 6, y) + 150);
         // The noise itself stays dark, so weak signals stand out.
         assert!(luma(carrier - 6, y) < 100, "{}", luma(carrier - 6, y));
+    }
+
+    #[test]
+    fn the_detectors_threshold_is_a_dotted_line_behind_the_bars() {
+        let app = app_with_signal();
+        let terminal = render(&app, 80, 24);
+        let buffer = terminal.backend().buffer();
+        // Noise at -78 dBFS a bin under a scale from -80: the threshold,
+        // 8 dB over the floor, is 10 dB up the 50 dB of 8 rows — in the
+        // second row from the bottom, past its middle.
+        let y = 8;
+        let quiet = 5 + 10;
+        assert_eq!(buffer[(quiet, y)].symbol(), "⠒");
+        assert_eq!(buffer[(quiet, y)].fg, Color::Rgb(160, 100, 50));
+        // The carrier's bar stands in front of it.
+        let carrier = 5 + 22;
+        assert_eq!(buffer[(carrier, y)].symbol(), "█");
+        // The line goes on over what max hold kept of the burst.
+        let burst = 5 + 59;
+        assert_eq!(buffer[(burst, y)].symbol(), "⠒");
+        assert_eq!(buffer[(burst, y)].bg, Color::Rgb(70, 70, 80));
+    }
+
+    #[test]
+    fn the_header_says_how_far_over_the_floor_the_peak_is() {
+        let text = render_text(&app_with_signal(), 80, 24);
+        assert!(
+            text.contains("peak 433.720 MHz  -30.0 dBFS  +48 dB above floor"),
+            "{text}"
+        );
+        let mut app = app_with_signal();
+        app.spectrum.cursor = Some(0.9);
+        let text = render_text(&app, 80, 24);
+        assert!(text.contains("dBFS  +"), "{text}");
+        assert!(text.contains(" dB above floor"), "{text}");
     }
 
     fn app_with_events() -> App {

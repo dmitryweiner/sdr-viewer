@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 
 use ratatui::style::Color;
 use sdr_core::SpectrumFrame;
+use sdr_detect::Levels;
 
 /// Frames kept for the waterfall: more than any terminal has pixel rows.
 pub const HISTORY: usize = 256;
@@ -24,6 +25,8 @@ pub struct SpectrumView {
     /// Newest first.
     frames: VecDeque<SpectrumFrame>,
     max_hold: Vec<f32>,
+    /// What the detector held the latest frame against.
+    levels: Levels,
     floor_db: Option<f32>,
     /// Position across the width, 0 = the left edge, 1 = the right.
     pub cursor: Option<f64>,
@@ -38,10 +41,11 @@ pub struct SpectrumView {
 pub const MAX_ZOOM: u32 = 4;
 
 impl SpectrumView {
-    pub fn on_frame(&mut self, frame: SpectrumFrame) {
+    pub fn on_frame(&mut self, frame: SpectrumFrame, levels: Levels) {
         if self.paused {
             return;
         }
+        self.levels = levels;
         let same_view = self.latest().is_some_and(|last| {
             last.power_db.len() == frame.power_db.len()
                 && last.center_hz == frame.center_hz
@@ -87,6 +91,19 @@ impl SpectrumView {
             .latest()
             .map(|frame| frame.power_db.clone())
             .unwrap_or_default();
+    }
+
+    /// The detector's noise floor per bin of the latest frame.
+    pub fn floor(&self) -> Option<&[f32]> {
+        let bins = self.latest()?.power_db.len();
+        let floor = &self.levels.floor_db;
+        (floor.len() == bins).then_some(floor.as_slice())
+    }
+
+    /// The level per bin above which the detector takes a bin for a signal.
+    pub fn threshold(&self) -> Option<Vec<f32>> {
+        let over = self.levels.threshold_db;
+        Some(self.floor()?.iter().map(|floor| floor + over).collect())
     }
 
     /// The dB at the bottom and at the top of the scale: it follows the
@@ -207,6 +224,16 @@ pub fn bar_eighths(level: f32, rows: usize, row: usize) -> usize {
     total.saturating_sub(row * 8).min(8)
 }
 
+/// The cell a line at `level` passes through on a plot `rows` high — its
+/// row above the bottom — and how high in the cell, in quarters.
+pub fn line_cell(level: f32, rows: usize) -> (usize, usize) {
+    let quarters = ((level * (rows * 4) as f32) as usize).min((rows * 4).saturating_sub(1));
+    (quarters / 4, quarters % 4)
+}
+
+/// A dotted line at each quarter of a cell's height, lowest first.
+pub const LINE: [&str; 4] = ["⣀", "⠤", "⠒", "⠉"];
+
 pub const BARS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 /// Dark blue for the floor through green and yellow to white for the top.
@@ -248,7 +275,7 @@ mod tests {
     fn keeps_frames_newest_first_and_only_so_many() {
         let mut view = SpectrumView::default();
         for i in 0..HISTORY + 10 {
-            view.on_frame(frame(vec![i as f32; 4]));
+            view.on_frame(frame(vec![i as f32; 4]), Levels::default());
         }
         assert_eq!(view.frames().count(), HISTORY);
         assert_eq!(view.latest().unwrap().power_db[0], (HISTORY + 9) as f32);
@@ -258,8 +285,8 @@ mod tests {
     #[test]
     fn max_hold_remembers_the_strongest_of_each_bin_until_reset() {
         let mut view = SpectrumView::default();
-        view.on_frame(frame(vec![-50.0, -90.0, -90.0]));
-        view.on_frame(frame(vec![-90.0, -40.0, -90.0]));
+        view.on_frame(frame(vec![-50.0, -90.0, -90.0]), Levels::default());
+        view.on_frame(frame(vec![-90.0, -40.0, -90.0]), Levels::default());
         assert_eq!(view.max_hold(), [-50.0, -40.0, -90.0]);
         view.reset_max_hold();
         assert_eq!(view.max_hold(), [-90.0, -40.0, -90.0]);
@@ -269,30 +296,76 @@ mod tests {
     fn the_scale_sits_on_the_noise_floor_and_follows_it_slowly() {
         let mut view = SpectrumView::default();
         assert_eq!(view.range(), None);
-        view.on_frame(frame(vec![-90.0, -90.0, -90.0, -90.0, -20.0]));
+        view.on_frame(
+            frame(vec![-90.0, -90.0, -90.0, -90.0, -20.0]),
+            Levels::default(),
+        );
         assert_eq!(view.range(), Some((-92.0, -42.0)));
-        view.on_frame(frame(vec![-80.0; 5]));
+        view.on_frame(frame(vec![-80.0; 5]), Levels::default());
         assert_eq!(view.range(), Some((-91.0, -41.0)));
     }
 
     #[test]
     fn another_band_starts_the_picture_afresh() {
         let mut view = SpectrumView::default();
-        view.on_frame(frame(vec![-20.0; 4]));
+        view.on_frame(frame(vec![-20.0; 4]), Levels::default());
         let mut retuned = frame(vec![-90.0; 4]);
         retuned.center_hz = 200e6;
-        view.on_frame(retuned);
+        view.on_frame(retuned, Levels::default());
         assert_eq!(view.frames().count(), 1);
         assert_eq!(view.max_hold(), [-90.0; 4]);
         assert_eq!(view.range(), Some((-92.0, -42.0)));
     }
 
+    fn levels(floor_db: Vec<f32>) -> Levels {
+        Levels {
+            floor_db,
+            threshold_db: 8.0,
+        }
+    }
+
+    #[test]
+    fn the_threshold_is_the_floor_that_came_with_the_latest_frame_raised() {
+        let mut view = SpectrumView::default();
+        assert_eq!(view.floor(), None);
+        view.on_frame(frame(vec![-50.0; 3]), levels(vec![-90.0, -80.0, -70.0]));
+        view.on_frame(frame(vec![-50.0; 3]), levels(vec![-91.0, -81.0, -71.0]));
+        assert_eq!(view.floor(), Some(&[-91.0, -81.0, -71.0][..]));
+        assert_eq!(view.threshold(), Some(vec![-83.0, -73.0, -63.0]));
+        view.paused = true;
+        view.on_frame(frame(vec![-50.0; 3]), levels(vec![-10.0; 3]));
+        assert_eq!(view.threshold(), Some(vec![-83.0, -73.0, -63.0]));
+    }
+
+    #[test]
+    fn a_floor_of_another_length_than_the_frame_is_no_floor() {
+        let mut view = SpectrumView::default();
+        view.on_frame(frame(vec![-50.0; 3]), Levels::default());
+        assert_eq!(view.floor(), None);
+        assert_eq!(view.threshold(), None);
+        view.on_frame(frame(vec![-50.0; 3]), levels(vec![-90.0; 2]));
+        assert_eq!(view.floor(), None);
+    }
+
+    #[test]
+    fn a_line_sits_in_a_cell_at_one_of_four_heights() {
+        // 4 rows: a quarter of a row is 1/16 of the scale.
+        assert_eq!(line_cell(0.0, 4), (0, 0));
+        assert_eq!(line_cell(0.07, 4), (0, 1));
+        assert_eq!(line_cell(0.24, 4), (0, 3));
+        assert_eq!(line_cell(0.25, 4), (1, 0));
+        assert_eq!(line_cell(0.5, 4), (2, 0));
+        // The top of the scale is still inside the plot.
+        assert_eq!(line_cell(1.0, 4), (3, 3));
+        assert_eq!(LINE, ["⣀", "⠤", "⠒", "⠉"]);
+    }
+
     #[test]
     fn a_paused_view_ignores_new_frames() {
         let mut view = SpectrumView::default();
-        view.on_frame(frame(vec![-50.0; 4]));
+        view.on_frame(frame(vec![-50.0; 4]), Levels::default());
         view.paused = true;
-        view.on_frame(frame(vec![-10.0; 4]));
+        view.on_frame(frame(vec![-10.0; 4]), Levels::default());
         assert_eq!(view.frames().count(), 1);
         assert_eq!(view.max_hold(), [-50.0; 4]);
     }

@@ -86,7 +86,7 @@ fn main() -> ExitCode {
             for update in updates_rx.try_iter() {
                 match update {
                     Update::Status(status) => app.status = status,
-                    Update::Frame(frame) => app.spectrum.on_frame(frame),
+                    Update::Frame(frame, levels) => app.spectrum.on_frame(frame, levels),
                     // Events come many times a second; they are drawn
                     // with the next frame or status, soon enough.
                     Update::Events(events) => {

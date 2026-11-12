@@ -35,6 +35,15 @@ impl Default for DetectorConfig {
     }
 }
 
+/// What the detector holds a spectrum against, for whoever draws it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Levels {
+    /// The noise floor per bin in dBFS; empty before the first frame.
+    pub floor_db: Vec<f32>,
+    /// A bin this far above its floor is part of a signal.
+    pub threshold_db: f32,
+}
+
 /// One signal from its first frame to its last.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Event {
@@ -174,6 +183,14 @@ impl Detector {
     /// The noise floor per bin of the latest frame, in dBFS.
     pub fn floor_db(&self) -> &[f32] {
         self.floor.bins()
+    }
+
+    /// The floor of the latest frame and the threshold over it.
+    pub fn levels(&self) -> Levels {
+        Levels {
+            floor_db: self.floor.bins().to_vec(),
+            threshold_db: self.config.threshold_db,
+        }
     }
 
     /// The events still going on, as far as they have got, earliest first.
@@ -358,6 +375,22 @@ mod tests {
         assert!(detector.open().is_empty());
         assert_eq!(detector.floor_db().len(), BINS);
         assert!((detector.floor_db()[400] - FLOOR).abs() < 0.5);
+    }
+
+    #[test]
+    fn levels_are_the_floor_and_the_threshold_over_it() {
+        let detector = Detector::new(DetectorConfig::default());
+        assert_eq!(
+            detector.levels(),
+            Levels {
+                floor_db: Vec::new(),
+                threshold_db: 8.0
+            }
+        );
+        let (_, detector) = watch(&Air::new(&[]), 200);
+        let levels = detector.levels();
+        assert_eq!(levels.floor_db, detector.floor_db());
+        assert_eq!(levels.threshold_db, 8.0);
     }
 
     #[test]
