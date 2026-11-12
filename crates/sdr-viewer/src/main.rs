@@ -7,7 +7,7 @@ mod snapshot;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::sync_channel;
+use std::sync::mpsc::{channel, sync_channel};
 use std::time::Duration;
 
 use clap::Parser;
@@ -44,10 +44,11 @@ fn main() -> ExitCode {
     let mut app = App::new(source.info());
 
     let (updates_tx, updates_rx) = sync_channel(64);
+    let (commands_tx, commands_rx) = channel();
     let stop = Arc::new(AtomicBool::new(false));
     let reader = {
         let stop = Arc::clone(&stop);
-        std::thread::spawn(move || reader::run(source, updates_tx, stop))
+        std::thread::spawn(move || reader::run(source, updates_tx, commands_rx, stop))
     };
 
     let mut terminal = ratatui::init();
@@ -60,6 +61,8 @@ fn main() -> ExitCode {
                 match update {
                     Update::Status(status) => app.status = status,
                     Update::Frame(frame) => app.spectrum.on_frame(frame),
+                    Update::Source(info) => app.source = info,
+                    Update::Notice(notice) => app.notice = Some(notice),
                 }
                 dirty = true;
             }
@@ -69,7 +72,12 @@ fn main() -> ExitCode {
             }
             if event::poll(TICK)? {
                 match event::read()? {
-                    Event::Key(key) => app.on_key(key),
+                    Event::Key(key) => {
+                        app.on_key(key);
+                        for command in app.commands.drain(..) {
+                            let _ = commands_tx.send(command);
+                        }
+                    }
                     Event::Resize(..) => {}
                     _ => continue,
                 }
@@ -81,6 +89,8 @@ fn main() -> ExitCode {
     ratatui::restore();
 
     stop.store(true, Ordering::Relaxed);
+    // The reader may be waiting for room to answer a command: let it go.
+    drop(updates_rx);
     let _ = reader.join();
     match result {
         Ok(()) => ExitCode::SUCCESS,

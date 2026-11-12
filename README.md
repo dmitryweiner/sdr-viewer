@@ -5,9 +5,10 @@ with the HackerGadgets AIO V2 board. It watches the air through the board's
 RTL-SDR and shows what a person would otherwise miss: when, where and how
 often something was transmitted.
 
-**Status: phase 2 of 8** — the spectrum and waterfall screen works on the
-built-in signal generator, on IQ recordings and on an RTL-SDR; the other
-screens are still to come. See
+**Status: phase 2 of 8 done** — the spectrum and waterfall screen works on
+the built-in signal generator, on IQ recordings and on an RTL-SDR, with
+tuning, gain and zoom from the keyboard; the other screens are still to
+come. See
 [plans/PLAN.md](plans/PLAN.md) for what comes next.
 
 ## Run
@@ -28,8 +29,18 @@ and `.bin`), or `.cs8`, `.cs16`, `.cf32`; `--format` names it otherwise,
 `--loop` plays it again and again.
 
 Keys: `1`–`8` switch screens, `Tab` / `Shift+Tab` walk them, `?` help,
-`q` quit. On the spectrum: `←` `→` move a frequency cursor (`Shift` —
-faster, `Esc` puts it away), `Space` pauses, `m` resets max hold.
+`q` quit. On the spectrum:
+
+| Key | What |
+|---|---|
+| `←` `→` | move a frequency cursor (`Shift` — faster, `Esc` puts it away) |
+| `Enter` | tune to the cursor |
+| `f` | type a frequency: `433.92M`, `144800k`, `1.09G` |
+| `[` `]` | tune down, up by half of what is visible |
+| `+` `-` | zoom in, out (up to ×16) around the cursor |
+| `g` `G` `a` | gain up, down a step of the tuner; automatic |
+| `Space` | pause |
+| `m` | reset max hold |
 
 Without a terminal — the screen as text and the strongest signals of the
 first seconds of a recording:

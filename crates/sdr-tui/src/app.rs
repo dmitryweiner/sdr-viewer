@@ -1,7 +1,8 @@
 //! Interface state and what the keys do to it; no drawing here.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use sdr_core::SourceInfo;
+use sdr_core::units::parse_hz;
+use sdr_core::{GainChange, SourceInfo};
 
 use crate::spectrum::SpectrumView;
 
@@ -106,6 +107,13 @@ pub struct SourceStatus {
     pub state: SourceState,
 }
 
+/// What the interface asks of the source; the reader thread carries it out.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Command {
+    Tune(f64),
+    Gain(GainChange),
+}
+
 pub struct App {
     pub screen: Screen,
     pub help: bool,
@@ -113,6 +121,12 @@ pub struct App {
     pub source: SourceInfo,
     pub status: SourceStatus,
     pub spectrum: SpectrumView,
+    /// Asked of the source and not yet sent; the main loop drains it.
+    pub commands: Vec<Command>,
+    /// The frequency being typed after `f`.
+    pub input: Option<String>,
+    /// The last thing that went wrong, until the next key.
+    pub notice: Option<String>,
 }
 
 /// Cursor steps as shares of the width: fine, and coarse with Shift.
@@ -131,6 +145,9 @@ impl App {
                 state: SourceState::Running,
             },
             spectrum: SpectrumView::default(),
+            commands: Vec::new(),
+            input: None,
+            notice: None,
         }
     }
 
@@ -138,8 +155,16 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return;
         }
+        self.notice = None;
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.quit = true;
+            return;
+        }
+        if self.input.is_some() {
+            self.on_input_key(key);
+            return;
+        }
         match key.code {
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.quit = true,
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Esc if self.help => self.help = false,
             KeyCode::Esc if self.spectrum.cursor.is_some() => self.spectrum.cursor = None,
@@ -166,7 +191,57 @@ impl App {
             KeyCode::Right => self.spectrum.move_cursor(step),
             KeyCode::Char(' ') => self.spectrum.paused = !self.spectrum.paused,
             KeyCode::Char('m') => self.spectrum.reset_max_hold(),
+            KeyCode::Char('+' | '=') => self.spectrum.zoom_in(),
+            KeyCode::Char('-') => self.spectrum.zoom_out(),
+            KeyCode::Char('f') => self.input = Some(String::new()),
+            KeyCode::Char('g') => self.commands.push(Command::Gain(GainChange::Step(1))),
+            KeyCode::Char('G') => self.commands.push(Command::Gain(GainChange::Step(-1))),
+            KeyCode::Char('a') => self.commands.push(Command::Gain(GainChange::Auto)),
+            KeyCode::Char('[') => self.tune_by_view(-0.5),
+            KeyCode::Char(']') => self.tune_by_view(0.5),
+            KeyCode::Enter => self.tune_to_cursor(),
             _ => {}
+        }
+    }
+
+    /// Typing a frequency: digits, a point and a k/M/G suffix.
+    fn on_input_key(&mut self, key: KeyEvent) {
+        let Some(typed) = &mut self.input else { return };
+        match key.code {
+            KeyCode::Char(c) if c.is_ascii_digit() || ".kKmMgG".contains(c) => typed.push(c),
+            KeyCode::Backspace => {
+                typed.pop();
+            }
+            KeyCode::Esc => self.input = None,
+            KeyCode::Enter => {
+                let typed = self.input.take().unwrap_or_default();
+                match parse_hz(&typed) {
+                    Some(hz) => self.tune(hz),
+                    None if typed.is_empty() => {}
+                    None => self.notice = Some(format!("not a frequency: {typed}")),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn tune(&mut self, center_hz: f64) {
+        self.commands.push(Command::Tune(center_hz));
+        self.spectrum.recenter();
+    }
+
+    /// Moves the centre by a share of what is visible.
+    fn tune_by_view(&mut self, share: f64) {
+        if let Some(latest) = self.spectrum.latest() {
+            let center = latest.center_hz + share * self.spectrum.span_hz(latest);
+            self.tune(center);
+        }
+    }
+
+    fn tune_to_cursor(&mut self) {
+        if let (Some(latest), Some(cursor)) = (self.spectrum.latest(), self.spectrum.cursor) {
+            let center = self.spectrum.hz(latest, cursor);
+            self.tune(center);
         }
     }
 
@@ -254,6 +329,111 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         assert_eq!(app.spectrum.cursor, None);
         assert!(!app.quit);
+    }
+
+    fn frame() -> sdr_core::SpectrumFrame {
+        sdr_core::SpectrumFrame {
+            time: std::time::Duration::ZERO,
+            center_hz: 433.92e6,
+            sample_rate: 2_400_000,
+            power_db: vec![-90.0; 2048],
+        }
+    }
+
+    fn type_keys(app: &mut App, keys: &str) {
+        for c in keys.chars() {
+            press(app, KeyCode::Char(c));
+        }
+    }
+
+    #[test]
+    fn f_takes_a_frequency_and_enter_tunes_to_it() {
+        let mut app = app();
+        type_keys(&mut app, "f144.8M");
+        assert_eq!(app.input.as_deref(), Some("144.8M"));
+        // While typing, the digits do not switch screens and q does not quit.
+        press(&mut app, KeyCode::Char('q'));
+        assert_eq!(app.screen, Screen::Spectrum);
+        assert!(!app.quit);
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::Char('M'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.input, None);
+        assert_eq!(app.commands, [Command::Tune(144.8e6)]);
+    }
+
+    #[test]
+    fn escape_cancels_typing_and_nonsense_is_reported_until_the_next_key() {
+        let mut app = app();
+        type_keys(&mut app, "f100M");
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.input, None);
+        assert!(app.commands.is_empty() && !app.quit);
+
+        type_keys(&mut app, "f1.2.3");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.commands.is_empty());
+        assert_eq!(app.notice.as_deref(), Some("not a frequency: 1.2.3"));
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.notice, None);
+
+        type_keys(&mut app, "f");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.commands.is_empty());
+        assert_eq!(app.notice, None);
+    }
+
+    #[test]
+    fn brackets_move_the_centre_by_half_of_what_is_visible() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char(']'));
+        assert!(
+            app.commands.is_empty(),
+            "nothing to move before the first frame"
+        );
+        app.spectrum.on_frame(frame());
+        press(&mut app, KeyCode::Char(']'));
+        press(&mut app, KeyCode::Char('+'));
+        press(&mut app, KeyCode::Char('['));
+        assert_eq!(
+            app.commands,
+            [Command::Tune(435.12e6), Command::Tune(433.32e6)]
+        );
+    }
+
+    #[test]
+    fn enter_tunes_to_the_cursor_and_brings_it_to_the_middle() {
+        let mut app = app();
+        app.spectrum.on_frame(frame());
+        press(&mut app, KeyCode::Enter);
+        assert!(app.commands.is_empty(), "no cursor, nowhere to go");
+        app.spectrum.cursor = Some(0.75);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.commands, [Command::Tune(434.52e6)]);
+        assert_eq!(app.spectrum.cursor, Some(0.5));
+    }
+
+    #[test]
+    fn gain_keys_ask_the_source() {
+        let mut app = app();
+        type_keys(&mut app, "gGa");
+        assert_eq!(
+            app.commands,
+            [
+                Command::Gain(GainChange::Step(1)),
+                Command::Gain(GainChange::Step(-1)),
+                Command::Gain(GainChange::Auto),
+            ]
+        );
+    }
+
+    #[test]
+    fn plus_and_minus_zoom() {
+        let mut app = app();
+        type_keys(&mut app, "++");
+        assert_eq!(app.spectrum.magnification(), 4);
+        type_keys(&mut app, "-");
+        assert_eq!(app.spectrum.magnification(), 2);
     }
 
     #[test]

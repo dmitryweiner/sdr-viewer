@@ -5,4 +5,4 @@ pub mod spectrum;
 mod spectrum_ui;
 pub mod ui;
 
-pub use app::{App, Screen, SourceState, SourceStatus};
+pub use app::{App, Command, Screen, SourceState, SourceStatus};

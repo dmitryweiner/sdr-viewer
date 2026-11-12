@@ -7,7 +7,7 @@
 
 use rtl_sdr_rs::{AsyncReadEvent, AsyncReadHandle, DeviceId, RtlSdr, TunerGain};
 use sdr_core::file::SampleFormat;
-use sdr_core::{Iq, Source, SourceError, SourceInfo};
+use sdr_core::{GainChange, Iq, Source, SourceError, SourceInfo};
 
 /// The tuner's range; outside it the PLL does not lock.
 pub const MIN_HZ: f64 = 24e6;
@@ -34,6 +34,11 @@ pub struct RtlConfig {
 pub struct RtlSource {
     stream: AsyncReadHandle,
     info: SourceInfo,
+    tuner: String,
+    /// The tuner's gain steps in tenths of a dB, ascending.
+    steps: Vec<i32>,
+    /// The step in force; `None` is the tuner's automatic gain.
+    gain: Option<i32>,
     /// The transfer being handed out and how much of it is already gone.
     bytes: Vec<u8>,
     taken: usize,
@@ -47,25 +52,22 @@ impl RtlSource {
         sdr.set_sample_rate(config.sample_rate)
             .map_err(device_error)?;
         sdr.set_center_freq(center).map_err(device_error)?;
-        let (gain, gain_text) = match config.gain_db {
-            None => (TunerGain::Auto, "auto gain".to_string()),
-            Some(wanted) => {
-                let steps = sdr.get_tuner_gains().map_err(device_error)?;
-                let tenths = nearest_gain(&steps, wanted)
-                    .ok_or_else(|| SourceError::Device("the tuner reports no gain steps".into()))?;
-                (
-                    TunerGain::Manual(tenths),
-                    format!("{:.1} dB", f64::from(tenths) / 10.0),
-                )
-            }
+        let mut steps = sdr.get_tuner_gains().map_err(device_error)?;
+        steps.sort_unstable();
+        let gain = match config.gain_db {
+            None => None,
+            Some(wanted) => Some(
+                nearest_gain(&steps, wanted)
+                    .ok_or_else(|| SourceError::Device("the tuner reports no gain steps".into()))?,
+            ),
         };
-        sdr.set_tuner_gain(gain).map_err(device_error)?;
+        sdr.set_tuner_gain(tuner_gain(gain)).map_err(device_error)?;
         sdr.reset_buffer().map_err(device_error)?;
         let tuner = sdr.get_tuner_id().map_err(device_error)?.to_string();
         let info = SourceInfo {
             sample_rate: config.sample_rate,
             center_hz: config.center_hz,
-            description: format!("rtl-sdr {tuner}, {gain_text}"),
+            description: describe(&tuner, gain),
         };
         let stream = sdr
             .into_async_reader(TRANSFERS, TRANSFER_BYTES)
@@ -73,9 +75,23 @@ impl RtlSource {
         Ok(RtlSource {
             stream,
             info,
+            tuner,
+            steps,
+            gain,
             bytes: Vec::new(),
             taken: 0,
         })
+    }
+}
+
+fn tuner_gain(tenths: Option<i32>) -> TunerGain {
+    tenths.map_or(TunerGain::Auto, TunerGain::Manual)
+}
+
+fn describe(tuner: &str, gain: Option<i32>) -> String {
+    match gain {
+        None => format!("rtl-sdr {tuner}, auto gain"),
+        Some(tenths) => format!("rtl-sdr {tuner}, {:.1} dB", f64::from(tenths) / 10.0),
     }
 }
 
@@ -115,6 +131,20 @@ impl Source for RtlSource {
         self.info.center_hz = center_hz;
         Ok(())
     }
+
+    fn set_gain(&mut self, change: GainChange) -> Result<(), SourceError> {
+        let gain = match change {
+            GainChange::Auto => None,
+            GainChange::Step(by) => stepped_gain(&self.steps, self.gain, by),
+        };
+        self.stream
+            .control_handle()
+            .set_tuner_gain(tuner_gain(gain))
+            .map_err(device_error)?;
+        self.gain = gain;
+        self.info.description = describe(&self.tuner, gain);
+        Ok(())
+    }
 }
 
 fn device_error(err: rtl_sdr_rs::error::RtlsdrError) -> SourceError {
@@ -129,6 +159,21 @@ fn checked_center(center_hz: f64) -> Result<u32, SourceError> {
             "a frequency outside the tuner's 24–1766 MHz",
         ))
     }
+}
+
+/// The gain `by` steps away from `current`, stopping at the ends. From
+/// automatic gain the walk starts in the middle of the tuner's range.
+fn stepped_gain(steps: &[i32], current: Option<i32>, by: i32) -> Option<i32> {
+    let last = steps.len().checked_sub(1)?;
+    let index = match current {
+        None => return Some(steps[last / 2]),
+        Some(tenths) => steps
+            .iter()
+            .position(|&step| step >= tenths)
+            .unwrap_or(last),
+    };
+    let moved = (index as i64 + i64::from(by)).clamp(0, last as i64);
+    Some(steps[moved as usize])
 }
 
 /// The tuner's step (in tenths of a dB, as the driver counts) nearest to
@@ -159,6 +204,24 @@ mod tests {
         assert_eq!(nearest_gain(&R820T, -5.0), Some(0));
         assert_eq!(nearest_gain(&R820T, 20.2), Some(197));
         assert_eq!(nearest_gain(&[], 20.0), None);
+    }
+
+    #[test]
+    fn gain_walks_the_tuners_steps_and_stops_at_the_ends() {
+        assert_eq!(stepped_gain(&R820T, Some(297), 1), Some(328));
+        assert_eq!(stepped_gain(&R820T, Some(297), -2), Some(254));
+        assert_eq!(stepped_gain(&R820T, Some(496), 1), Some(496));
+        assert_eq!(stepped_gain(&R820T, Some(0), -1), Some(0));
+        // From automatic gain: the middle of the range, whichever way.
+        assert_eq!(stepped_gain(&R820T, None, 1), Some(254));
+        assert_eq!(stepped_gain(&R820T, None, -1), Some(254));
+        assert_eq!(stepped_gain(&[], Some(100), 1), None);
+    }
+
+    #[test]
+    fn the_description_names_the_tuner_and_the_gain() {
+        assert_eq!(describe("r820t", Some(297)), "rtl-sdr r820t, 29.7 dB");
+        assert_eq!(describe("r820t", None), "rtl-sdr r820t, auto gain");
     }
 
     #[test]

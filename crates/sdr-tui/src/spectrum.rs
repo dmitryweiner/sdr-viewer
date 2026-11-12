@@ -28,7 +28,14 @@ pub struct SpectrumView {
     /// Position across the width, 0 = the left edge, 1 = the right.
     pub cursor: Option<f64>,
     pub paused: bool,
+    /// The visible part is 1 / 2^zoom of the received band...
+    zoom: u32,
+    /// ...starting this far across it, 0 = the band's left edge.
+    start: f64,
 }
+
+/// The deepest zoom: 1/16 of the band, 128 of the 2048 bins.
+pub const MAX_ZOOM: u32 = 4;
 
 impl SpectrumView {
     pub fn on_frame(&mut self, frame: SpectrumFrame) {
@@ -87,6 +94,71 @@ impl SpectrumView {
     pub fn range(&self) -> Option<(f32, f32)> {
         let bottom = self.floor_db? - BELOW_FLOOR_DB;
         Some((bottom, bottom + RANGE_DB))
+    }
+
+    /// How many times the visible part is narrower than the band.
+    pub fn magnification(&self) -> u32 {
+        1 << self.zoom
+    }
+
+    fn width(&self) -> f64 {
+        1.0 / f64::from(self.magnification())
+    }
+
+    /// A position across the visible part as a position across the band.
+    fn across_band(&self, across_view: f64) -> f64 {
+        self.start + across_view * self.width()
+    }
+
+    /// The frequency at `across_view` of the visible part, 0 = its left edge.
+    pub fn hz(&self, frame: &SpectrumFrame, across_view: f64) -> f64 {
+        frame.hz_at(self.across_band(across_view))
+    }
+
+    /// The width of the visible part in hertz.
+    pub fn span_hz(&self, frame: &SpectrumFrame) -> f64 {
+        f64::from(frame.sample_rate) * self.width()
+    }
+
+    /// The bins of `power_db` that are in view.
+    pub fn visible<'a>(&self, power_db: &'a [f32]) -> &'a [f32] {
+        let bins = power_db.len();
+        let count = (bins >> self.zoom).max(1).min(bins);
+        let first = ((self.start * bins as f64).round() as usize).min(bins - count);
+        &power_db[first..first + count]
+    }
+
+    /// Halves the visible part around the cursor, or around its middle.
+    pub fn zoom_in(&mut self) {
+        if self.zoom < MAX_ZOOM {
+            self.set_zoom(self.zoom + 1);
+        }
+    }
+
+    pub fn zoom_out(&mut self) {
+        if self.zoom > 0 {
+            self.set_zoom(self.zoom - 1);
+        }
+    }
+
+    /// Changes the zoom keeping the cursor on its frequency.
+    fn set_zoom(&mut self, zoom: u32) {
+        let anchor = self.across_band(self.cursor.unwrap_or(0.5));
+        self.zoom = zoom;
+        let width = self.width();
+        self.start = (anchor - width / 2.0).clamp(0.0, 1.0 - width);
+        if self.cursor.is_some() {
+            self.cursor = Some(((anchor - self.start) / width).clamp(0.0, 1.0));
+        }
+    }
+
+    /// Puts the visible part, and the cursor if there is one, in the middle
+    /// of the band: where a frequency just tuned to sits.
+    pub fn recenter(&mut self) {
+        self.start = (1.0 - self.width()) / 2.0;
+        if self.cursor.is_some() {
+            self.cursor = Some(0.5);
+        }
     }
 
     /// Moves the cursor by a share of the width; it appears in the middle.
@@ -239,6 +311,68 @@ mod tests {
         assert_eq!(cursor_column(0.0, 80), 0);
         assert_eq!(cursor_column(0.5, 80), 40);
         assert_eq!(cursor_column(1.0, 80), 79);
+    }
+
+    #[test]
+    fn zoom_halves_the_view_around_its_middle() {
+        let mut view = SpectrumView::default();
+        let frame = frame(vec![0.0; 1000]);
+        let power: Vec<f32> = (0..1000).map(|i| i as f32).collect();
+        assert_eq!(view.visible(&power).len(), 1000);
+        assert_eq!(view.span_hz(&frame), 1e6);
+        view.zoom_in();
+        assert_eq!(view.magnification(), 2);
+        assert_eq!(view.visible(&power), &power[250..750]);
+        assert_eq!(view.hz(&frame, 0.0), 99.75e6);
+        assert_eq!(view.hz(&frame, 1.0), 100.25e6);
+        assert_eq!(view.span_hz(&frame), 0.5e6);
+        view.zoom_out();
+        view.zoom_out();
+        assert_eq!(view.magnification(), 1);
+        assert_eq!(view.visible(&power).len(), 1000);
+    }
+
+    #[test]
+    fn zoom_keeps_the_cursor_on_its_frequency() {
+        let mut view = SpectrumView::default();
+        let frame = frame(vec![0.0; 1000]);
+        view.cursor = Some(0.75);
+        let at = view.hz(&frame, 0.75);
+        view.zoom_in();
+        // The cursor's frequency becomes the middle of the view.
+        assert_eq!(view.cursor, Some(0.5));
+        assert_eq!(view.hz(&frame, 0.5), at);
+        view.zoom_in();
+        view.zoom_out();
+        view.zoom_out();
+        assert_eq!(view.hz(&frame, view.cursor.unwrap()), at);
+    }
+
+    #[test]
+    fn zoom_stops_at_the_band_edges_and_at_its_limit() {
+        let mut view = SpectrumView::default();
+        let frame = frame(vec![0.0; 1000]);
+        view.cursor = Some(1.0);
+        view.zoom_in();
+        // The view cannot leave the band, so the cursor stays at its edge.
+        assert_eq!(view.hz(&frame, 1.0), 100.5e6);
+        assert_eq!(view.cursor, Some(1.0));
+        for _ in 0..10 {
+            view.zoom_in();
+        }
+        assert_eq!(view.magnification(), 1 << MAX_ZOOM);
+    }
+
+    #[test]
+    fn recentering_shows_the_middle_of_the_band() {
+        let mut view = SpectrumView::default();
+        let frame = frame(vec![0.0; 1000]);
+        view.cursor = Some(0.1);
+        view.zoom_in();
+        view.recenter();
+        assert_eq!(view.hz(&frame, 0.5), 100e6);
+        assert_eq!(view.cursor, Some(0.5));
+        assert_eq!(view.magnification(), 2);
     }
 
     #[test]
