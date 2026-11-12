@@ -4,15 +4,21 @@ mod cli;
 mod pipeline;
 mod reader;
 mod snapshot;
+mod writer;
 
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, sync_channel};
-use std::time::Duration;
+use std::sync::mpsc::{Sender, SyncSender, channel, sync_channel};
+use std::thread::JoinHandle;
+use std::time::{Duration, SystemTime};
 
 use clap::Parser;
 use ratatui::crossterm::event::{self, Event};
+use sdr_core::SourceInfo;
+use sdr_detect::Event as Detected;
+use sdr_store::Store;
 use sdr_tui::{App, ui};
 
 use crate::reader::Update;
@@ -47,9 +53,19 @@ fn main() -> ExitCode {
     let (updates_tx, updates_rx) = sync_channel(64);
     let (commands_tx, commands_rx) = channel();
     let stop = Arc::new(AtomicBool::new(false));
+    let db = cli::db_path(&args, |name| std::env::var(name).ok());
+    let stored = match db.map(|path| keep_events(&path, &source.info(), updates_tx.clone())) {
+        Some(Ok(stored)) => Some(stored),
+        Some(Err(message)) => {
+            eprintln!("sdr-viewer: {message}");
+            return ExitCode::FAILURE;
+        }
+        None => None,
+    };
+    let (store_tx, writer) = stored.unzip();
     let reader = {
         let stop = Arc::clone(&stop);
-        std::thread::spawn(move || reader::run(source, updates_tx, commands_rx, stop))
+        std::thread::spawn(move || reader::run(source, updates_tx, commands_rx, stop, store_tx))
     };
 
     let mut terminal = ratatui::init();
@@ -103,6 +119,10 @@ fn main() -> ExitCode {
     // The reader may be waiting for room to answer a command: let it go.
     drop(updates_rx);
     let _ = reader.join();
+    // The reader has handed over its last events; let them reach the disk.
+    if let Some(writer) = writer {
+        let _ = writer.join();
+    }
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
@@ -110,4 +130,38 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Opens the event database at `path`, notes a session for `source`
+/// beginning now, and starts the thread that writes what is sent to it. A
+/// write that fails is told to the interface once, and writing stops.
+fn keep_events(
+    path: &Path,
+    source: &SourceInfo,
+    updates: SyncSender<Update>,
+) -> Result<(Sender<Vec<Detected>>, JoinHandle<()>), String> {
+    let wrap = |err: &dyn std::fmt::Display| {
+        format!(
+            "the event database {}: {err} (--no-db runs without it)",
+            path.display()
+        )
+    };
+    if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).map_err(|err| wrap(&err))?;
+    }
+    let mut store = Store::open(path).map_err(|err| wrap(&err))?;
+    let session = store
+        .begin_session(SystemTime::now(), source)
+        .map_err(|err| wrap(&err))?;
+    let (tx, rx) = channel();
+    let writer = std::thread::spawn(move || {
+        let write = |events: &[Detected]| {
+            let added = store.add_events(session, events);
+            added.map_err(|err| err.to_string())
+        };
+        if let Err(message) = writer::run(rx, write) {
+            let _ = updates.send(Update::Notice(format!("events are not kept: {message}")));
+        }
+    });
+    Ok((tx, writer))
 }

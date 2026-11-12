@@ -17,7 +17,7 @@ Phases of the plan (its section 14 has the detail):
 | 0 Hardware check | done — `docs/hardware.md` |
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
-| 3 Detector and log | **in progress**: the noise floor, the detector and the log screen (events in memory) work; next SQLite, then the waterfall fragment of an event and the floor line |
+| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen and the SQLite event database work; next the log reading earlier sessions from the database (wall-clock time), the waterfall fragment of an event, the floor line |
 | 4–8 | not started |
 
 ## Commands
@@ -27,7 +27,9 @@ Phases of the plan (its section 14 has the detail):
 - `cargo run --release [-- FILE --rate 2.4M --center 433.92M --loop]` — the
   app; without a file the demo generator runs.
 - `cargo run --release -- --rtlsdr --center 433.92M [--gain 30] [--rate 2.4M]`
-  — receive from an RTL-SDR. On the user's uConsole only through
+  — receive from an RTL-SDR. Events go to
+  `~/.local/share/sdr-viewer/events.db` (`--db FILE` elsewhere, and for a
+  recording or the generator too; `--no-db` nowhere). On the user's uConsole only through
   `sdr-viewer-rx.sh` (see "The user's device").
 - `cargo run --release -- [FILE … | --rtlsdr …] --snapshot 160x45 [--secs 10]`
   — no terminal: analyses the start of the stream (unpaced for files and
@@ -119,6 +121,9 @@ a crate is added in the phase that needs it):
   time, slow up and fast down) and `detector` (`Detector`: bins above the
   floor joined across frequency and time into `Event`s; keying splash of a
   strong signal masked).
+- `sdr-store` — `Store`: the SQLite event database (`rusqlite`, SQLite
+  compiled in), `sessions` and `events`, the layout's version in
+  `user_version`.
 - `sdr-rtl` — `RtlSource`: the RTL-SDR through `rtl-sdr-rs` (pure Rust on
   `nusb`), queued transfers, gain along the tuner's own steps, retuning.
 - `sdr-tui` — `app` (state, keys and the `Command`s they ask of the
@@ -131,7 +136,9 @@ a crate is added in the phase that needs it):
 - `sdr-viewer` — the binary: `cli` (arguments → source), `pipeline`
   (samples → detector frames at 100 a second → events, and their averages
   → screen frames at 10 a second; one pass of FFTs), `reader` (the source
-  thread: carry out `Command`s, read, run the pipeline, send `Update`s),
+  thread: carry out `Command`s, read, run the pipeline, send `Update`s,
+  hand ended events to the store), `writer` (the thread that writes them
+  to the database once a second),
   `snapshot` (`--snapshot`), `main` (terminal loop, redraws only when
   something changed).
 
@@ -150,6 +157,11 @@ a crate is added in the phase that needs it):
 - The detector sees every frame; only the screen's frames may be dropped.
   Ended events are never dropped by `try_send`: the reader keeps them
   until the interface has room. The end of the stream waits for room too.
+- Only the writer thread touches the database after start-up; the reader
+  hands events over an unbounded channel and never waits for the disk. A
+  change of the tables raises `SCHEMA_VERSION` and migrates older files;
+  a file from a newer build is refused, never rewritten.
+- An event's wall-clock time is its session's start plus its stream time.
 - The main loop does not redraw for events alone: they show with the next
   frame or status (10 a second).
   An event's times are stream time (`SpectrumFrame::time`), not the clock.
@@ -176,7 +188,8 @@ Measured on the dev Mac (Apple Silicon), release build:
 | What that splits into on the CM4 | the detector ~3 points; the spectrum screen ~15 (0.9 MB/s to the terminal); the log on a busy band ~5. The terminal emulator's own cost is not measured (the smoke has no window) |
 | Generator alone in the app, before the spectrum (phase 1) | 6%; **8% on the CM4** |
 | App playing a `.cu8` file | ~2% of one core |
-| Static aarch64 binary from CI | 2.2 MB |
+| The event database on the CM4 (`smoke.py --keys 5`, the recording, with and without `--db`) | nothing measurable: 22% against 21–22% of one core. The file grows ~93 bytes an event: on the recording's band (~80 events a second) that is ~660 MB a day of reception |
+| Static aarch64 binary from CI | 4.6 MB with SQLite compiled in (2.4 before) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:
 measure on the device, the Mac's numbers do not scale.

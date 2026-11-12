@@ -52,6 +52,28 @@ began, how long it lasted, where, how wide, how strong:
 | `s` | sort by time, level, duration, frequency |
 | `Enter` | tune to the selected event and show the spectrum |
 
+### The event database
+
+With `--rtlsdr` every detected event is also kept in a SQLite file:
+`sdr-viewer/events.db` under `$XDG_DATA_HOME`, or under `~/.local/share`.
+`--db FILE` names another file — and keeps the events of a recording or of
+the generator too, which are not kept otherwise; `--no-db` keeps nothing.
+Events are written once a second; those still on when the app quits are
+ended there and written.
+
+```sh
+sqlite3 ~/.local/share/sdr-viewer/events.db "
+  SELECT datetime(start_unix_ms / 1000, 'unixepoch', 'localtime'),
+         duration_us / 1000 AS ms, round(peak_hz / 1e6, 3) AS mhz,
+         round(above_floor_db, 1) AS db
+  FROM events ORDER BY start_unix_ms DESC LIMIT 20"
+```
+
+`sessions` has one row per run (when it began, the source, its frequency
+and rate); `events` has the session, the wall-clock start (the session's
+start plus the time in the stream), the duration, the band, the peak and
+its level above the noise floor.
+
 Without a terminal — the screen as text, the strongest signals and the
 detected events of the first seconds of a recording:
 

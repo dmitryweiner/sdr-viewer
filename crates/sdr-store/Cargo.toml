@@ -1,0 +1,14 @@
+[package]
+name = "sdr-store"
+description = "The event database: SQLite, one row per signal the detector found."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sdr-core = { workspace = true }
+sdr-detect = { workspace = true }
+rusqlite = { workspace = true }
+
+[lints]
+workspace = true

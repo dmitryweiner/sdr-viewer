@@ -340,7 +340,10 @@ They do not block the start; until answered, the default holds.
 3. **Sound (listening to AM/FM).** *Default: yes, in phase 8.*
 4. **Running in the background (daemon + TUI client).** *Default: not in
    the first version.*
-5. **License.** The repository has GPLv3, which is compatible with GPL
+5. **How long events are kept.** The database only grows: ~93 bytes an
+   event, ~660 MB a day on a band as busy as the LPD recording. *Default
+   until decided: nothing is deleted; the file can be removed by hand.*
+6. **License.** The repository has GPLv3, which is compatible with GPL
    dependencies (`rtl_433`, `librtlsdr`). *Default: stay on GPLv3.*
 
 ## 14. Progress
@@ -352,7 +355,7 @@ As of 2026-11-12.
 | 0 | Hardware check | Done: `docs/hardware.md`. CM4 with 8 GB, R820T tuner, `rtl-sdr-rs` works, truecolor terminal. The device's hub is defective: see the decision "Defective USB hub" |
 | 1 | Skeleton | Done: workspace, CI with a static aarch64 binary, generator and file sources, tabs |
 | 2 | Spectrum and waterfall | Done on the generator, recordings and the RTL-SDR: bars with max hold, waterfall, a scale that follows the noise floor, cursor, tuning (`f`, `[` `]`, Enter), gain, zoom, pause, `--snapshot` |
-| 3 | Detector and log | In progress. Done: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time). Next: SQLite and wall-clock time, the waterfall fragment and "save IQ" of an event, the floor line on the spectrum |
+| 3 | Detector and log | In progress. Done: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Next: the log showing wall-clock time and earlier sessions from the database, the waterfall fragment and "save IQ" of an event, the floor line on the spectrum |
 | 4–8 | | Not started |
 
 Left out of phase 2 on purpose, with where it goes:

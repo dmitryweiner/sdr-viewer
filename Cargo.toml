@@ -13,12 +13,15 @@ sdr-core = { path = "crates/sdr-core" }
 sdr-detect = { path = "crates/sdr-detect" }
 sdr-dsp = { path = "crates/sdr-dsp" }
 sdr-rtl = { path = "crates/sdr-rtl" }
+sdr-store = { path = "crates/sdr-store" }
 sdr-tui = { path = "crates/sdr-tui" }
 rustfft = "6"
 num-complex = "0.4"
 ratatui = "0.30"
 clap = { version = "4.6", features = ["derive"] }
 insta = "1.49"
+# SQLite compiled in: the static musl binary has no system library to use.
+rusqlite = { version = "0.42", features = ["bundled"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

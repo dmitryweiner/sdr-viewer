@@ -52,6 +52,35 @@ pub struct Args {
     /// Seconds of the stream a snapshot looks at.
     #[arg(long, default_value_t = 5.0)]
     pub secs: f64,
+
+    /// Keep the detected events in this SQLite file. With --rtlsdr they
+    /// are kept anyway, in sdr-viewer/events.db under $XDG_DATA_HOME or
+    /// ~/.local/share; a recording or the generator is kept only when
+    /// this names a file.
+    #[arg(long, value_name = "FILE", conflicts_with = "snapshot")]
+    pub db: Option<PathBuf>,
+
+    /// Keep no events, not even with --rtlsdr.
+    #[arg(long, conflicts_with = "db")]
+    pub no_db: bool,
+}
+
+/// Where the events go, if anywhere; `env` looks up an environment
+/// variable.
+pub fn db_path(args: &Args, env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    if args.no_db || args.snapshot.is_some() {
+        return None;
+    }
+    if args.db.is_some() || !args.rtlsdr {
+        return args.db.clone();
+    }
+    let set = |name: &str| {
+        env(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let data = set("XDG_DATA_HOME").or_else(|| Some(set("HOME")?.join(".local/share")))?;
+    Some(data.join("sdr-viewer/events.db"))
 }
 
 fn parse_size_arg(text: &str) -> Result<(u16, u16), String> {
@@ -166,6 +195,61 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
         }
+    }
+
+    fn env<'a>(vars: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        |name| {
+            let found = vars.iter().find(|(key, _)| *key == name);
+            found.map(|(_, value)| (*value).to_string())
+        }
+    }
+
+    #[test]
+    fn events_of_the_receiver_go_to_the_user_s_data_directory() {
+        let home = [("HOME", "/home/dmw")];
+        assert_eq!(
+            db_path(&args(&["--rtlsdr"]), env(&home)),
+            Some("/home/dmw/.local/share/sdr-viewer/events.db".into())
+        );
+        let xdg = [("HOME", "/home/dmw"), ("XDG_DATA_HOME", "/data")];
+        assert_eq!(
+            db_path(&args(&["--rtlsdr"]), env(&xdg)),
+            Some("/data/sdr-viewer/events.db".into())
+        );
+        let empty = [("HOME", "/home/dmw"), ("XDG_DATA_HOME", "")];
+        assert_eq!(
+            db_path(&args(&["--rtlsdr"]), env(&empty)),
+            Some("/home/dmw/.local/share/sdr-viewer/events.db".into())
+        );
+        assert_eq!(db_path(&args(&["--rtlsdr"]), env(&[])), None);
+    }
+
+    #[test]
+    fn a_recording_or_the_generator_is_kept_only_when_asked() {
+        let home = [("HOME", "/home/dmw")];
+        assert_eq!(db_path(&args(&[]), env(&home)), None);
+        assert_eq!(db_path(&args(&["capture.cu8"]), env(&home)), None);
+        assert_eq!(
+            db_path(&args(&["capture.cu8", "--db", "x.db"]), env(&home)),
+            Some("x.db".into())
+        );
+        assert_eq!(
+            db_path(&args(&["--rtlsdr", "--db", "x.db"]), env(&home)),
+            Some("x.db".into())
+        );
+    }
+
+    #[test]
+    fn no_db_and_snapshots_keep_nothing() {
+        let home = [("HOME", "/home/dmw")];
+        assert_eq!(db_path(&args(&["--rtlsdr", "--no-db"]), env(&home)), None);
+        let snapshot = args(&["--rtlsdr", "--snapshot", "160x45"]);
+        assert_eq!(db_path(&snapshot, env(&home)), None);
+        let parse = |list: &[&str]| {
+            Args::try_parse_from(std::iter::once("sdr-viewer").chain(list.iter().copied()))
+        };
+        assert!(parse(&["--db", "x.db", "--no-db"]).is_err());
+        assert!(parse(&["--db", "x.db", "--snapshot", "160x45"]).is_err());
     }
 
     #[test]
