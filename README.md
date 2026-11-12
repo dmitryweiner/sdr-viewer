@@ -6,8 +6,8 @@ RTL-SDR and shows what a person would otherwise miss: when, where and how
 often something was transmitted.
 
 **Status: phase 2 of 8** — the spectrum and waterfall screen works on the
-built-in signal generator and on IQ recordings; the RTL-SDR source and the
-other screens are still to come. See
+built-in signal generator, on IQ recordings and on an RTL-SDR; the other
+screens are still to come. See
 [plans/PLAN.md](plans/PLAN.md) for what comes next.
 
 ## Run
@@ -15,8 +15,13 @@ other screens are still to come. See
 ```sh
 cargo run --release                          # the built-in generator
 cargo run --release -- capture.cu8 --rate 2.4M --center 433.92M
+cargo run --release -- --rtlsdr --center 433.92M --gain 30   # an RTL-SDR
 cargo run --release -- --help
 ```
+
+The RTL-SDR is driven by the pure-Rust `rtl-sdr-rs`; no `librtlsdr` is
+needed. On Linux the kernel's DVB driver must not hold the device: blacklist
+`dvb_usb_rtl28xxu` or unbind it.
 
 Recordings: raw interleaved IQ as `rtl_sdr` writes it (`.cu8`, also `.raw`
 and `.bin`), or `.cs8`, `.cs16`, `.cf32`; `--format` names it otherwise,

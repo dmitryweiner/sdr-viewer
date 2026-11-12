@@ -56,7 +56,7 @@ cells; the interface is designed for that size, with 80×24 as the minimum.
 | Task | Choice | Fallback |
 |---|---|---|
 | TUI | `ratatui` + `crossterm` | — |
-| RTL-SDR access | `rtl-sdr-rs` (pure Rust, no C dependencies) | FFI to `librtlsdr`; an `rtl_tcp` client |
+| RTL-SDR access | `rtl-sdr-rs` (pure Rust, no C dependencies) — confirmed on the device with the R820T | FFI to `librtlsdr`; an `rtl_tcp` client |
 | FFT | `rustfft` / `realfft` | — |
 | Threads and channels | `std::thread` + `crossbeam-channel` | — |
 | Meshtastic | `meshtasticd` TCP API (port 4403) + `prost` | Driving the SX1262 directly (see 7.2) |

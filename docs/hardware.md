@@ -5,8 +5,9 @@ What was found on the user's uConsole on 2026-11-12, following
 was installed or changed on the device apart from `~/sdr-viewer-check/`
 (our binary and two scripts).
 
-Status: the RTL-SDR works only while the hub runs at 480M, which kills
-the built-in keyboard (section 5); `rtl-sdr-rs` is not tried yet. Meshtastic and
+Status: done. The RTL-SDR works only while the hub runs at 480M, which
+kills the built-in keyboard (section 5); the app receives through
+`sdr-viewer-rx.sh`, which switches the hub for the time it runs. Meshtastic and
 GPS (6, 7) are not set up yet.
 
 Installed on the device since, with the user's permission: `rtl-sdr`
@@ -78,7 +79,11 @@ switch them without root.
 - The kernel's `dvb_usb_rtl28xxu` is bound to it and nothing blacklists it,
   but `librtlsdr` detaches the driver itself, without root, and reattaches
   it on exit. Our source must do the same.
-- Whether `rtl-sdr-rs` works with it: not checked yet.
+- `rtl-sdr-rs` 0.4 (pure Rust on `nusb`) works with it: our static binary
+  receives at 2.4 MS/s without loss (30 s of samples in 30.0 s) through
+  queued transfers; one synchronous transfer at a time lost about 10%.
+  The crate does not detach the kernel driver, so `sdr-hub-speed high`
+  unbinds it.
 
 ### The hub is forced to 12 Mbit/s on purpose — and the RTL-SDR needs 480
 
@@ -118,6 +123,19 @@ above it in max hold, several on the 25 kHz grid of the LPD433 channels
 asked to be. The
 tuner prints `[R82XX] PLL not locked!` on opening — common with this tuner
 and harmless: the data flows and the tuning is right (above). Our app plays that recording on the CM4 at 5% of one core.
+
+What is installed on the device for this (2026-11-12):
+
+- `/usr/local/sbin/sdr-hub-speed` — `scripts/hub-speed.sh`.
+- One condition added to the user's rule
+  `/etc/udev/rules.d/99-dwc2-force-fs.rules`:
+  `TEST!="/run/sdr-viewer-high-speed"`. While that flag file exists the
+  hub is left at 480M; `/run` is in memory, so a reboot always returns to
+  12M. The original rule is kept in
+  `~/sdr-viewer-check/99-dwc2-force-fs.rules.orig`.
+- `~/sdr-viewer-check/sdr-viewer-rx.sh` — switches to 480M, runs
+  `sdr-viewer --rtlsdr`, and a watcher switches back when the app exits,
+  however it exits. Each switch takes about 6 s.
 
 Agreed with the user (2026-11-12): until the mainboard is replaced the app
 gets a **"reception without the keyboard" mode** — it lets the hub run at
