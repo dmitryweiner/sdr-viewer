@@ -7,6 +7,9 @@
 #   scripts/smoke.py --size 80x24 --secs 5
 #   scripts/smoke.py --keys '25?' -- capture.cu8 --rate 2.048M
 #   scripts/smoke.py --keys 5 --words -- --db /tmp/e.db | grep -E '^[0-9:.]+$'
+#   scripts/smoke.py --keys $'5\x1b[Br' --words -- --iq-dir /tmp/iq | grep IQ
+#
+# An escape sequence in --keys is one key: $'\x1b[B' is the down arrow.
 #
 # Prints e.g. "ok: exit 0, 3.0 s, cpu 41% of one core (user 1.10 s, sys 0.13 s)".
 # Arguments after `--` go to sdr-viewer. Builds with `cargo build --release`
@@ -74,12 +77,13 @@ def main():
 
     started = time.monotonic()
     drain(0.5)
-    pause = max(args.secs - 0.5, 0) / max(len(args.keys), 1)
+    keys = re.findall(r"\x1b\[[0-9;]*[A-Za-z~]|.", args.keys, re.S)
+    pause = max(args.secs - 0.5, 0) / max(len(keys), 1)
     try:
-        for key in args.keys:
+        for key in keys:
             os.write(fd, key.encode())
             drain(pause)
-        if not args.keys:
+        if not keys:
             drain(max(args.secs - 0.5, 0))
         os.write(fd, b"q")
     except OSError:

@@ -54,6 +54,9 @@ pub struct Row<'a> {
     pub at: Option<SystemTime>,
     /// Still on the air: its duration is so far.
     pub on: bool,
+    /// Found by this run, not read from the database: only such an event
+    /// can still have its samples.
+    pub this_run: bool,
 }
 
 /// What ties this run's stream to the wall clock.
@@ -70,6 +73,7 @@ pub struct WallClock {
 struct Logged {
     event: Event,
     at: Option<SystemTime>,
+    this_run: bool,
 }
 
 pub struct LogView {
@@ -121,6 +125,7 @@ impl LogView {
             .map(|(at, event)| Logged {
                 event,
                 at: Some(at),
+                this_run: false,
             })
             .collect();
         history.sort_by_key(|logged| Reverse(logged.at));
@@ -149,7 +154,11 @@ impl LogView {
 
     fn stamp(&self, event: Event) -> Logged {
         let at = self.clock.map(|clock| clock.stream_start + event.start);
-        Logged { event, at }
+        Logged {
+            event,
+            at,
+            this_run: true,
+        }
     }
 
     /// Lets the oldest go beyond `MAX_EVENTS`.
@@ -180,8 +189,12 @@ impl LogView {
     }
 
     pub fn selected_event(&self) -> Option<&Event> {
+        self.selected_row().map(|row| row.event)
+    }
+
+    pub fn selected_row(&self) -> Option<Row<'_>> {
         let (rows, index) = self.held.as_ref()?;
-        rows.get(*index).map(|(logged, _)| &logged.event)
+        rows.get(*index).map(|(logged, on)| row(logged, *on))
     }
 
     /// Events the level filter hides.
@@ -255,6 +268,7 @@ impl LogView {
         let logged = |row: &Row| Logged {
             event: row.event.clone(),
             at: row.at,
+            this_run: row.this_run,
         };
         let rows: Vec<(Logged, bool)> = self
             .live_rows()
@@ -301,6 +315,7 @@ fn row(logged: &Logged, on: bool) -> Row<'_> {
         event: &logged.event,
         at: logged.at,
         on,
+        this_run: logged.this_run,
     }
 }
 
@@ -580,12 +595,17 @@ pub(crate) mod tests {
             .collect();
         assert_eq!(khz, [100.0, 300.0, 200.0]);
         assert_eq!(rows[1].at, Some(noon() - hour));
+        // Only this run's events can still have their samples.
+        let this_run: Vec<bool> = rows.iter().map(|row| row.this_run).collect();
+        assert_eq!(this_run, [true, false, false]);
         // The weak one is there, behind the filter.
         assert_eq!(log.hidden(), 1);
         // Tuning to a row of history works as to any other.
         log.move_selection(1);
+        assert!(log.selected_row().unwrap().this_run);
         log.move_selection(1);
         assert_eq!(log.selected_event().unwrap().center_hz(), 433.3e6);
+        assert!(!log.selected_row().unwrap().this_run);
     }
 
     #[test]

@@ -14,7 +14,7 @@ use crate::app::{App, Screen, SourceState};
 pub const MIN_WIDTH: u16 = 80;
 pub const MIN_HEIGHT: u16 = 24;
 
-const KEYS: [(&str, &str); 17] = [
+const KEYS: [(&str, &str); 18] = [
     ("?", "this help"),
     ("1–8", "switch screens"),
     ("Tab, Shift+Tab", "next, previous screen"),
@@ -30,6 +30,7 @@ const KEYS: [(&str, &str); 17] = [
     ("+, -", "log: raise, lower the level that hides weak events"),
     ("s", "log: sort by time, level, duration, frequency"),
     ("Enter", "log: tune to the selected event"),
+    ("r", "log: save the selected event's IQ samples"),
     ("Esc", "close help, put the cursor or selection away, quit"),
     ("q", "quit"),
 ];
@@ -129,9 +130,10 @@ fn placeholder(screen: Screen) -> Paragraph<'static> {
 
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let separator = || Span::raw(" │ ").dark_gray();
-    let state = match (&app.notice, &app.status.state) {
-        (Some(notice), _) => Span::raw(notice.clone()).red(),
-        (None, state) => match state {
+    let state = match (&app.notice, &app.done, &app.status.state) {
+        (Some(notice), ..) => Span::raw(notice.clone()).red(),
+        (None, Some(done), _) => Span::raw(done.clone()).green(),
+        (None, None, state) => match state {
             SourceState::Running => Span::raw(format!("rx {}", format_rate(app.status.rate))),
             SourceState::Ended => Span::raw("ended").yellow(),
             SourceState::Failed(message) => Span::raw(format!("error: {message}")).red(),
@@ -314,6 +316,19 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("rx 2.398"), "{text}");
+    }
+
+    #[test]
+    fn what_was_done_takes_the_place_of_the_source_state_too() {
+        let mut app = app();
+        app.done = Some("IQ saved: burst (0.14 s)".into());
+        let text = render_text(&app, 100, 24);
+        assert!(text.contains("│ IQ saved: burst (0.14 s)"), "{text}");
+        assert!(!text.contains("rx 2.398"), "{text}");
+        // What went wrong comes first.
+        app.notice = Some("the disk is full".into());
+        let text = render_text(&app, 100, 24);
+        assert!(text.contains("│ the disk is full"), "{text}");
     }
 
     #[test]

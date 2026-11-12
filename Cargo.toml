@@ -20,7 +20,7 @@ num-complex = "0.4"
 ratatui = "0.30"
 clap = { version = "4.6", features = ["derive"] }
 insta = "1.49"
-# Only for the local time zone: std has none.
+# Only for the local time zone and for dates in UTC: std has neither.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # SQLite compiled in: the static musl binary has no system library to use.
 rusqlite = { version = "0.42", features = ["bundled"] }

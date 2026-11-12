@@ -1,6 +1,6 @@
 [package]
 name = "sdr-store"
-description = "The event database: SQLite, one row per signal the detector found."
+description = "What is kept on disk: the SQLite event database and SigMF recordings."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,6 +9,7 @@ license.workspace = true
 sdr-core = { workspace = true }
 sdr-detect = { workspace = true }
 rusqlite = { workspace = true }
+chrono = { workspace = true }
 
 [lints]
 workspace = true

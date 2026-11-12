@@ -3,6 +3,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use sdr_core::units::parse_hz;
 use sdr_core::{GainChange, SourceInfo};
+use sdr_detect::Event;
 
 use crate::log::LogView;
 use crate::spectrum::SpectrumView;
@@ -109,10 +110,12 @@ pub struct SourceStatus {
 }
 
 /// What the interface asks of the source; the reader thread carries it out.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Tune(f64),
     Gain(GainChange),
+    /// Save the samples of this event, while they are still held.
+    SaveIq(Event),
 }
 
 pub struct App {
@@ -129,6 +132,8 @@ pub struct App {
     pub input: Option<String>,
     /// The last thing that went wrong, until the next key.
     pub notice: Option<String>,
+    /// The last thing done that was asked for, until the next key.
+    pub done: Option<String>,
 }
 
 /// Cursor steps as shares of the width: fine, and coarse with Shift.
@@ -154,6 +159,7 @@ impl App {
             commands: Vec::new(),
             input: None,
             notice: None,
+            done: None,
         }
     }
 
@@ -162,6 +168,7 @@ impl App {
             return;
         }
         self.notice = None;
+        self.done = None;
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.quit = true;
             return;
@@ -201,6 +208,7 @@ impl App {
             KeyCode::Char('+' | '=') => self.log.raise_filter(),
             KeyCode::Char('-') => self.log.lower_filter(),
             KeyCode::Char('s') => self.log.next_sort(),
+            KeyCode::Char('r') => self.save_selected(),
             KeyCode::Enter => {
                 if let Some(center_hz) = self.log.selected_event().map(|event| event.center_hz()) {
                     self.tune(center_hz);
@@ -208,6 +216,15 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Asks for the selected event's samples to be saved.
+    fn save_selected(&mut self) {
+        match self.log.selected_row() {
+            Some(row) if row.this_run => self.commands.push(Command::SaveIq(row.event.clone())),
+            Some(_) => self.notice = Some("an earlier run's samples are gone".into()),
+            None => self.notice = Some("select an event first: ↑ ↓".into()),
         }
     }
 
@@ -358,6 +375,47 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.commands, [Command::Tune(433.1e6)]);
         assert_eq!(app.screen, Screen::Spectrum);
+    }
+
+    #[test]
+    fn r_on_a_log_row_asks_for_the_events_samples() {
+        use crate::log::tests::{event, noon};
+        let mut app = app();
+        app.screen = Screen::Log;
+        app.log.set_clock(crate::log::WallClock {
+            stream_start: noon(),
+            utc_offset_s: 0,
+        });
+        app.log.on_events([event(300, 400, 50.0, 30.0)]);
+        let hour = std::time::Duration::from_secs(3600);
+        app.log
+            .load_history([(noon() - hour, event(50, 10, 700.0, 40.0))]);
+        press(&mut app, KeyCode::Char('r'));
+        assert!(app.commands.is_empty());
+        assert_eq!(app.notice.as_deref(), Some("select an event first: ↑ ↓"));
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.notice, None);
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(app.commands, [Command::SaveIq(event(300, 400, 50.0, 30.0))]);
+        // The list stays held, for the next one.
+        assert_eq!(app.log.selected(), Some(0));
+        // What the database remembers of an earlier run has no samples.
+        app.commands.clear();
+        press(&mut app, KeyCode::End);
+        press(&mut app, KeyCode::Char('r'));
+        assert!(app.commands.is_empty());
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("an earlier run's samples are gone")
+        );
+    }
+
+    #[test]
+    fn a_key_puts_away_what_was_done_as_it_does_a_notice() {
+        let mut app = app();
+        app.done = Some("IQ saved".into());
+        press(&mut app, KeyCode::Char('5'));
+        assert_eq!(app.done, None);
     }
 
     #[test]
