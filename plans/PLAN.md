@@ -312,6 +312,7 @@ The first useful version comes after phase 3.
 | Mesh network | Haifa: region US, preset MediumFast, frequency slot 70 = 919.375 MHz, max hops 7. Goes into the default bookmarks; the app still reads the frequency from `meshtasticd` |
 | Language | UI in English; docs, README and code comments in English (the shared conventions in `~/projects/CLAUDE.md`) |
 | aarch64 build | Static musl binary built on GitHub's native arm64 runner instead of `cross` |
+| Weak one-frame events | The detector's threshold stays at 8 dB and everything it finds goes into the database; the log hides the weak ones with a filter (minimum level above the floor) whose threshold the user changes from the log screen |
 | Phase order on start | Phase 1 before phase 0: no SSH access to the device yet; phase 0 follows `docs/hardware-check.md` when there is |
 
 ### Region: Israel
@@ -394,8 +395,8 @@ most are 40–50 ms long and ~9 kHz wide, exactly on the 25 kHz LPD grid
 over some 66 channels — a frequency hopper nobody had noticed on the
 waterfall. 90 are one bin for one frame at 8–10.5 dB above the floor: more
 than Gaussian noise gives at this threshold, so either the edges of weak
-bursts or noise that is not Gaussian. Open: whether the log hides them by
-default (a minimum level or length) or the threshold goes up.
+bursts or noise that is not Gaussian. Decided (section 12): the log hides them with a
+filter, the threshold stays.
 
 What phase 3 started from: `SpectrumFrame`s at 10 a second from any
 source; 100 ms frames average a short burst down (a 10 ms burst reads
