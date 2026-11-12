@@ -5,7 +5,7 @@
 //! is bound to the device, it has to be unbound or blacklisted first
 //! (`scripts/hub-speed.sh` does it on the user's uConsole).
 
-use rtl_sdr_rs::{DeviceId, RtlSdr, TunerGain};
+use rtl_sdr_rs::{AsyncReadEvent, AsyncReadHandle, DeviceId, RtlSdr, TunerGain};
 use sdr_core::file::SampleFormat;
 use sdr_core::{Iq, Source, SourceError, SourceInfo};
 
@@ -13,8 +13,14 @@ use sdr_core::{Iq, Source, SourceError, SourceInfo};
 pub const MIN_HZ: f64 = 24e6;
 pub const MAX_HZ: f64 = 1766e6;
 
-/// Bulk transfers must be whole USB packets.
-const PACKET_BYTES: usize = 512;
+/// Bytes per USB transfer, a multiple of the 512-byte packet: 14 ms at
+/// 2.4 MS/s. Several transfers stay queued in the driver's worker thread;
+/// reading them one at a time instead lost about 10% of the samples at
+/// 2.4 MS/s on the CM4 (`docs/hardware.md`).
+const TRANSFER_BYTES: usize = 64 * 1024;
+
+/// Transfers kept queued; 0 lets the driver choose (15).
+const TRANSFERS: usize = 0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RtlConfig {
@@ -26,9 +32,11 @@ pub struct RtlConfig {
 }
 
 pub struct RtlSource {
-    sdr: RtlSdr,
+    stream: AsyncReadHandle,
     info: SourceInfo,
+    /// The transfer being handed out and how much of it is already gone.
     bytes: Vec<u8>,
+    taken: usize,
 }
 
 impl RtlSource {
@@ -59,10 +67,14 @@ impl RtlSource {
             center_hz: config.center_hz,
             description: format!("rtl-sdr {tuner}, {gain_text}"),
         };
+        let stream = sdr
+            .into_async_reader(TRANSFERS, TRANSFER_BYTES)
+            .map_err(device_error)?;
         Ok(RtlSource {
-            sdr,
+            stream,
             info,
             bytes: Vec::new(),
+            taken: 0,
         })
     }
 }
@@ -73,28 +85,35 @@ impl Source for RtlSource {
     }
 
     fn read(&mut self, buf: &mut [Iq]) -> Result<usize, SourceError> {
-        let bytes = transfer_bytes(buf.len()).ok_or(SourceError::Unsupported(
-            "reading fewer than 256 samples from an RTL-SDR",
-        ))?;
-        self.bytes.resize(bytes, 0);
-        let got = self.sdr.read_sync(&mut self.bytes).map_err(device_error)?;
-        let samples = got / 2;
-        SampleFormat::Cu8.decode(&self.bytes[..samples * 2], &mut buf[..samples]);
+        // Transfers are whole packets, so even; a stray byte would otherwise
+        // read as the end of the stream.
+        while self.bytes.len() - self.taken < 2 {
+            match self.stream.recv() {
+                Some(Ok(AsyncReadEvent::Samples { data, .. })) => {
+                    self.bytes = data;
+                    self.taken = 0;
+                }
+                // A retune took effect; the samples after it follow.
+                Some(Ok(_)) => {}
+                Some(Err(err)) => return Err(device_error(err)),
+                None => return Ok(0),
+            }
+        }
+        let samples = buf.len().min((self.bytes.len() - self.taken) / 2);
+        let bytes = &self.bytes[self.taken..self.taken + samples * 2];
+        SampleFormat::Cu8.decode(bytes, &mut buf[..samples]);
+        self.taken += samples * 2;
         Ok(samples)
     }
 
     fn tune(&mut self, center_hz: f64) -> Result<(), SourceError> {
-        self.sdr
-            .set_center_freq(checked_center(center_hz)?)
+        let center = checked_center(center_hz)?;
+        self.stream
+            .control_handle()
+            .set_center_freq(center)
             .map_err(device_error)?;
         self.info.center_hz = center_hz;
         Ok(())
-    }
-}
-
-impl Drop for RtlSource {
-    fn drop(&mut self) {
-        let _ = self.sdr.close();
     }
 }
 
@@ -110,13 +129,6 @@ fn checked_center(center_hz: f64) -> Result<u32, SourceError> {
             "a frequency outside the tuner's 24–1766 MHz",
         ))
     }
-}
-
-/// The largest whole number of USB packets that fits `samples`; `None` if
-/// not even one does.
-fn transfer_bytes(samples: usize) -> Option<usize> {
-    let bytes = samples * 2 / PACKET_BYTES * PACKET_BYTES;
-    (bytes > 0).then_some(bytes)
 }
 
 /// The tuner's step (in tenths of a dB, as the driver counts) nearest to
@@ -147,14 +159,6 @@ mod tests {
         assert_eq!(nearest_gain(&R820T, -5.0), Some(0));
         assert_eq!(nearest_gain(&R820T, 20.2), Some(197));
         assert_eq!(nearest_gain(&[], 20.0), None);
-    }
-
-    #[test]
-    fn transfers_are_whole_packets_no_larger_than_the_buffer() {
-        assert_eq!(transfer_bytes(16 * 1024), Some(32768));
-        assert_eq!(transfer_bytes(1000), Some(1536));
-        assert_eq!(transfer_bytes(256), Some(512));
-        assert_eq!(transfer_bytes(255), None);
     }
 
     #[test]
