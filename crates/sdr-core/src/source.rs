@@ -20,6 +20,8 @@ pub struct SourceInfo {
 #[derive(Debug)]
 pub enum SourceError {
     Io(io::Error),
+    /// The receiver refused or went away; the driver's own words.
+    Device(String),
     /// The source cannot do this at all (a file cannot be retuned).
     Unsupported(&'static str),
 }
@@ -28,6 +30,7 @@ impl fmt::Display for SourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SourceError::Io(err) => write!(f, "I/O error: {err}"),
+            SourceError::Device(message) => write!(f, "receiver: {message}"),
             SourceError::Unsupported(what) => write!(f, "not supported: {what}"),
         }
     }
