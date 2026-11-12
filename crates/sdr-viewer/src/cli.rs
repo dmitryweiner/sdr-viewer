@@ -33,6 +33,22 @@ pub struct Args {
     /// Start the recording over when it ends.
     #[arg(long = "loop")]
     pub looping: bool,
+
+    /// Do not open the interface: analyse the start of the stream as fast
+    /// as it reads and print the spectrum screen as text, COLSxROWS.
+    #[arg(long, value_name = "COLSxROWS", value_parser = parse_size_arg)]
+    pub snapshot: Option<(u16, u16)>,
+
+    /// Seconds of the stream a snapshot looks at.
+    #[arg(long, default_value_t = 5.0)]
+    pub secs: f64,
+}
+
+fn parse_size_arg(text: &str) -> Result<(u16, u16), String> {
+    let size = text
+        .split_once('x')
+        .and_then(|(cols, rows)| Some((cols.parse().ok()?, rows.parse().ok()?)));
+    size.ok_or_else(|| format!("not a size: {text:?} (try 160x45)"))
 }
 
 fn parse_hz_arg(text: &str) -> Result<f64, String> {
@@ -46,8 +62,8 @@ fn parse_format_arg(text: &str) -> Result<SampleFormat, String> {
     })
 }
 
-/// Opens what the arguments ask for, paced to real time.
-pub fn open_source(args: &Args) -> Result<Box<dyn Source>, String> {
+/// Opens what the arguments ask for; `paced` holds it to real time.
+pub fn open_source(args: &Args, paced: bool) -> Result<Box<dyn Source>, String> {
     let sample_rate = args.rate.round() as u32;
     if sample_rate == 0 {
         return Err("the sample rate must be above zero".into());
@@ -63,7 +79,11 @@ pub fn open_source(args: &Args) -> Result<Box<dyn Source>, String> {
         }
         Some(path) => Box::new(open_file(path, args, sample_rate)?),
     };
-    Ok(Box::new(Paced::new(source, SystemClock::new())))
+    if paced {
+        Ok(Box::new(Paced::new(source, SystemClock::new())))
+    } else {
+        Ok(source)
+    }
 }
 
 fn open_file(
@@ -128,7 +148,7 @@ mod tests {
 
     #[test]
     fn without_a_file_runs_the_generator_with_the_defaults() {
-        let source = open_source(&args(&[])).unwrap();
+        let source = open_source(&args(&[]), true).unwrap();
         let info = source.info();
         assert_eq!(info.description, "generator");
         assert_eq!(info.sample_rate, 2_400_000);
@@ -137,7 +157,7 @@ mod tests {
 
     #[test]
     fn rate_and_centre_accept_suffixes() {
-        let source = open_source(&args(&["--rate", "1M", "--center", "144.8M"])).unwrap();
+        let source = open_source(&args(&["--rate", "1M", "--center", "144.8M"]), true).unwrap();
         assert_eq!(source.info().sample_rate, 1_000_000);
         assert_eq!(source.info().center_hz, 144_800_000.0);
     }
@@ -149,14 +169,16 @@ mod tests {
         };
         assert!(parse(&["--rate", "fast"]).is_err());
         assert!(parse(&["--format", "wav"]).is_err());
-        assert!(open_source(&args(&["--rate", "0"])).is_err());
+        assert!(parse(&["--snapshot", "big"]).is_err());
+        assert_eq!(args(&["--snapshot", "160x45"]).snapshot, Some((160, 45)));
+        assert!(open_source(&args(&["--rate", "0"]), true).is_err());
     }
 
     #[test]
     fn a_file_is_read_in_the_format_of_its_extension() {
         let file = TempFile::new("capture.cs8", &[64, 0, 0, 64]);
         let path = file.0.to_str().unwrap();
-        let mut source = open_source(&args(&[path, "--rate", "1k"])).unwrap();
+        let mut source = open_source(&args(&[path, "--rate", "1k"]), true).unwrap();
         assert_eq!(source.info().description, "capture.cs8");
         let mut buf = [Iq::new(0.0, 0.0); 4];
         assert_eq!(source.read(&mut buf).unwrap(), 2);
@@ -167,14 +189,16 @@ mod tests {
     fn format_overrides_the_extension_and_is_required_without_one() {
         let file = TempFile::new("capture.dat", &[64, 0]);
         let path = file.0.to_str().unwrap();
-        let err = open_source(&args(&[path])).err().unwrap();
+        let err = open_source(&args(&[path]), true).err().unwrap();
         assert!(err.contains("--format"), "{err}");
-        assert!(open_source(&args(&[path, "--format", "cs8"])).is_ok());
+        assert!(open_source(&args(&[path, "--format", "cs8"]), true).is_ok());
     }
 
     #[test]
     fn a_missing_file_names_itself_in_the_error() {
-        let err = open_source(&args(&["/nonexistent/x.cu8"])).err().unwrap();
+        let err = open_source(&args(&["/nonexistent/x.cu8"]), true)
+            .err()
+            .unwrap();
         assert!(err.contains("/nonexistent/x.cu8"), "{err}");
     }
 }

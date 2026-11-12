@@ -14,11 +14,15 @@ use crate::app::{App, Screen, SourceState};
 pub const MIN_WIDTH: u16 = 80;
 pub const MIN_HEIGHT: u16 = 24;
 
-const KEYS: [(&str, &str); 4] = [
+const KEYS: [(&str, &str); 8] = [
     ("1–8", "switch screens"),
     ("Tab, Shift+Tab", "next, previous screen"),
+    ("←, →", "spectrum: move the cursor (Shift: faster)"),
+    ("Space", "spectrum: pause"),
+    ("m", "spectrum: reset max hold"),
+    ("Esc", "close help, put the cursor away, quit"),
     ("?", "this help"),
-    ("q, Esc", "quit"),
+    ("q", "quit"),
 ];
 
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -34,11 +38,33 @@ pub fn draw(frame: &mut Frame, app: &App) {
     ])
     .areas(area);
     frame.render_widget(tab_bar(app.screen), tabs);
-    frame.render_widget(placeholder(app.screen), body);
+    if app.screen == Screen::Spectrum {
+        crate::spectrum_ui::draw(frame, &app.spectrum, body);
+    } else {
+        frame.render_widget(placeholder(app.screen), body);
+    }
     draw_status(frame, app, status);
     if app.help {
         draw_help(frame, body);
     }
+}
+
+/// The screen as plain text, one line per row, without colours: for
+/// snapshots outside a terminal.
+pub fn render_text(app: &App, width: u16, height: u16) -> String {
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
+        .expect("a test backend cannot fail");
+    terminal
+        .draw(|frame| draw(frame, app))
+        .expect("a test backend cannot fail");
+    let buffer = terminal.backend().buffer();
+    let mut text = String::new();
+    for y in 0..height {
+        let row: String = (0..width).map(|x| buffer[(x, y)].symbol()).collect();
+        text.push_str(row.trim_end());
+        text.push('\n');
+    }
+    text
 }
 
 fn draw_too_small(frame: &mut Frame, area: Rect) {
@@ -176,9 +202,84 @@ mod tests {
         terminal
     }
 
+    /// The app after two seconds of a quiet band with one carrier and one
+    /// burst that has just ended (it stays in max hold).
+    fn app_with_signal() -> App {
+        use sdr_core::generator::{Gate, Generator, GeneratorConfig, Tone};
+        use sdr_core::{Iq, Source};
+        use sdr_dsp::{Analyzer, AnalyzerConfig};
+
+        let mut app = app();
+        let mut generator = Generator::new(GeneratorConfig {
+            sample_rate: 1_024_000,
+            center_hz: 433.92e6,
+            noise_dbfs: Some(-50.0),
+            tones: vec![
+                Tone {
+                    freq_hz: 433.72e6,
+                    level_dbfs: -30.0,
+                    gate: None,
+                },
+                Tone {
+                    freq_hz: 434.22e6,
+                    level_dbfs: -20.0,
+                    gate: Some(Gate {
+                        period_s: 5.0,
+                        on_s: 1.0,
+                    }),
+                },
+            ],
+            seed: 5,
+        });
+        app.source = generator.info();
+        let mut analyzer = Analyzer::new(AnalyzerConfig {
+            fft_size: 1024,
+            average: 100,
+        });
+        let mut buf = vec![Iq::new(0.0, 0.0); 1_024_000];
+        for _ in 0..2 {
+            generator.read(&mut buf).unwrap();
+            analyzer.push(&buf, &generator.info(), |frame| {
+                app.spectrum.on_frame(frame)
+            });
+        }
+        app
+    }
+
     #[test]
-    fn spectrum_placeholder_at_the_minimum_size() {
+    fn spectrum_waits_for_samples() {
         insta::assert_snapshot!(render(&app(), 80, 24).backend());
+    }
+
+    #[test]
+    fn spectrum_and_waterfall_at_the_minimum_size() {
+        insta::assert_snapshot!(render(&app_with_signal(), 80, 24).backend());
+    }
+
+    #[test]
+    fn spectrum_with_a_cursor_on_the_uconsole_screen() {
+        let mut app = app_with_signal();
+        app.spectrum.cursor = Some(0.305);
+        app.spectrum.paused = true;
+        insta::assert_snapshot!(render(&app, 160, 45).backend());
+    }
+
+    #[test]
+    fn the_waterfall_is_brighter_where_the_carrier_is() {
+        let app = app_with_signal();
+        let terminal = render(&app, 80, 24);
+        let buffer = terminal.backend().buffer();
+        let luma = |x: u16, y: u16| match buffer[(x, y)].fg {
+            Color::Rgb(r, g, b) => u32::from(r) + u32::from(g) + u32::from(b),
+            other => panic!("{other:?} at {x},{y}"),
+        };
+        // The carrier is 200 kHz below the centre of 1.024 MHz: 30.5% of
+        // the 75 plot columns after the 5 of the gutter.
+        let carrier = 5 + 22;
+        let y = 20;
+        assert_eq!(buffer[(carrier, y)].symbol(), "▀");
+        assert!(luma(carrier, y) > luma(carrier - 6, y) + 150);
+        assert!(luma(carrier, y) > luma(carrier + 6, y) + 150);
     }
 
     #[test]
@@ -216,6 +317,16 @@ mod tests {
         assert_eq!(buffer[(x_of('2'), 0)].bg, Color::Cyan);
         assert_eq!(buffer[(x_of('1'), 0)].bg, Color::Reset);
         assert_eq!(buffer[(x_of('1'), 0)].fg, Color::Yellow);
+    }
+
+    #[test]
+    fn text_rendering_has_a_line_per_row_without_trailing_spaces() {
+        let text = render_text(&app(), 80, 24);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 24);
+        assert!(lines[0].starts_with("1 Spectrum 2 Channels"));
+        assert!(lines[23].ends_with("q quit"));
+        assert!(lines.iter().all(|line| !line.ends_with(' ')));
     }
 
     #[test]
