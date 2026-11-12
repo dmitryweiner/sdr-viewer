@@ -5,9 +5,8 @@ What was found on the user's uConsole on 2026-11-12, following
 was installed or changed on the device apart from `~/sdr-viewer-check/`
 (our binary and two scripts).
 
-Status: **blocked on USB** (section 5): the internal hub is forced to
-12 Mbit/s to work around a defect in it, and the RTL-SDR delivers no
-samples at that speed. Meshtastic and
+Status: the RTL-SDR works only while the hub runs at 480M, which kills
+the built-in keyboard (section 5); `rtl-sdr-rs` is not tried yet. Meshtastic and
 GPS (6, 7) are not set up yet.
 
 Installed on the device since, with the user's permission: `rtl-sdr`
@@ -99,13 +98,28 @@ So on this device, until the mainboard is replaced:
 | Hub uplink | Keyboard, trackball | RTL-SDR |
 |---|---|---|
 | 12M (the workaround, the normal state) | work | **no samples at all** |
-| 480M | garbage descriptors, dead | should work (high-speed traffic bypasses the TT) — not tested |
+| 480M | garbage descriptors, dead | **works** |
 
 Measured at 12M: `rtl_sdr` wrote 0 bytes at 2.4 MS/s and 1.024 MS/s (hung,
 ignored SIGTERM) and at 300 and 250 kS/s (12 s each). The RTL2832U
 enumerates at full speed (bulk IN `0x81`, 64-byte packets) but does not
 stream; every attempt also made the hub re-enumerate, which drops the
 keyboard for a second. Do not run RTL-SDR tools in this state.
+
+Measured at 480M (`scripts/hs-probe.sh`: the udev rule set aside, the
+controller rebound, everything restored on exit): the RTL-SDR enumerates
+high-speed; `rtl_sdr` at 2.4 MS/s wrote 48 000 000 bytes in 10.9 s
+including start-up; `rtl_test` over 8 s lost 5 samples per million. The
+recording (433.92 MHz, gain 30 dB) is noise at about −39 dBFS, bytes
+113–142, no clipping; whether an antenna was connected is not known. The
+tuner prints `[R82XX] PLL not locked!` on opening — common with this tuner
+and the data flows, but whether it is tuned where asked needs a spectrum
+(phase 2). Our app plays that recording on the CM4 at 5% of one core.
+
+Agreed with the user (2026-11-12): until the mainboard is replaced the app
+gets a **"reception without the keyboard" mode** — it lets the hub run at
+480M while receiving and restores 12M afterwards; control over SSH or a
+Bluetooth keyboard meanwhile.
 
 ## 6. LoRa
 

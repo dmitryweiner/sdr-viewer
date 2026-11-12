@@ -18,6 +18,9 @@ web apps: TDD, scripts, docs, license and branches apply here too).
   the release binary in a real pty: presses keys, quits, fails on a crash or
   non-zero exit, prints the CPU used. `--bin PATH` runs a given binary (on
   the uConsole: only Python 3 needed).
+- `scripts/hs-probe.sh` — on the device, as root: hub to 480M, record 10 s
+  from the RTL-SDR, restore the 12M workaround. Kills the built-in keyboard
+  for a minute; ask the user first.
 - `scripts/term-check.sh` — can this terminal show truecolor, bars, half
   blocks, Braille (phase 0, on the device).
 - `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
@@ -36,9 +39,10 @@ uploaded as the artifact `sdr-viewer-aarch64`.
 | [docs/hardware-check.md](docs/hardware-check.md) | Phase 0 checklist to run on the uConsole |
 | [docs/hardware.md](docs/hardware.md) | What phase 0 found on the device so far |
 
-Phase status: 0 — blocked on USB (the defective hub is forced to
-12 Mbit/s on purpose and the RTL-SDR delivers nothing at that speed; never
-undo the workaround or run `rtl_*` tools there without asking), findings in `docs/hardware.md`; 1 — done.
+Phase status: 0 — done except `rtl-sdr-rs` (the defective hub is forced
+to 12 Mbit/s on purpose and the RTL-SDR works only at 480M, where the
+keyboard dies; never undo the workaround or run `rtl_*` tools there
+without asking), findings in `docs/hardware.md`; 1 — done.
 The device is reached with `ssh dmw@192.168.1.246` (key login; sudo works
 without a password — install or change only what the user allowed); our files there live in `~/sdr-viewer-check/`.
 

@@ -308,6 +308,7 @@ The first useful version comes after phase 3.
 | External decoders | Allowed; the `rtl_433` bridge is an optional feature |
 | Phase order | As in section 8: the signal log (phase 3) before Meshtastic (phase 5) |
 | Meshtastic | Through `meshtasticd` (the default, no objections) |
+| Defective USB hub | The user's device needs its hub at 12 Mbit/s for the keyboard and at 480 for the RTL-SDR (`docs/hardware.md`). Until the mainboard is replaced: a "reception without the keyboard" mode that switches the hub for the time of reception; control over SSH or Bluetooth |
 | Mesh network | Haifa: region US, preset MediumFast, frequency slot 70 = 919.375 MHz, max hops 7. Goes into the default bookmarks; the app still reads the frequency from `meshtasticd` |
 | Language | UI in English; docs, README and code comments in English (the shared conventions in `~/projects/CLAUDE.md`) |
 | aarch64 build | Static musl binary built on GitHub's native arm64 runner instead of `cross` |
