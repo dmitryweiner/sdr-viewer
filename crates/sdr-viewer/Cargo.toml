@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 sdr-core = { workspace = true }
 sdr-dsp = { workspace = true }
+sdr-rtl = { workspace = true }
 sdr-tui = { workspace = true }
 ratatui = { workspace = true }
 clap = { workspace = true }

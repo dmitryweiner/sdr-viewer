@@ -1,0 +1,13 @@
+[package]
+name = "sdr-rtl"
+description = "The RTL-SDR as a Source, through the pure-Rust rtl-sdr-rs driver."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+sdr-core = { workspace = true }
+rtl-sdr-rs = "0.4"
+
+[lints]
+workspace = true

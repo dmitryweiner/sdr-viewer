@@ -10,6 +10,7 @@ use sdr_core::generator::{Generator, GeneratorConfig};
 use sdr_core::pace::{Paced, SystemClock};
 use sdr_core::units::parse_hz;
 use sdr_core::{Source, SourceInfo};
+use sdr_rtl::{RtlConfig, RtlSource};
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -33,6 +34,15 @@ pub struct Args {
     /// Start the recording over when it ends.
     #[arg(long = "loop")]
     pub looping: bool,
+
+    /// Receive from the first RTL-SDR instead of a file or the generator.
+    #[arg(long, conflicts_with_all = ["file", "format", "looping"])]
+    pub rtlsdr: bool,
+
+    /// Tuner gain in dB for --rtlsdr, set to the tuner's nearest step;
+    /// automatic without it.
+    #[arg(long, requires = "rtlsdr")]
+    pub gain: Option<f32>,
 
     /// Do not open the interface: analyse the start of the stream as fast
     /// as it reads and print the spectrum screen as text, COLSxROWS.
@@ -67,6 +77,18 @@ pub fn open_source(args: &Args, paced: bool) -> Result<Box<dyn Source>, String> 
     let sample_rate = args.rate.round() as u32;
     if sample_rate == 0 {
         return Err("the sample rate must be above zero".into());
+    }
+    if args.rtlsdr {
+        let config = RtlConfig {
+            sample_rate,
+            center_hz: args.center,
+            gain_db: args.gain,
+        };
+        // The hardware paces itself.
+        return match RtlSource::open(&config) {
+            Ok(source) => Ok(Box::new(source)),
+            Err(err) => Err(format!("cannot open the RTL-SDR: {err}")),
+        };
     }
     let source: Box<dyn Source> = match &args.file {
         None => {
@@ -170,6 +192,9 @@ mod tests {
         assert!(parse(&["--rate", "fast"]).is_err());
         assert!(parse(&["--format", "wav"]).is_err());
         assert!(parse(&["--snapshot", "big"]).is_err());
+        assert!(parse(&["--rtlsdr", "x.cu8"]).is_err());
+        assert!(parse(&["--gain", "30"]).is_err());
+        assert_eq!(args(&["--rtlsdr", "--gain", "29.7"]).gain, Some(29.7));
         assert_eq!(args(&["--snapshot", "160x45"]).snapshot, Some((160, 45)));
         assert!(open_source(&args(&["--rate", "0"]), true).is_err());
     }

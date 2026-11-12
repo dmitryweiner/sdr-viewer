@@ -14,6 +14,9 @@ web apps: TDD, scripts, docs, license and branches apply here too).
   same as CI. Must pass before any work is called done.
 - `cargo run --release [-- FILE --rate 2.4M --center 433.92M --loop]` — the
   app; without a file the demo generator runs.
+- `cargo run --release -- --rtlsdr --center 433.92M [--gain 30] [--rate 2.4M]`
+  — receive from an RTL-SDR. **On the user's uConsole** only through
+  `~/sdr-viewer-check/sdr-viewer-rx.sh ARGS` (below).
 - `cargo run --release -- [FILE …] --snapshot 160x45 [--secs 10]` — no
   terminal: analyses the start of the stream unpaced, prints the spectrum
   screen as text and the max-hold peaks. The way to look at a recording or
@@ -22,9 +25,16 @@ web apps: TDD, scripts, docs, license and branches apply here too).
   the release binary in a real pty: presses keys, quits, fails on a crash or
   non-zero exit, prints the CPU used. `--bin PATH` runs a given binary (on
   the uConsole: only Python 3 needed).
-- `scripts/hs-probe.sh` — on the device, as root: hub to 480M, record 10 s
-  from the RTL-SDR, restore the 12M workaround. Kills the built-in keyboard
-  for a minute; ask the user first.
+- `scripts/hub-speed.sh` — installed on the device as
+  `/usr/local/sbin/sdr-hub-speed` (root): `high [--while-pid PID]` puts the
+  hub at 480M for the RTL-SDR and unbinds the kernel's DVB driver, `full`
+  returns to 12M, `status`. Works through the flag `/run/sdr-viewer-high-speed`
+  that the device's udev rule checks, so a reboot always gives 12M.
+- `scripts/sdr-viewer-rx.sh ARGS` — on the device: `high` for as long as
+  `sdr-viewer --rtlsdr ARGS` runs, then back. The built-in keyboard is dead
+  meanwhile (about 6 s to switch each way); say so before running it.
+- `scripts/hs-probe.sh` — superseded by the two above; kept for its
+  `rtl_sdr`/`rtl_test` cross-check with librtlsdr.
 - `scripts/term-check.sh` — can this terminal show truecolor, bars, half
   blocks, Braille (phase 0, on the device).
 - `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
@@ -43,8 +53,8 @@ uploaded as the artifact `sdr-viewer-aarch64`.
 | [docs/hardware-check.md](docs/hardware-check.md) | Phase 0 checklist to run on the uConsole |
 | [docs/hardware.md](docs/hardware.md) | What phase 0 found on the device so far |
 
-Phase status: 1 — done; 2 — the screen works on the generator and files,
-the RTL-SDR source is still to do; 0 — done except `rtl-sdr-rs` (the defective hub is forced
+Phase status: 0, 1 — done; 2 — the screen works on the generator, files
+and the RTL-SDR; zoom, gain and frequency keys are still to do (the defective hub is forced
 to 12 Mbit/s on purpose and the RTL-SDR works only at 480M, where the
 keyboard dies; never undo the workaround or run `rtl_*` tools there
 without asking), findings in `docs/hardware.md`; 1 — done.
@@ -62,6 +72,8 @@ a crate is added in the phase that needs it):
   `frame` (`SpectrumFrame`: dBFS per bin, lowest frequency first).
 - `sdr-dsp` — `analyzer`: Hann window, FFT, power averaged over a number
   of blocks into one `SpectrumFrame`.
+- `sdr-rtl` — `RtlSource`: the RTL-SDR through `rtl-sdr-rs` (pure Rust on
+  `nusb`), queued transfers, gain to the tuner's nearest step, retuning.
 - `sdr-tui` — `app` (state and keys, no drawing), `ui` (frame of the
   interface, `render_text`), `spectrum` (the spectrum screen's state and
   drawing arithmetic: columns, scale, palette), `spectrum_ui` (drawing it).
@@ -97,6 +109,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | `./scripts/check.sh` after touching `sdr-core` | ~2 s |
 | Generator, demo scene (2 tones + noise) | ~16 ns/sample = ~4% of a P-core at 2.4 MS/s; noise is 1.7, tones 10.5 |
 | App with the generator, spectrum screen at 160×45 (smoke) | ~7% of one core, ~0.9 MB/s to the terminal |
+| Live reception on the CM4, RTL-SDR at 2.4 MS/s, spectrum at 160×45 | **31%** of one core (0.6 s of 15 in the kernel); 30 s of samples arrive in 30.0 s; opening the device takes 1.15 s |
 | The same on the CM4 | **37%** of one core with the generator, **25%** playing a `.cu8`; ~1 MB/s to the terminal. Not split yet into FFT, drawing and escape codes; the terminal emulator's own cost is not measured (the smoke has no window) |
 | Generator alone in the app, before the spectrum (phase 1) | 6%; **8% on the CM4** |
 | App playing a `.cu8` file | ~2% of one core |
