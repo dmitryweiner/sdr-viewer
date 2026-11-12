@@ -34,8 +34,11 @@ uploaded as the artifact `sdr-viewer-aarch64`.
 | [plans/IDEA.md](plans/IDEA.md) | The original idea, as first written |
 | [plans/PLAN.md](plans/PLAN.md) | The agreed plan: screens, architecture, phases, decisions |
 | [docs/hardware-check.md](docs/hardware-check.md) | Phase 0 checklist to run on the uConsole |
+| [docs/hardware.md](docs/hardware.md) | What phase 0 found on the device so far |
 
-Phase status: 0 — waiting for access to the device; 1 — done.
+Phase status: 0 — partly done, findings in `docs/hardware.md`; 1 — done.
+The device is reached with `ssh dmw@192.168.1.246` (key login, no sudo
+without the user); our files there live in `~/sdr-viewer-check/`.
 
 ## Layout
 
@@ -76,6 +79,6 @@ Measured on the dev Mac (Apple Silicon), release build:
 | App playing a `.cu8` file | ~2% of one core |
 | Release binary (macOS) | 1.3 MB |
 
-On the CM4 (Cortex-A72) expect several times more; phase 0 measures it.
-If the generator is too dear there: rotate tone phasors instead of
+On the CM4 (Cortex-A72) the app with the generator takes **70% of one
+core** (~290 ns/sample, 7× the Mac). To make the generator cheaper: rotate tone phasors instead of
 `sin_cos`, and draw noise from a precomputed Gaussian table.
