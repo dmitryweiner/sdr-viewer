@@ -14,7 +14,7 @@ use crate::app::{App, Screen, SourceState};
 pub const MIN_WIDTH: u16 = 80;
 pub const MIN_HEIGHT: u16 = 24;
 
-const KEYS: [(&str, &str); 13] = [
+const KEYS: [(&str, &str); 17] = [
     ("?", "this help"),
     ("1–8", "switch screens"),
     ("Tab, Shift+Tab", "next, previous screen"),
@@ -26,7 +26,11 @@ const KEYS: [(&str, &str); 13] = [
     ("g, G, a", "spectrum: gain up, down, automatic"),
     ("Space", "spectrum: pause"),
     ("m", "spectrum: reset max hold"),
-    ("Esc", "close help, put the cursor away, quit"),
+    ("↑, ↓", "log: select an event (PgUp, PgDn, Home, End)"),
+    ("+, -", "log: raise, lower the level that hides weak events"),
+    ("s", "log: sort by time, level, duration, frequency"),
+    ("Enter", "log: tune to the selected event"),
+    ("Esc", "close help, put the cursor or selection away, quit"),
     ("q", "quit"),
 ];
 
@@ -43,10 +47,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
     ])
     .areas(area);
     frame.render_widget(tab_bar(app.screen), tabs);
-    if app.screen == Screen::Spectrum {
-        crate::spectrum_ui::draw(frame, &app.spectrum, app.input.as_deref(), body);
-    } else {
-        frame.render_widget(placeholder(app.screen), body);
+    match app.screen {
+        Screen::Spectrum => {
+            crate::spectrum_ui::draw(frame, &app.spectrum, app.input.as_deref(), body);
+        }
+        Screen::Log => crate::log_ui::draw(frame, &app.log, body),
+        screen => frame.render_widget(placeholder(screen), body),
     }
     draw_status(frame, app, status);
     if app.help {
@@ -325,6 +331,77 @@ mod tests {
         assert!(luma(carrier, y) > luma(carrier + 6, y) + 150);
         // The noise itself stays dark, so weak signals stand out.
         assert!(luma(carrier - 6, y) < 100, "{}", luma(carrier - 6, y));
+    }
+
+    fn app_with_events() -> App {
+        use crate::log::tests::event;
+        let mut app = app();
+        app.screen = Screen::Log;
+        app.log.on_events([
+            event(2_040, 307, 1_200.0, 46.2),
+            event(4_080, 45, 425.0, 13.4),
+            event(4_130, 10, 602.0, 8.7),
+            event(4_180, 41, 350.0, 11.9),
+            event(64_500, 2_300, 924.5, 21.0),
+        ]);
+        app.log.set_open(vec![event(0, 3_725_000, 500.0, 40.3)]);
+        app
+    }
+
+    #[test]
+    fn the_log_lists_events_newest_first_under_their_counts() {
+        insta::assert_snapshot!(render(&app_with_events(), 80, 24).backend());
+    }
+
+    #[test]
+    fn a_held_log_marks_the_selected_row_and_says_how_to_let_go() {
+        let mut app = app_with_events();
+        app.log.move_selection(1);
+        app.log.move_selection(1);
+        let terminal = render(&app, 100, 24);
+        let buffer = terminal.backend().buffer();
+        let reversed = |y: u16| buffer[(10, y)].modifier.contains(Modifier::REVERSED);
+        // Tabs, counts, column names, then the rows.
+        assert!(!reversed(3) && reversed(4) && !reversed(5));
+        let text = render_text(&app, 100, 24);
+        assert!(text.contains("held, 0 new — Esc follows again"), "{text}");
+    }
+
+    #[test]
+    fn a_long_log_scrolls_to_keep_the_selection_in_sight() {
+        use crate::log::tests::event;
+        let mut app = app();
+        app.screen = Screen::Log;
+        app.log
+            .on_events((0..100).map(|i| event(i * 1000, 50, 100.0, 20.0)));
+        app.log.move_selection(1);
+        let text = render_text(&app, 80, 24);
+        // 20 rows fit: the newest, 1:39, down to 1:20.
+        assert!(
+            text.contains("1:39.00") && text.contains("1:20.00"),
+            "{text}"
+        );
+        assert!(!text.contains("1:19.00"), "{text}");
+        app.log.move_selection(25);
+        let text = render_text(&app, 80, 24);
+        assert!(
+            text.contains("1:14.00") && text.contains("1:33.00"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("1:34.00") && !text.contains("1:13.00"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn an_empty_log_says_what_it_waits_for() {
+        let mut app = app();
+        app.screen = Screen::Log;
+        app.log.raise_filter();
+        let text = render_text(&app, 80, 24);
+        assert!(text.contains("No events above +11 dB yet."), "{text}");
+        assert!(text.contains("0 events · 0 hidden below +11 dB"), "{text}");
     }
 
     #[test]

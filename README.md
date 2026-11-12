@@ -42,9 +42,18 @@ Keys: `1`–`8` switch screens, `Tab` / `Shift+Tab` walk them, `?` help,
 | `Space` | pause |
 | `m` | reset max hold |
 
+On the signal log (`5`) — one row per signal the detector found: when it
+began, how long it lasted, where, how wide, how strong:
+
+| Key | What |
+|---|---|
+| `↑` `↓` `PgUp` `PgDn` `Home` `End` | select an event; the list holds still until `Esc` |
+| `+` `-` | raise, lower the level above the noise below which events are hidden (10 dB at the start); hidden events are kept |
+| `s` | sort by time, level, duration, frequency |
+| `Enter` | tune to the selected event and show the spectrum |
+
 Without a terminal — the screen as text, the strongest signals and the
-detected events of the
-first seconds of a recording:
+detected events of the first seconds of a recording:
 
 ```sh
 cargo run --release -- capture.cu8 --rate 2.4M --center 433.92M --snapshot 160x45 --secs 10

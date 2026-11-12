@@ -62,6 +62,16 @@ fn main() -> ExitCode {
                 match update {
                     Update::Status(status) => app.status = status,
                     Update::Frame(frame) => app.spectrum.on_frame(frame),
+                    // Events come many times a second; they are drawn
+                    // with the next frame or status, soon enough.
+                    Update::Events(events) => {
+                        app.log.on_events(events);
+                        continue;
+                    }
+                    Update::OpenEvents(open) => {
+                        app.log.set_open(open);
+                        continue;
+                    }
                     Update::Source(info) => app.source = info,
                     Update::Notice(notice) => app.notice = Some(notice),
                 }
