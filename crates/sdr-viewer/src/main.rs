@@ -1,6 +1,8 @@
 //! SDR Viewer: watches the air and shows what a person would miss.
 
 mod cli;
+mod fragment;
+mod jobs;
 mod keep;
 mod pipeline;
 mod reader;
@@ -74,29 +76,23 @@ fn main() -> ExitCode {
         }
         None => (None, None),
     };
-    // Samples are saved by a thread of their own; only a receiver's
-    // stream runs by the wall clock.
-    let (cuts_tx, saver) = match cli::iq_dir(&args, |name| std::env::var(name).ok()) {
-        Some(dir) => {
-            let (cuts_tx, cuts_rx) = channel();
-            let updates = updates_tx.clone();
-            let clock = args.rtlsdr.then_some(started);
-            let saver = std::thread::spawn(move || {
-                save::run(cuts_rx, &dir, clock, |told| {
-                    let _ = updates.send(match told {
-                        Ok(done) => Update::Done(done),
-                        Err(notice) => Update::Notice(notice),
-                    });
-                });
+    // Samples are saved and pictured by a thread of their own; only a
+    // receiver's stream runs by the wall clock.
+    let (jobs_tx, jobs_rx) = channel();
+    let worker = {
+        let dir = cli::iq_dir(&args, |name| std::env::var(name).ok());
+        let updates = updates_tx.clone();
+        let clock = args.rtlsdr.then_some(started);
+        std::thread::spawn(move || {
+            jobs::run(jobs_rx, dir.as_deref(), clock, |update| {
+                let _ = updates.send(update);
             });
-            (Some(cuts_tx), Some(saver))
-        }
-        None => (None, None),
+        })
     };
     let sinks = Sinks {
         events: store_tx,
         ring: IqRing::for_seconds(args.iq_buffer, source.info().sample_rate),
-        cuts: cuts_tx,
+        jobs: Some(jobs_tx),
     };
     let reader = {
         let stop = Arc::clone(&stop);
@@ -126,6 +122,7 @@ fn main() -> ExitCode {
                     Update::Source(info) => app.source = info,
                     Update::Notice(notice) => app.notice = Some(notice),
                     Update::Done(done) => app.done = Some(done),
+                    Update::Picture(event, fragment) => app.on_picture(&event, fragment),
                 }
                 dirty = true;
             }
@@ -160,9 +157,7 @@ fn main() -> ExitCode {
         let _ = writer.join();
     }
     // And a recording asked for a moment ago be written to its end.
-    if let Some(saver) = saver {
-        let _ = saver.join();
-    }
+    let _ = worker.join();
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {

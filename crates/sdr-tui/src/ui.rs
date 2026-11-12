@@ -52,7 +52,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::Spectrum => {
             crate::spectrum_ui::draw(frame, &app.spectrum, app.input.as_deref(), body);
         }
-        Screen::Log => crate::log_ui::draw(frame, &app.log, body),
+        Screen::Log => crate::log_ui::draw(frame, &app.log, app.picture(), body),
         screen => frame.render_widget(placeholder(screen), body),
     }
     draw_status(frame, app, status);
@@ -424,6 +424,62 @@ mod tests {
             event(2_040, 307, 1_200.0, 46.2),
         )]);
         insta::assert_snapshot!(render(&app, 80, 24).backend());
+    }
+
+    /// The log with its newest row selected and that event's picture: a
+    /// burst in the middle of 80 ms, low in a band of 4 kHz.
+    fn app_with_a_picture() -> App {
+        use crate::fragment::tests::fragment;
+        use crate::log::tests::event;
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+        let mut app = app();
+        app.screen = Screen::Log;
+        app.log
+            .on_events([event(500, 50, 100.0, 20.0), event(1_020, 40, 102.0, 48.0)]);
+        app.on_key(KeyEvent::from(KeyCode::Down));
+        app.on_picture(&event(1_020, 40, 102.0, 48.0), Some(fragment()));
+        app
+    }
+
+    #[test]
+    fn the_selected_event_has_its_picture_under_the_list() {
+        insta::assert_snapshot!(render(&app_with_a_picture(), 80, 24).backend());
+    }
+
+    #[test]
+    fn the_picture_is_bright_where_and_when_the_event_was() {
+        let terminal = render(&app_with_a_picture(), 80, 24);
+        let buffer = terminal.backend().buffer();
+        let luma = |color| match color {
+            Color::Rgb(r, g, b) => u32::from(r) + u32::from(g) + u32::from(b),
+            other => panic!("{other:?}"),
+        };
+        // 68 columns after the gutter of 12, and 6 rows from row 16 — 12
+        // pixels up the band. The burst fills the middle half of the
+        // time and the third quarter of the band from the top: pixels 6
+        // to 8, the fourth row and the upper half of the fifth.
+        let (middle, early) = (12 + 34, 12 + 5);
+        assert!(luma(buffer[(middle, 19)].fg) > 300);
+        assert!(luma(buffer[(middle, 19)].bg) > 300);
+        assert!(luma(buffer[(middle, 20)].fg) > 300);
+        assert!(luma(buffer[(middle, 20)].bg) < 100);
+        assert!(luma(buffer[(middle, 16)].fg) < 100);
+        assert!(luma(buffer[(early, 19)].fg) < 100);
+        // The event's start and end are marked under it.
+        assert_eq!(buffer[(12 + 17, 22)].symbol(), "▲");
+        assert_eq!(buffer[(12 + 51, 22)].symbol(), "▲");
+    }
+
+    #[test]
+    fn a_picture_that_is_gone_or_on_its_way_says_so() {
+        use crate::log::tests::event;
+        let mut app = app_with_a_picture();
+        app.on_picture(&event(1_020, 40, 102.0, 48.0), None);
+        let text = render_text(&app, 80, 24);
+        assert!(
+            text.contains("The samples of this event are no longer held."),
+            "{text}"
+        );
     }
 
     #[test]

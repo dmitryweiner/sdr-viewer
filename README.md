@@ -51,11 +51,17 @@ began, how long it lasted, where, how wide, how strong:
 
 | Key | What |
 |---|---|
-| `↑` `↓` `PgUp` `PgDn` `Home` `End` | select an event; the list holds still until `Esc` |
+| `↑` `↓` `PgUp` `PgDn` `Home` `End` | select an event; the list holds still until `Esc`, and the event's picture appears under it |
 | `+` `-` | raise, lower the level above the noise below which events are hidden (10 dB at the start); hidden events are kept |
 | `s` | sort by time, level, duration, frequency |
 | `Enter` | tune to the selected event and show the spectrum |
 | `r` | save the selected event's IQ samples |
+
+The picture of the selected event is a small spectrogram made of its
+samples: time runs across, from 50 ms before the event to 50 ms after it
+(of a long one, the first 3 s), frequency runs up, four widths of the
+event and at least 40 kHz; `▲` marks where the event begins and ends. It
+needs the samples to be still held (see below), like saving.
 
 ### Saving an event's samples
 

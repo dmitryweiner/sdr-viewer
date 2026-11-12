@@ -1,8 +1,6 @@
-//! Saving an event's samples: a thread of its own writes the files, so
-//! reception never waits for the disk.
+//! Saving an event's samples as a SigMF recording.
 
 use std::path::Path;
-use std::sync::mpsc::Receiver;
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
@@ -11,22 +9,11 @@ use sdr_store::sigmf::{self, Mark, Recording};
 
 use crate::reader::Cut;
 
-/// Writes every cut that comes as a SigMF recording in `dir` and tells
-/// how it went: `Ok` with what was saved, `Err` with what went wrong.
-/// `started` is when the stream began, for a source that receives as the
-/// clock runs; without it the files carry stream time.
-pub fn run(
-    cuts: Receiver<Cut>,
-    dir: &Path,
-    started: Option<SystemTime>,
-    mut tell: impl FnMut(Result<String, String>),
-) {
-    for cut in cuts {
-        tell(save(&cut, dir, started));
-    }
-}
-
-fn save(cut: &Cut, dir: &Path, started: Option<SystemTime>) -> Result<String, String> {
+/// Writes `cut` as a SigMF recording in `dir` and says how it went: `Ok`
+/// with what was saved, `Err` with what went wrong. `started` is when the
+/// stream began, for a source that receives as the clock runs; without it
+/// the files carry stream time.
+pub fn save(cut: &Cut, dir: &Path, started: Option<SystemTime>) -> Result<String, String> {
     let rate = f64::from(cut.source.sample_rate);
     let sample = |time: Duration| (time.as_secs_f64() * rate).round() as u64;
     let event = &cut.event;
@@ -81,7 +68,6 @@ mod tests {
     use sdr_core::SourceInfo;
     use sdr_detect::Event;
     use std::path::PathBuf;
-    use std::sync::mpsc::channel;
     use std::time::UNIX_EPOCH;
 
     /// 2026-11-12 12:00:00 UTC.
@@ -135,14 +121,7 @@ mod tests {
         started: Option<SystemTime>,
         cuts: Vec<Cut>,
     ) -> Vec<Result<String, String>> {
-        let (tx, rx) = channel();
-        for cut in cuts {
-            tx.send(cut).unwrap();
-        }
-        drop(tx);
-        let mut told = Vec::new();
-        run(rx, dir, started, |result| told.push(result));
-        told
+        cuts.iter().map(|cut| save(cut, dir, started)).collect()
     }
 
     #[test]
@@ -196,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failure_is_told_and_the_next_cut_is_still_tried() {
+    fn a_failure_says_where_and_why() {
         let told = told(Path::new("/dev/null/iq"), None, vec![cut(), cut()]);
         assert_eq!(told.len(), 2);
         let message = told[0].as_ref().unwrap_err();
