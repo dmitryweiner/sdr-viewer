@@ -97,6 +97,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | `./scripts/check.sh` after touching `sdr-core` | ~2 s |
 | Generator, demo scene (2 tones + noise) | ~16 ns/sample = ~4% of a P-core at 2.4 MS/s; noise is 1.7, tones 10.5 |
 | App with the generator, spectrum screen at 160×45 (smoke) | ~7% of one core, ~0.9 MB/s to the terminal |
+| The same on the CM4 | **37%** of one core with the generator, **25%** playing a `.cu8`; ~1 MB/s to the terminal. Not split yet into FFT, drawing and escape codes; the terminal emulator's own cost is not measured (the smoke has no window) |
 | Generator alone in the app, before the spectrum (phase 1) | 6%; **8% on the CM4** |
 | App playing a `.cu8` file | ~2% of one core |
 | Release binary (macOS) | 1.3 MB |
