@@ -36,8 +36,9 @@ uploaded as the artifact `sdr-viewer-aarch64`.
 | [docs/hardware-check.md](docs/hardware-check.md) | Phase 0 checklist to run on the uConsole |
 | [docs/hardware.md](docs/hardware.md) | What phase 0 found on the device so far |
 
-Phase status: 0 — blocked on USB (the hub runs at 12 Mbit/s, the RTL-SDR
-delivers nothing), findings in `docs/hardware.md`; 1 — done.
+Phase status: 0 — blocked on USB (the defective hub is forced to
+12 Mbit/s on purpose and the RTL-SDR delivers nothing at that speed; never
+undo the workaround or run `rtl_*` tools there without asking), findings in `docs/hardware.md`; 1 — done.
 The device is reached with `ssh dmw@192.168.1.246` (key login; sudo works
 without a password — install or change only what the user allowed); our files there live in `~/sdr-viewer-check/`.
 

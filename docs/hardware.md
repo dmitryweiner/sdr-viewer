@@ -5,8 +5,9 @@ What was found on the user's uConsole on 2026-11-12, following
 was installed or changed on the device apart from `~/sdr-viewer-check/`
 (our binary and two scripts).
 
-Status: **blocked on USB** (section 5): the RTL-SDR delivers no samples
-because the internal hub falls back to 12 Mbit/s after boot. Meshtastic and
+Status: **blocked on USB** (section 5): the internal hub is forced to
+12 Mbit/s to work around a defect in it, and the RTL-SDR delivers no
+samples at that speed. Meshtastic and
 GPS (6, 7) are not set up yet.
 
 Installed on the device since, with the user's permission: `rtl-sdr`
@@ -80,43 +81,31 @@ switch them without root.
   it on exit. Our source must do the same.
 - Whether `rtl-sdr-rs` works with it: not checked yet.
 
-### The hub falls back to 12 Mbit/s — no samples arrive
+### The hub is forced to 12 Mbit/s on purpose — and the RTL-SDR needs 480
 
-`rtl_sdr -f 433.92M -s 2400000 -n 12000000` wrote **0 bytes** in two
-minutes and ignored SIGTERM; it had to be killed. During the attempt the
-whole hub disconnected and came back twice (the keyboard is on the same
-hub and drops with it).
+This device's mainboard hub (Genesys `05e3:0608`) has a defect: bit 6 of
+every byte passing through its Transaction Translator reads as 0, which
+corrupts all full/low-speed traffic (keyboard, trackball) whenever the
+hub's uplink runs at high speed. The user's workaround
+([gist](https://gist.github.com/dmitryweiner/1023d39419e7ebb90be3388e3d979f67)):
+`/etc/udev/rules.d/99-dwc2-force-fs.rules` runs
+`/usr/local/sbin/dwc2-force-fs.py`, which sets `HCFG.FSLSSUPP` in the dwc2
+controller and resets the port whenever the hub appears at 480M. That is
+the "disconnect, power cycle, back at full speed" seen in `dmesg` at boot
+and after every rebind. The proper fix is a mainboard replacement.
 
-`lsusb -t`: the root port is 480M; the Genesys hub `05e3:0608` under it,
-and everything behind it, run at 12M. 2.4 MS/s of 8-bit IQ is 38 Mbit/s.
+So on this device, until the mainboard is replaced:
 
-`dmesg` shows it is not so from power-on:
+| Hub uplink | Keyboard, trackball | RTL-SDR |
+|---|---|---|
+| 12M (the workaround, the normal state) | work | **no samples at all** |
+| 480M | garbage descriptors, dead | should work (high-speed traffic bypasses the TT) — not tested |
 
-| Time | Event |
-|---|---|
-| 3.0 s | hub `1-1` enumerates **high-speed**; the RTL-SDR and the second hub too |
-| 7.3–8.2 s | the RTL-SDR, the keyboard (still its bootloader `1eaf:0003`) and the second hub disconnect |
-| 13.2 s | hub `1-1` disconnects; `usb1-port1: attempt power cycle` |
-| 16.2 s | hub `1-1` is back at **full speed**: "not running at top speed" |
-| 145.8 s | the RTL-SDR appears (full speed) |
-
-It is not a boot script. Rebinding the controller on a running system
-(`echo fe980000.usb > /sys/bus/platform/drivers/dwc2/unbind`, then `bind`)
-repeats it every time: the hub enumerates high-speed, **no device behind it
-appears for 5 s**, the hub disconnects, the port is power-cycled, and the
-hub returns at full speed with everything behind it. The same happens with
-the SDR's power off (GPIO 7 low), so the RTL-SDR is not the cause: the
-high-speed link to the hub `05e3:0608` itself does not hold.
-
-At full speed no sample rate works: `rtl_sdr` hung with 0 bytes at 2.4 and
-1.024 MS/s, and returned 0 bytes at 250 kS/s. No under-voltage
-(`vcgencmd get_throttled` = `0x0`). USB is set up by
-`dtoverlay=dwc2,dr_mode=host` in `config.txt` (image 2025-12-30).
-
-Not known: whether the cause is mechanical (this is the board's first
-power-up in this device — seating of the AIO board and its connector) or
-the `dwc2` driver, and whether the hub held high speed before the AIO
-board was fitted.
+Measured at 12M: `rtl_sdr` wrote 0 bytes at 2.4 MS/s and 1.024 MS/s (hung,
+ignored SIGTERM) and at 300 and 250 kS/s (12 s each). The RTL2832U
+enumerates at full speed (bulk IN `0x81`, 64-byte packets) but does not
+stream; every attempt also made the hub re-enumerate, which drops the
+keyboard for a second. Do not run RTL-SDR tools in this state.
 
 ## 6. LoRa
 
