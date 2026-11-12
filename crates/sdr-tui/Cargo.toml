@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 sdr-core = { workspace = true }
+sdr-detect = { workspace = true }
 ratatui = { workspace = true }
 
 [dev-dependencies]

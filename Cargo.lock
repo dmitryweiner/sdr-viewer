@@ -1570,6 +1570,7 @@ dependencies = [
  "insta",
  "ratatui",
  "sdr-core",
+ "sdr-detect",
  "sdr-dsp",
 ]
 

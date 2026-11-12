@@ -3,11 +3,12 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
 
 use sdr_core::rate::RateMeter;
 use sdr_core::{Iq, Source, SourceInfo, SpectrumFrame};
+use sdr_detect::Event;
 use sdr_tui::{Command, SourceState, SourceStatus};
 
 use crate::pipeline::{Output, Pipeline};
@@ -18,11 +19,19 @@ const CHUNK: usize = 16 * 1024;
 /// How often the measured rate is reported.
 const REPORT_EVERY: Duration = Duration::from_millis(500);
 
+/// Ended events kept for an interface that is not taking them; beyond
+/// this the oldest are lost.
+const MAX_WAITING_EVENTS: usize = 10_000;
+
 /// What the reader tells the interface.
 #[derive(Debug, PartialEq)]
 pub enum Update {
     Status(SourceStatus),
     Frame(SpectrumFrame),
+    /// Events that have ended, in the order they ended.
+    Events(Vec<Event>),
+    /// The events going on now, as far as they have got.
+    OpenEvents(Vec<Event>),
     /// The source after a command changed it.
     Source(SourceInfo),
     /// A command the source refused, in its words.
@@ -32,7 +41,8 @@ pub enum Update {
 /// Reads until the source ends or fails, or `stop` is set, sending spectrum
 /// frames and the source's status to `updates`, and carrying out `commands`
 /// between reads. Frames and status the interface has no room for are
-/// dropped: reception never waits for drawing.
+/// dropped: reception never waits for drawing. Ended events wait for room
+/// instead, and the last of them go out before the end is reported.
 pub fn run(
     mut source: impl Source,
     updates: SyncSender<Update>,
@@ -43,9 +53,8 @@ pub fn run(
     let mut meter = RateMeter::new(REPORT_EVERY);
     let mut buf = vec![Iq::new(0.0, 0.0); CHUNK];
     let mut pipeline = Pipeline::new(source.info().sample_rate);
-    let report = |state, rate| {
-        let _ = updates.try_send(Update::Status(SourceStatus { rate, state }));
-    };
+    let mut events: Vec<Event> = Vec::new();
+    let status = |state, rate| Update::Status(SourceStatus { rate, state });
     while !stop.load(Ordering::Relaxed) {
         for command in commands.try_iter() {
             let done = match command {
@@ -60,7 +69,12 @@ pub fn run(
         }
         match source.read(&mut buf) {
             Ok(0) => {
-                report(SourceState::Ended, 0.0);
+                if !events.is_empty() {
+                    let _ = updates.send(Update::Events(events));
+                }
+                let _ = updates.send(Update::OpenEvents(pipeline.open_events()));
+                // The end must not get lost either: wait for room.
+                let _ = updates.send(status(SourceState::Ended, 0.0));
                 return;
             }
             Ok(n) => {
@@ -68,16 +82,25 @@ pub fn run(
                     Output::Frame(frame) => {
                         let _ = updates.try_send(Update::Frame(frame));
                     }
-                    // The detector already runs; the signal log that shows
-                    // its events is the next step of phase 3.
-                    Output::Event(_) => {}
+                    Output::Event(event) => events.push(event),
                 });
+                if !events.is_empty() {
+                    let batch = Update::Events(std::mem::take(&mut events));
+                    if let Err(TrySendError::Full(Update::Events(waiting))) =
+                        updates.try_send(batch)
+                    {
+                        events = waiting;
+                        let extra = events.len().saturating_sub(MAX_WAITING_EVENTS);
+                        events.drain(..extra);
+                    }
+                }
                 if meter.record(started.elapsed(), n as u64) {
-                    report(SourceState::Running, meter.rate());
+                    let _ = updates.try_send(Update::OpenEvents(pipeline.open_events()));
+                    let _ = updates.try_send(status(SourceState::Running, meter.rate()));
                 }
             }
             Err(err) => {
-                report(SourceState::Failed(err.to_string()), 0.0);
+                let _ = updates.send(status(SourceState::Failed(err.to_string()), 0.0));
                 return;
             }
         }
@@ -171,12 +194,89 @@ mod tests {
             [
                 Update::Notice("not supported: a recording cannot be retuned".into()),
                 Update::Notice("not supported: this source has no gain".into()),
+                Update::OpenEvents(Vec::new()),
                 Update::Status(SourceStatus {
                     rate: 0.0,
                     state: SourceState::Ended
                 }),
             ]
         );
+    }
+
+    /// 1.4 s of the demo scene: its burst fills the first 0.3 s.
+    fn demo() -> Brief {
+        Brief(Generator::new(GeneratorConfig::demo()), 200)
+    }
+
+    #[test]
+    fn sends_ended_events_and_at_the_end_those_still_on() {
+        let got = updates(demo());
+        let ended: Vec<&Event> = got
+            .iter()
+            .filter_map(|update| match update {
+                Update::Events(events) => Some(events),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(ended.len(), 1, "{ended:?}");
+        assert!((ended[0].peak_hz - 434.2e6).abs() < 1_200.0);
+        match &got[got.len() - 2..] {
+            [Update::OpenEvents(open), Update::Status(status)] => {
+                assert_eq!(open.len(), 1);
+                assert!((open[0].peak_hz - 433.5e6).abs() < 1_200.0);
+                assert_eq!(status.state, SourceState::Ended);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Tells when the stream has been read to its end.
+    struct Announced(Brief, std::sync::mpsc::Sender<()>);
+
+    impl Source for Announced {
+        fn info(&self) -> SourceInfo {
+            self.0.info()
+        }
+        fn read(&mut self, buf: &mut [Iq]) -> Result<usize, SourceError> {
+            let n = self.0.read(buf)?;
+            if n == 0 {
+                let _ = self.1.send(());
+            }
+            Ok(n)
+        }
+        fn tune(&mut self, center_hz: f64) -> Result<(), SourceError> {
+            self.0.tune(center_hz)
+        }
+    }
+
+    #[test]
+    fn events_and_the_end_wait_for_an_interface_that_has_no_room() {
+        // Room for one update, and nobody takes any until the stream is
+        // over: the first frame fills it, the rest are dropped; the event
+        // and the end are not.
+        let (tx, rx) = sync_channel(1);
+        let (_command_tx, command_rx) = channel();
+        let (over_tx, over_rx) = channel();
+        let source = Announced(demo(), over_tx);
+        let reader = std::thread::spawn(move || {
+            run(source, tx, command_rx, Arc::new(AtomicBool::new(false)));
+        });
+        over_rx.recv().unwrap();
+        let got: Vec<Update> = rx.iter().collect();
+        reader.join().unwrap();
+        match &got[..] {
+            [
+                Update::Frame(_),
+                Update::Events(ended),
+                Update::OpenEvents(open),
+                Update::Status(status),
+            ] => {
+                assert_eq!((ended.len(), open.len()), (1, 1));
+                assert_eq!(status.state, SourceState::Ended);
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     fn last_status(source: impl Source) -> SourceStatus {

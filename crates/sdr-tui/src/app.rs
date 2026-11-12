@@ -4,6 +4,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use sdr_core::units::parse_hz;
 use sdr_core::{GainChange, SourceInfo};
 
+use crate::log::LogView;
 use crate::spectrum::SpectrumView;
 
 /// The screens of the plan (section 5), in the order of their digit keys.
@@ -121,6 +122,7 @@ pub struct App {
     pub source: SourceInfo,
     pub status: SourceStatus,
     pub spectrum: SpectrumView,
+    pub log: LogView,
     /// Asked of the source and not yet sent; the main loop drains it.
     pub commands: Vec<Command>,
     /// The frequency being typed after `f`.
@@ -132,6 +134,9 @@ pub struct App {
 /// Cursor steps as shares of the width: fine, and coarse with Shift.
 const CURSOR_STEP: f64 = 0.005;
 const CURSOR_LEAP: f64 = 0.05;
+
+/// Rows a page key moves the log's selection.
+const LOG_PAGE: isize = 10;
 
 impl App {
     pub fn new(source: SourceInfo) -> Self {
@@ -145,6 +150,7 @@ impl App {
                 state: SourceState::Running,
             },
             spectrum: SpectrumView::default(),
+            log: LogView::default(),
             commands: Vec::new(),
             input: None,
             notice: None,
@@ -167,6 +173,9 @@ impl App {
         match key.code {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Esc if self.help => self.help = false,
+            KeyCode::Esc if self.screen == Screen::Log && self.log.selected().is_some() => {
+                self.log.release();
+            }
             KeyCode::Esc if self.spectrum.cursor.is_some() => self.spectrum.cursor = None,
             KeyCode::Esc => self.quit = true,
             KeyCode::Char('?') => self.help = !self.help,
@@ -176,6 +185,28 @@ impl App {
                 self.screen = Screen::ALL[usize::from(c as u8 - b'1')];
             }
             _ if self.screen == Screen::Spectrum => self.on_spectrum_key(key),
+            _ if self.screen == Screen::Log => self.on_log_key(key),
+            _ => {}
+        }
+    }
+
+    fn on_log_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Up => self.log.move_selection(-1),
+            KeyCode::Down => self.log.move_selection(1),
+            KeyCode::PageUp => self.log.move_selection(-LOG_PAGE),
+            KeyCode::PageDown => self.log.move_selection(LOG_PAGE),
+            KeyCode::Home => self.log.move_selection(isize::MIN),
+            KeyCode::End => self.log.move_selection(isize::MAX),
+            KeyCode::Char('+' | '=') => self.log.raise_filter(),
+            KeyCode::Char('-') => self.log.lower_filter(),
+            KeyCode::Char('s') => self.log.next_sort(),
+            KeyCode::Enter => {
+                if let Some(center_hz) = self.log.selected_event().map(|event| event.center_hz()) {
+                    self.tune(center_hz);
+                    self.screen = Screen::Spectrum;
+                }
+            }
             _ => {}
         }
     }
@@ -265,6 +296,68 @@ mod tests {
 
     fn press(app: &mut App, code: KeyCode) {
         app.on_key(KeyEvent::from(code));
+    }
+
+    fn app_on_the_log() -> App {
+        use crate::log::tests::event;
+        let mut app = app();
+        app.screen = Screen::Log;
+        app.log.on_events([
+            event(100, 50, 100.0, 20.0),
+            event(200, 10, 300.0, 9.0),
+            event(300, 400, 50.0, 30.0),
+        ]);
+        app
+    }
+
+    #[test]
+    fn log_keys_select_filter_and_sort() {
+        let mut app = app_on_the_log();
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.log.selected(), Some(0));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.log.selected(), Some(1));
+        press(&mut app, KeyCode::Home);
+        assert_eq!(app.log.selected(), Some(0));
+        press(&mut app, KeyCode::End);
+        assert_eq!(app.log.selected(), Some(1));
+        press(&mut app, KeyCode::PageUp);
+        assert_eq!(app.log.selected(), Some(0));
+        press(&mut app, KeyCode::Char('-'));
+        assert_eq!(app.log.min_above_db(), 9.0);
+        assert_eq!(app.log.rows().len(), 3);
+        press(&mut app, KeyCode::Char('+'));
+        press(&mut app, KeyCode::Char('='));
+        assert_eq!(app.log.min_above_db(), 11.0);
+        press(&mut app, KeyCode::Char('s'));
+        assert_eq!(app.log.sort(), crate::log::Sort::Level);
+        // The spectrum's zoom did not move.
+        assert_eq!(app.spectrum.magnification(), 1);
+    }
+
+    #[test]
+    fn escape_on_the_log_lets_the_list_go_before_it_quits() {
+        let mut app = app_on_the_log();
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.log.selected(), None);
+        assert!(!app.quit);
+        press(&mut app, KeyCode::Esc);
+        assert!(app.quit);
+    }
+
+    #[test]
+    fn enter_on_a_log_row_tunes_to_the_event_and_shows_the_spectrum() {
+        let mut app = app_on_the_log();
+        press(&mut app, KeyCode::Enter);
+        assert!(app.commands.is_empty());
+        assert_eq!(app.screen, Screen::Log);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.commands, [Command::Tune(433.1e6)]);
+        assert_eq!(app.screen, Screen::Spectrum);
     }
 
     #[test]

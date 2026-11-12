@@ -17,7 +17,7 @@ Phases of the plan (its section 14 has the detail):
 | 0 Hardware check | done — `docs/hardware.md` |
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
-| 3 Detector and log | **in progress**: the noise floor and the detector run and show in `--snapshot`; next SQLite and the log screen |
+| 3 Detector and log | **in progress**: the noise floor, the detector and the log screen (events in memory) work; next SQLite, then the waterfall fragment of an event and the floor line |
 | 4–8 | not started |
 
 ## Commands
@@ -50,7 +50,9 @@ request gets no run: open a draft one to get a binary.
   the release binary in a real pty: presses keys, quits with `q`, fails on
   a crash or non-zero exit, prints the CPU used and the bytes sent to the
   terminal. Enter is `\r` (`--keys $'f100M\r'`). `--bin PATH` runs a given
-  binary; on the uConsole it needs only Python 3.
+  binary; on the uConsole it needs only Python 3. The default keys end
+  on a placeholder screen: to measure a screen pass `--keys 1` (spectrum)
+  or `--keys 5` (log), and compare builds side by side in one sitting.
 - `scripts/term-check.sh` — can this terminal show truecolor, bars, half
   blocks, Braille.
 - `scripts/hub-speed.sh` — for the user's device, installed there as
@@ -122,7 +124,9 @@ a crate is added in the phase that needs it):
 - `sdr-tui` — `app` (state, keys and the `Command`s they ask of the
   source; no drawing), `ui` (frame of the interface, `render_text`),
   `spectrum` (the spectrum screen's state and arithmetic: columns, scale,
-  zoom, palette), `spectrum_ui` (drawing it). Snapshot tests in
+  zoom, palette), `spectrum_ui` (drawing it), `log` (the signal log's
+  state: the last 10 000 events, the level filter, the order, a held
+  list while a row is selected), `log_ui`. Snapshot tests in
   `src/snapshots/`.
 - `sdr-viewer` — the binary: `cli` (arguments → source), `pipeline`
   (samples → detector frames at 100 a second → events, and their averages
@@ -144,6 +148,10 @@ a crate is added in the phase that needs it):
   never decibels. Frames run from the lowest frequency up, the centre is
   bin `len / 2`.
 - The detector sees every frame; only the screen's frames may be dropped.
+  Ended events are never dropped by `try_send`: the reader keeps them
+  until the interface has room. The end of the stream waits for room too.
+- The main loop does not redraw for events alone: they show with the next
+  frame or status (10 a second).
   An event's times are stream time (`SpectrumFrame::time`), not the clock.
 - The palette's brightness only grows with the level (a test holds it).
 - The interface never touches the source: keys become `Command`s, the
@@ -162,10 +170,10 @@ Measured on the dev Mac (Apple Silicon), release build:
 |---|---|
 | `./scripts/check.sh` after touching `sdr-core` | ~2 s |
 | Generator, demo scene (2 tones + noise) | ~16 ns/sample = ~4% of a P-core at 2.4 MS/s; noise is 1.7, tones 10.5 |
-| App with the generator, spectrum screen at 160×45 (smoke) | ~4% of one core with the detector (3% without), ~1 MB/s to the terminal |
+| App with the generator, spectrum screen at 160×45 (`smoke.py --keys 1`) | 7–13% of one core depending on the day; the detector adds nothing measurable (three builds side by side: 13, 13, 13%). ~0.8 MB/s to the terminal |
 | Live reception on the CM4, RTL-SDR at 2.4 MS/s, spectrum at 160×45 | **31%** of one core (0.6 s of 15 in the kernel); 30 s of samples arrive in 30.0 s; opening the device takes 1.15 s |
-| App with the detector on the CM4, 160×45 (smoke, PR #10) | **21%** of one core playing a `.cu8`, **26%** with the generator; 0.12 MB/s to the terminal. Lower than the row below, measured before PR #9: the detector is not what costs |
-| The same on the CM4, before the detector | **37%** of one core with the generator, **25%** playing a `.cu8`; ~1 MB/s to the terminal. Not split yet into FFT, drawing and escape codes; the terminal emulator's own cost is not measured (the smoke has no window) |
+| On the CM4, three builds side by side, 160×45, 15 s each (`smoke.py --keys 1` spectrum / `--keys 5`) | playing `capture-433.cu8`: spectrum **30%** before the detector, **32%** with it, **33%** with the log; screen 5 **15%** (placeholder), **18%** (placeholder + detector), **23%** (the log, ~80 events a second). Generator: spectrum 37 / 38 / 28% (the last looks like an outlier), screen 5 22 / 25 / 24% |
+| What that splits into on the CM4 | the detector ~3 points; the spectrum screen ~15 (0.9 MB/s to the terminal); the log on a busy band ~5. The terminal emulator's own cost is not measured (the smoke has no window) |
 | Generator alone in the app, before the spectrum (phase 1) | 6%; **8% on the CM4** |
 | App playing a `.cu8` file | ~2% of one core |
 | Static aarch64 binary from CI | 2.2 MB |
@@ -190,4 +198,8 @@ measure on the device, the Mac's numbers do not scale.
   it, the snapshot tests did not.
 - **`cargo fmt` reflows code**, so a scripted edit anchored on the text as
   written stops matching: assert the anchor occurs exactly once.
+- **A CPU number without its screen is worthless.** The detector's cost
+  was first "measured" with the smoke's default keys, which leave the app
+  on a placeholder, and compared with numbers taken on the spectrum. Name
+  the keys with every number, and re-measure the old build alongside.
 - **zsh**: `"$H:path"` applies a modifier to `$H`; write `"${H}:path"`.
