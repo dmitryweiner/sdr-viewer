@@ -1540,6 +1540,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sdr-detect"
+version = "0.1.0"
+dependencies = [
+ "sdr-core",
+ "sdr-dsp",
+]
+
+[[package]]
 name = "sdr-dsp"
 version = "0.1.0"
 dependencies = [
@@ -1572,6 +1580,7 @@ dependencies = [
  "clap",
  "ratatui",
  "sdr-core",
+ "sdr-detect",
  "sdr-dsp",
  "sdr-rtl",
  "sdr-tui",

@@ -42,7 +42,8 @@ Keys: `1`–`8` switch screens, `Tab` / `Shift+Tab` walk them, `?` help,
 | `Space` | pause |
 | `m` | reset max hold |
 
-Without a terminal — the screen as text and the strongest signals of the
+Without a terminal — the screen as text, the strongest signals and the
+detected events of the
 first seconds of a recording:
 
 ```sh

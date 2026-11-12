@@ -17,7 +17,7 @@ Phases of the plan (its section 14 has the detail):
 | 0 Hardware check | done — `docs/hardware.md` |
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
-| 3 Detector and log | **next** |
+| 3 Detector and log | **in progress**: the noise floor and the detector run and show in `--snapshot`; next SQLite and the log screen |
 | 4–8 | not started |
 
 ## Commands
@@ -31,8 +31,8 @@ Phases of the plan (its section 14 has the detail):
   `sdr-viewer-rx.sh` (see "The user's device").
 - `cargo run --release -- [FILE … | --rtlsdr …] --snapshot 160x45 [--secs 10]`
   — no terminal: analyses the start of the stream (unpaced for files and
-  the generator), prints the spectrum screen as text and the max-hold
-  peaks. The way to look at a recording, at the air, or at the picture from
+  the generator), prints the spectrum screen as text, the max-hold
+  peaks and the detector's events. The way to look at a recording, at the air, or at the picture from
   a script. Below 80x24 it prints only "too small".
 - `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
   of the generator per sample.
@@ -84,7 +84,9 @@ touching USB.
   `~/sdr-viewer-check/sdr-viewer`.
 - `~/sdr-viewer-check/capture-433.cu8` — 10 s at 433.92 MHz, 2.4 MS/s,
   gain 30 dB, antenna on: LPD433 activity over a −71 dBFS floor. The
-  reference recording until the detector has its own.
+  detector finds 824 events in it: mostly 40–50 ms bursts ~9 kHz wide on
+  the 25 kHz LPD grid (433.075 MHz + n × 25 kHz) over some 66 channels — a
+  frequency hopper. The reference recording until the detector has its own.
 - Not set up yet: `meshtasticd` (LoRa is on `/dev/spidev4.0`), `gpsd`
   (installed, not configured), `aiov2_ctl`.
 - The terminal there: lxterminal, truecolor; the user sets the font size.
@@ -109,8 +111,12 @@ a crate is added in the phase that needs it):
   (`RateMeter`), `units` (parse/format Hz), `frame` (`SpectrumFrame`: dBFS
   per bin, lowest frequency first).
 - `sdr-dsp` — `analyzer`: Hann window, FFT, power averaged over a number
-  of blocks into one `SpectrumFrame` (2048 bins, 10 frames a second in the
-  app).
+  of blocks into one `SpectrumFrame` (2048 bins); `average`:
+  `FrameAverager`, fast frames into slow ones.
+- `sdr-detect` — `floor` (`NoiseFloor`: per-segment medians followed over
+  time, slow up and fast down) and `detector` (`Detector`: bins above the
+  floor joined across frequency and time into `Event`s; keying splash of a
+  strong signal masked).
 - `sdr-rtl` — `RtlSource`: the RTL-SDR through `rtl-sdr-rs` (pure Rust on
   `nusb`), queued transfers, gain along the tuner's own steps, retuning.
 - `sdr-tui` — `app` (state, keys and the `Command`s they ask of the
@@ -118,8 +124,10 @@ a crate is added in the phase that needs it):
   `spectrum` (the spectrum screen's state and arithmetic: columns, scale,
   zoom, palette), `spectrum_ui` (drawing it). Snapshot tests in
   `src/snapshots/`.
-- `sdr-viewer` — the binary: `cli` (arguments → source), `reader` (the
-  source thread: carry out `Command`s, read, analyse, send `Update`s),
+- `sdr-viewer` — the binary: `cli` (arguments → source), `pipeline`
+  (samples → detector frames at 100 a second → events, and their averages
+  → screen frames at 10 a second; one pass of FFTs), `reader` (the source
+  thread: carry out `Command`s, read, run the pipeline, send `Update`s),
   `snapshot` (`--snapshot`), `main` (terminal loop, redraws only when
   something changed).
 
@@ -135,6 +143,8 @@ a crate is added in the phase that needs it):
 - Levels are dBFS: a full-scale tone on a bin reads 0. Power is averaged,
   never decibels. Frames run from the lowest frequency up, the centre is
   bin `len / 2`.
+- The detector sees every frame; only the screen's frames may be dropped.
+  An event's times are stream time (`SpectrumFrame::time`), not the clock.
 - The palette's brightness only grows with the level (a test holds it).
 - The interface never touches the source: keys become `Command`s, the
   reader thread carries them out and answers with `Update::Source` or
@@ -152,9 +162,10 @@ Measured on the dev Mac (Apple Silicon), release build:
 |---|---|
 | `./scripts/check.sh` after touching `sdr-core` | ~2 s |
 | Generator, demo scene (2 tones + noise) | ~16 ns/sample = ~4% of a P-core at 2.4 MS/s; noise is 1.7, tones 10.5 |
-| App with the generator, spectrum screen at 160×45 (smoke) | ~7% of one core, ~0.9 MB/s to the terminal |
+| App with the generator, spectrum screen at 160×45 (smoke) | ~4% of one core with the detector (3% without), ~1 MB/s to the terminal |
 | Live reception on the CM4, RTL-SDR at 2.4 MS/s, spectrum at 160×45 | **31%** of one core (0.6 s of 15 in the kernel); 30 s of samples arrive in 30.0 s; opening the device takes 1.15 s |
-| The same on the CM4 | **37%** of one core with the generator, **25%** playing a `.cu8`; ~1 MB/s to the terminal. Not split yet into FFT, drawing and escape codes; the terminal emulator's own cost is not measured (the smoke has no window) |
+| App with the detector on the CM4, 160×45 (smoke, PR #10) | **21%** of one core playing a `.cu8`, **26%** with the generator; 0.12 MB/s to the terminal. Lower than the row below, measured before PR #9: the detector is not what costs |
+| The same on the CM4, before the detector | **37%** of one core with the generator, **25%** playing a `.cu8`; ~1 MB/s to the terminal. Not split yet into FFT, drawing and escape codes; the terminal emulator's own cost is not measured (the smoke has no window) |
 | Generator alone in the app, before the spectrum (phase 1) | 6%; **8% on the CM4** |
 | App playing a `.cu8` file | ~2% of one core |
 | Static aarch64 binary from CI | 2.2 MB |

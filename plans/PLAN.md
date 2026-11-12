@@ -312,6 +312,7 @@ The first useful version comes after phase 3.
 | Mesh network | Haifa: region US, preset MediumFast, frequency slot 70 = 919.375 MHz, max hops 7. Goes into the default bookmarks; the app still reads the frequency from `meshtasticd` |
 | Language | UI in English; docs, README and code comments in English (the shared conventions in `~/projects/CLAUDE.md`) |
 | aarch64 build | Static musl binary built on GitHub's native arm64 runner instead of `cross` |
+| Weak one-frame events | The detector's threshold stays at 8 dB and everything it finds goes into the database; the log hides the weak ones with a filter (minimum level above the floor) whose threshold the user changes from the log screen |
 | Phase order on start | Phase 1 before phase 0: no SSH access to the device yet; phase 0 follows `docs/hardware-check.md` when there is |
 
 ### Region: Israel
@@ -351,7 +352,7 @@ As of 2026-11-12.
 | 0 | Hardware check | Done: `docs/hardware.md`. CM4 with 8 GB, R820T tuner, `rtl-sdr-rs` works, truecolor terminal. The device's hub is defective: see the decision "Defective USB hub" |
 | 1 | Skeleton | Done: workspace, CI with a static aarch64 binary, generator and file sources, tabs |
 | 2 | Spectrum and waterfall | Done on the generator, recordings and the RTL-SDR: bars with max hold, waterfall, a scale that follows the noise floor, cursor, tuning (`f`, `[` `]`, Enter), gain, zoom, pause, `--snapshot` |
-| 3 | Detector and log | Next |
+| 3 | Detector and log | In progress. Done: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`. Next: SQLite, screen 5.5, the floor line on the spectrum |
 | 4–8 | | Not started |
 
 Left out of phase 2 on purpose, with where it goes:
@@ -371,7 +372,33 @@ Left out of phase 2 on purpose, with where it goes:
   `capture-433.cu8` on the device once the detector says which second has
   a known event.
 
-What phase 3 can start from: `SpectrumFrame`s at 10 a second from any
+How the detector works (`crates/sdr-detect`), as built:
+
+- One pass of FFTs: 12 to a detector frame (10.24 ms at 2.4 MS/s), 10 of
+  those averaged into a screen frame (102.4 ms, so 9.8 rows a second).
+- The floor: the median of each of 32 segments of the spectrum, followed
+  over time with a 10 s rise and a 0.5 s fall, interpolated per bin. A
+  signal wider than half a segment (37 kHz) lifts it, slowly.
+- An event: bins more than 8 dB above the floor, joined when closer than
+  5 kHz, followed until silent for 100 ms. Its band and peak are those of
+  its strongest frame; the union over all frames is used only to match.
+- A carrier keyed inside an FFT block splashes over the whole band; what
+  is weaker than a signal of the same frame by 10 dB + 20 dB per decade of
+  bins is dropped as its splash. This hides weak signals next to a strong
+  one while it is on.
+- Known limits: the width is measured down to the threshold, so a strong
+  pure tone reads ~10 kHz wide (the window's skirts); a signal that never
+  ends is one open event forever.
+
+On the device's recording (`capture-433.cu8`, 10 s) it finds 824 events:
+most are 40–50 ms long and ~9 kHz wide, exactly on the 25 kHz LPD grid
+over some 66 channels — a frequency hopper nobody had noticed on the
+waterfall. 90 are one bin for one frame at 8–10.5 dB above the floor: more
+than Gaussian noise gives at this threshold, so either the edges of weak
+bursts or noise that is not Gaussian. Decided (section 12): the log hides them with a
+filter, the threshold stays.
+
+What phase 3 started from: `SpectrumFrame`s at 10 a second from any
 source; 100 ms frames average a short burst down (a 10 ms burst reads
 10 dB low), so the detector will likely want its own, faster frames from
 the same `Analyzer` — measure on the CM4 first.
