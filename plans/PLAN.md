@@ -308,6 +308,8 @@ The first useful version comes after phase 3.
 | External decoders | Allowed; the `rtl_433` bridge is an optional feature |
 | Phase order | As in section 8: the signal log (phase 3) before Meshtastic (phase 5) |
 | Meshtastic | Through `meshtasticd` (the default, no objections) |
+| Defective USB hub | The user's device needs its hub at 12 Mbit/s for the keyboard and at 480 for the RTL-SDR (`docs/hardware.md`). Until the mainboard is replaced: a "reception without the keyboard" mode that switches the hub for the time of reception; control over SSH or Bluetooth |
+| Mesh network | Haifa: region US, preset MediumFast, frequency slot 70 = 919.375 MHz, max hops 7. Goes into the default bookmarks; the app still reads the frequency from `meshtasticd` |
 | Language | UI in English; docs, README and code comments in English (the shared conventions in `~/projects/CLAUDE.md`) |
 | aarch64 build | Static musl binary built on GitHub's native arm64 runner instead of `cross` |
 | Phase order on start | Phase 1 before phase 0: no SSH access to the device yet; phase 0 follows `docs/hardware-check.md` when there is |
@@ -330,8 +332,9 @@ The first useful version comes after phase 3.
 
 They do not block the start; until answered, the default holds.
 
-1. **What frequency does your mesh network use?** Needed for a bookmark and
-   for matching Meshtastic packets with events on the waterfall.
+1. **The terminal's size.** The device's default font gives 79 × 20
+   cells (`docs/hardware.md`), below the 80 × 24 minimum. A smaller font
+   by default, or a layout that works from 79 × 20?
 2. **Which decoders matter most?** *Default: the order in 7.1.*
 3. **Sound (listening to AM/FM).** *Default: yes, in phase 8.*
 4. **Running in the background (daemon + TUI client).** *Default: not in
