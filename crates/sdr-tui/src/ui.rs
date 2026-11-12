@@ -280,6 +280,8 @@ mod tests {
         assert_eq!(buffer[(carrier, y)].symbol(), "▀");
         assert!(luma(carrier, y) > luma(carrier - 6, y) + 150);
         assert!(luma(carrier, y) > luma(carrier + 6, y) + 150);
+        // The noise itself stays dark, so weak signals stand out.
+        assert!(luma(carrier - 6, y) < 100, "{}", luma(carrier - 6, y));
     }
 
     #[test]
