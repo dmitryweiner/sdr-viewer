@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use sdr_core::rate::RateMeter;
 use sdr_core::{Iq, IqRing, Source, SourceInfo, SpectrumFrame};
 use sdr_detect::{Event, Levels};
+use sdr_tui::fragment::Fragment;
 use sdr_tui::{Command, SourceState, SourceStatus};
 
 use crate::pipeline::{Output, Pipeline};
@@ -39,9 +40,20 @@ pub enum Update {
     Notice(String),
     /// What was asked for and took a while is done.
     Done(String),
+    /// The picture of this event, or none: its samples are not held.
+    Picture(Event, Option<Fragment>),
 }
 
-/// Samples around an event, cut from the ring to be saved.
+/// Work on an event's samples that is not the reader's to do.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Job {
+    /// Write them to the disk.
+    Save(Cut),
+    /// Make the event's picture of them.
+    Picture(Cut),
+}
+
+/// Samples around an event, cut from the ring.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Cut {
     pub samples: Vec<[u8; 2]>,
@@ -56,16 +68,21 @@ pub struct Cut {
 /// is a part of it.
 const AROUND_EVENT: Duration = Duration::from_millis(50);
 
+/// The most of an event its picture is made of: its beginning. Copying
+/// all 30 s of a carrier out of the ring for every row the selection
+/// passes would hold the reader up.
+const PICTURE_LIMIT: Duration = Duration::from_secs(3);
+
 /// Where the reader puts what is to be kept; each may be missing.
 #[derive(Default)]
 pub struct Sinks {
     /// Gets every ended event, and when reading stops — however it
     /// stops — the events still on, ended there.
     pub events: Option<Sender<Vec<Event>>>,
-    /// Holds the latest samples for `Command::SaveIq`.
+    /// Holds the latest samples, for an event's picture and for saving.
     pub ring: IqRing,
-    /// Gets the samples cut out for an event, to write them to the disk.
-    pub cuts: Option<Sender<Cut>>,
+    /// Gets the samples cut out for an event, with what to do with them.
+    pub jobs: Option<Sender<Job>>,
 }
 
 /// Reads until the source ends or fails, or `stop` is set, sending spectrum
@@ -83,7 +100,7 @@ pub fn run(
     let Sinks {
         events: store,
         mut ring,
-        cuts,
+        jobs,
     } = sinks;
     let started = Instant::now();
     let mut meter = RateMeter::new(REPORT_EVERY);
@@ -116,7 +133,23 @@ pub fn run(
                 },
                 // Whoever writes the file says when it is done.
                 Command::SaveIq(event) => {
-                    hand_over(&ring, event, source.info(), cuts.as_ref()).map(|()| None)
+                    hand_over(&ring, event, source.info(), jobs.as_ref(), None, Job::Save)
+                        .map(|()| None)
+                }
+                // No picture is an answer, not a complaint: the selection
+                // just went over an event whose samples are gone.
+                Command::Picture(event) => {
+                    let asked = event.clone();
+                    let limit = Some(PICTURE_LIMIT);
+                    let handed = hand_over(
+                        &ring,
+                        event,
+                        source.info(),
+                        jobs.as_ref(),
+                        limit,
+                        Job::Picture,
+                    );
+                    Ok(handed.err().map(|_| Update::Picture(asked, None)))
                 }
             };
             // The answer to a key press must not get lost: wait for room.
@@ -170,16 +203,19 @@ pub fn run(
     keep(pipeline.finish());
 }
 
-/// Cuts the samples of `event` out of the ring and hands them to whoever
-/// saves them: the copy is quick, the disk is not the reader's to wait for.
+/// Cuts the samples of `event` out of the ring and hands them over as a
+/// job: the copy is quick, the disk and the FFTs are not the reader's to
+/// wait for.
 fn hand_over(
     ring: &IqRing,
     event: Event,
     source: SourceInfo,
-    cuts: Option<&Sender<Cut>>,
+    jobs: Option<&Sender<Job>>,
+    limit: Option<Duration>,
+    job: impl FnOnce(Cut) -> Job,
 ) -> Result<(), String> {
-    let Some(cuts) = cuts else {
-        return Err("nowhere to save samples: name a directory with --iq-dir".into());
+    let Some(jobs) = jobs else {
+        return Err("nothing here works on samples".into());
     };
     if ring.capacity() == 0 {
         return Err("no samples are held: --iq-buffer is 0".into());
@@ -196,14 +232,15 @@ fn hand_over(
     }
     let around = sample(AROUND_EVENT);
     let first_sample = start.saturating_sub(around).max(held.start);
+    let end = (end + around).min(limit.map_or(u64::MAX, |limit| first_sample + sample(limit)));
     let cut = Cut {
-        samples: ring.copy(first_sample..end + around),
+        samples: ring.copy(first_sample..end),
         first_sample,
         source,
         event,
     };
-    cuts.send(cut)
-        .map_err(|_| "the thread that saves samples has stopped".into())
+    jobs.send(job(cut))
+        .map_err(|_| "the thread that works on samples has stopped".into())
 }
 
 #[cfg(test)]
@@ -521,27 +558,85 @@ mod tests {
     /// a ring of `ring_s` seconds and `asks` are made at their reads (a
     /// read is 16 384 samples: 6.8 ms).
     fn cuts(ring_s: f64, asks: &[(usize, Command)]) -> (Vec<Cut>, Vec<String>) {
-        let (tx, rx) = sync_channel(1024);
-        let (command_tx, command_rx) = channel();
-        let (cut_tx, cut_rx) = channel();
-        let source = Asking(demo(), 0, asks.to_vec(), command_tx);
-        let sinks = Sinks {
-            ring: IqRing::for_seconds(ring_s, 2_400_000),
-            cuts: Some(cut_tx),
-            ..Sinks::default()
-        };
-        run(
-            source,
-            tx,
-            command_rx,
-            Arc::new(AtomicBool::new(false)),
-            sinks,
-        );
-        let notices = rx.try_iter().filter_map(|update| match update {
+        let (jobs, updates) = jobs(ring_s, asks);
+        let cuts = jobs.into_iter().map(|job| match job {
+            Job::Save(cut) => cut,
+            Job::Picture(_) => panic!("{job:?}"),
+        });
+        let notices = updates.into_iter().filter_map(|update| match update {
             Update::Notice(notice) => Some(notice),
             _ => None,
         });
-        (cut_rx.try_iter().collect(), notices.collect())
+        (cuts.collect(), notices.collect())
+    }
+
+    /// The same, as the jobs handed over and everything said.
+    fn jobs(ring_s: f64, asks: &[(usize, Command)]) -> (Vec<Job>, Vec<Update>) {
+        let (tx, rx) = sync_channel(1024);
+        let (command_tx, command_rx) = channel();
+        let (job_tx, job_rx) = channel();
+        let source = Asking(demo(), 0, asks.to_vec(), command_tx);
+        let sinks = Sinks {
+            ring: IqRing::for_seconds(ring_s, 2_400_000),
+            jobs: Some(job_tx),
+            ..Sinks::default()
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        run(source, tx, command_rx, stop, sinks);
+        (job_rx.try_iter().collect(), rx.try_iter().collect())
+    }
+
+    #[test]
+    fn a_picture_is_asked_of_the_same_cut_and_none_is_an_answer() {
+        let asks = [
+            (150, Command::Picture(event(500, 100))),
+            (150, Command::Picture(event(100, 50))),
+        ];
+        // The ring holds 0.6 s of the 1.03 read: the second event is gone.
+        let (jobs, updates) = jobs(0.6, &asks);
+        match &jobs[..] {
+            [Job::Picture(cut)] => {
+                assert_eq!(cut.event, event(500, 100));
+                assert_eq!(cut.first_sample, 1_080_000);
+                assert_eq!(cut.samples.len(), 480_000);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(updates.contains(&Update::Picture(event(100, 50), None)));
+        let notice = |update: &Update| matches!(update, Update::Notice(_));
+        assert!(!updates.iter().any(notice));
+    }
+
+    #[test]
+    fn a_picture_is_made_of_no_more_than_the_first_seconds_of_an_event() {
+        // A ring of 10 s at 10 samples a second, full.
+        let mut ring = IqRing::new(100);
+        ring.push(&[Iq::new(0.0, 0.0); 100]);
+        let (tx, rx) = channel();
+        let info = SourceInfo {
+            sample_rate: 10,
+            ..info()
+        };
+        // An event from 1 to 9 s; the 50 ms around it are a sample here.
+        let long = event(1_000, 8_000);
+        let limit = Some(Duration::from_secs(3));
+        hand_over(
+            &ring,
+            long.clone(),
+            info.clone(),
+            Some(&tx),
+            limit,
+            Job::Picture,
+        )
+        .unwrap();
+        hand_over(&ring, long, info, Some(&tx), None, Job::Save).unwrap();
+        let lengths: Vec<(u64, usize)> = rx
+            .try_iter()
+            .map(|job| match job {
+                Job::Picture(cut) | Job::Save(cut) => (cut.first_sample, cut.samples.len()),
+            })
+            .collect();
+        assert_eq!(lengths, [(9, 30), (9, 82)]);
     }
 
     #[test]
@@ -610,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn without_a_ring_or_a_place_to_save_the_reader_says_so() {
+    fn without_a_ring_or_someone_to_take_the_samples_the_reader_says_so() {
         let (cuts, notices) = cuts(0.0, &[(150, Command::SaveIq(event(500, 100)))]);
         assert!(cuts.is_empty());
         assert_eq!(notices, ["no samples are held: --iq-buffer is 0"]);
@@ -619,7 +714,7 @@ mod tests {
         let got = updates_after(Brief(Generator::new(GeneratorConfig::demo()), 2), &save);
         assert_eq!(
             got[0],
-            Update::Notice("nowhere to save samples: name a directory with --iq-dir".into())
+            Update::Notice("nothing here works on samples".into())
         );
     }
 

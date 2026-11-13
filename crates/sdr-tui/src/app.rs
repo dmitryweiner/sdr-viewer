@@ -5,6 +5,7 @@ use sdr_core::units::parse_hz;
 use sdr_core::{GainChange, SourceInfo};
 use sdr_detect::Event;
 
+use crate::fragment::{Fragment, Picture};
 use crate::log::LogView;
 use crate::spectrum::SpectrumView;
 
@@ -116,6 +117,8 @@ pub enum Command {
     Gain(GainChange),
     /// Save the samples of this event, while they are still held.
     SaveIq(Event),
+    /// Make the picture of this event from its samples.
+    Picture(Event),
 }
 
 pub struct App {
@@ -134,6 +137,8 @@ pub struct App {
     pub notice: Option<String>,
     /// The last thing done that was asked for, until the next key.
     pub done: Option<String>,
+    /// The event selected in the log and what there is of its picture.
+    picture: Option<(Event, Picture)>,
 }
 
 /// Cursor steps as shares of the width: fine, and coarse with Shift.
@@ -160,6 +165,7 @@ impl App {
             input: None,
             notice: None,
             done: None,
+            picture: None,
         }
     }
 
@@ -167,6 +173,44 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return;
         }
+        self.handle_key(key);
+        self.follow_selection();
+    }
+
+    /// The picture of the event selected in the log, if one is.
+    pub fn picture(&self) -> Option<&Picture> {
+        self.picture.as_ref().map(|(_, picture)| picture)
+    }
+
+    /// Takes the picture made of `event`, or the word that its samples
+    /// are gone; one that was asked for before the selection moved on is
+    /// dropped.
+    pub fn on_picture(&mut self, event: &Event, fragment: Option<Fragment>) {
+        if let Some((_, picture)) = self.picture.as_mut().filter(|(of, _)| of == event) {
+            *picture = fragment.map_or(Picture::Gone, Picture::Ready);
+        }
+    }
+
+    /// Asks for the picture of the event the log's selection has come to.
+    fn follow_selection(&mut self) {
+        let selected = self.log.selected_row();
+        let event = selected.map(|row| row.event);
+        if event == self.picture.as_ref().map(|(of, _)| of) {
+            return;
+        }
+        self.picture = selected.map(|row| {
+            let picture = if row.this_run {
+                self.commands.push(Command::Picture(row.event.clone()));
+                Picture::Waiting
+            } else {
+                // An earlier run's samples went with it.
+                Picture::Gone
+            };
+            (row.event.clone(), picture)
+        });
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) {
         self.notice = None;
         self.done = None;
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -372,6 +416,7 @@ mod tests {
         assert_eq!(app.screen, Screen::Log);
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Down);
+        app.commands.clear();
         press(&mut app, KeyCode::Enter);
         assert_eq!(app.commands, [Command::Tune(433.1e6)]);
         assert_eq!(app.screen, Screen::Spectrum);
@@ -395,6 +440,7 @@ mod tests {
         assert_eq!(app.notice.as_deref(), Some("select an event first: ↑ ↓"));
         press(&mut app, KeyCode::Down);
         assert_eq!(app.notice, None);
+        app.commands.clear();
         press(&mut app, KeyCode::Char('r'));
         assert_eq!(app.commands, [Command::SaveIq(event(300, 400, 50.0, 30.0))]);
         // The list stays held, for the next one.
@@ -408,6 +454,48 @@ mod tests {
             app.notice.as_deref(),
             Some("an earlier run's samples are gone")
         );
+    }
+
+    #[test]
+    fn selecting_a_log_row_asks_for_its_picture_once() {
+        use crate::fragment::tests::fragment;
+        use crate::log::tests::event;
+        let mut app = app_on_the_log();
+        assert_eq!(app.picture(), None);
+        press(&mut app, KeyCode::Down);
+        // The newest row is selected first.
+        let newest = event(300, 400, 50.0, 30.0);
+        assert_eq!(app.commands, [Command::Picture(newest.clone())]);
+        assert_eq!(app.picture(), Some(&Picture::Waiting));
+        // A key that leaves the selection where it is asks for nothing.
+        press(&mut app, KeyCode::Home);
+        assert_eq!(app.commands.len(), 1);
+        app.on_picture(&newest, Some(fragment()));
+        assert_eq!(app.picture(), Some(&Picture::Ready(fragment())));
+        // The next row: its own picture, and the old one is put away.
+        press(&mut app, KeyCode::Down);
+        let older = event(100, 50, 100.0, 20.0);
+        assert_eq!(app.commands[1], Command::Picture(older.clone()));
+        assert_eq!(app.picture(), Some(&Picture::Waiting));
+        // A picture that comes late, for a row already left, is dropped.
+        app.on_picture(&newest, Some(fragment()));
+        assert_eq!(app.picture(), Some(&Picture::Waiting));
+        app.on_picture(&older, None);
+        assert_eq!(app.picture(), Some(&Picture::Gone));
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.picture(), None);
+        assert_eq!(app.commands.len(), 2);
+    }
+
+    #[test]
+    fn a_row_of_an_earlier_run_has_no_picture_to_ask_for() {
+        use crate::log::tests::{event, noon};
+        let mut app = app();
+        app.screen = Screen::Log;
+        app.log.load_history([(noon(), event(50, 10, 700.0, 40.0))]);
+        press(&mut app, KeyCode::Down);
+        assert!(app.commands.is_empty());
+        assert_eq!(app.picture(), Some(&Picture::Gone));
     }
 
     #[test]

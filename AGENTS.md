@@ -17,17 +17,15 @@ Phases of the plan (its section 14 has the detail):
 | 0 Hardware check | done — `docs/hardware.md` |
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
-| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer and "save IQ" from the log work; next the waterfall fragment of the selected event |
+| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; next the reference recording and the overload indicator |
 | 4–8 | not started |
 
 Left in phase 3, in the order agreed with the user (the plan's section 14
 has the reasons):
 
-1. The waterfall fragment of the selected event, from the IQ ring buffer
-   (`IqRing`, which "save IQ" already uses).
-2. A short reference recording in the repository for the detector's
+1. A short reference recording in the repository for the detector's
    regression tests, cut from `capture-433.cu8`.
-3. An overload indicator and the count of dropped transfers.
+2. An overload indicator and the count of dropped transfers.
 
 ## Commands
 
@@ -100,9 +98,11 @@ touching USB.
   no data and reset the hub.
 - A new binary: download the PR's `sdr-viewer-aarch64` artifact
   (`gh run download RUN -n sdr-viewer-aarch64`) and `scp` it to
-  `~/sdr-viewer-check/sdr-viewer`. What lies there now is PR #15's build
-  (the threshold line on the spectrum, the IQ ring, `r` in the log), with
-  that PR's `smoke.py`. Saving IQ was tried there on the recording with
+  `~/sdr-viewer-check/sdr-viewer`. What lies there now is PR #16's build
+  (the threshold line on the spectrum, the IQ ring, the picture and `r` in
+  the log), with PR #15's `smoke.py` (arrow keys). Nobody has looked at
+  that build in the device's own terminal yet: how lxterminal's font draws
+  the Braille threshold line and the picture is for the user's eye. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
 - The default database `~/.local/share/sdr-viewer/events.db` does not
@@ -158,7 +158,9 @@ a crate is added in the phase that needs it):
   `spectrum` (the spectrum screen's state and arithmetic: columns, scale,
   zoom, palette), `spectrum_ui` (drawing it), `log` (the signal log's
   state: the last 10 000 events, the level filter, the order, a held
-  list while a row is selected), `log_ui`. Snapshot tests in
+  list while a row is selected), `log_ui`, `fragment` (`Fragment`: the
+  spectra around one event, and their reduction to pixels; `Picture`:
+  waiting, gone or ready). Snapshot tests in
   `src/snapshots/`.
 - `sdr-viewer` — the binary: `cli` (arguments → source), `pipeline`
   (samples → detector frames at 100 a second → events, and their averages
@@ -166,8 +168,10 @@ a crate is added in the phase that needs it):
   pass of FFTs), `reader` (the source
   thread: carry out `Command`s, read, fill the IQ ring, run the pipeline,
   send `Update`s, hand ended events to the store and an event's samples
-  (`Cut`) to the saver — its `Sinks`), `save` (the saver thread: a `Cut`
-  to a SigMF pair, and the word that it is done), `keep` (open the database, read the
+  (`Cut`, as a `Job`) to the worker — its `Sinks`), `jobs` (the worker
+  thread: saves a cut, or makes its picture; of pictures that piled up
+  only the last), `save` (a `Cut` to a SigMF pair), `fragment` (a `Cut`
+  to a `Fragment`), `keep` (open the database, read the
   week's history, start the writer thread, which first deletes what is
   older), `writer` (that thread's loop: one write a second),
   `snapshot` (`--snapshot`), `main` (terminal loop, redraws only when
@@ -192,8 +196,11 @@ a crate is added in the phase that needs it):
   hands events over an unbounded channel and never waits for the disk. A
   change of the tables raises `SCHEMA_VERSION` and migrates older files;
   a file from a newer build is refused, never rewritten.
-- The reader never waits for the disk when samples are saved either: it
-  copies them out of the ring (`Cut`) and the saver thread writes. Sample
+- The reader never waits for the disk when samples are saved, nor for
+  the FFTs of a picture: it copies the samples out of the ring (`Cut`,
+  for a picture 3 s at most) and the worker thread does the rest. The
+  interface asks for a picture once, when the selection comes to a row,
+  and drops one that arrives for a row it has left. Sample
   number N of the ring is stream time N / rate, the same count the
   analyser's frame times come from. A retune clears the ring.
 - An event's wall-clock time is its session's start plus its stream time.
@@ -232,6 +239,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | App playing a `.cu8` file | ~2% of one core |
 | The event database on the CM4 (`smoke.py --keys 5`, the recording, with and without `--db`) | nothing measurable: 22% against 21–22% of one core. The file grows ~93 bytes an event: on the recording's band (~80 events a second) that is ~660 MB a day of reception |
 | The IQ ring buffer (30 s; with and without `--iq-buffer 0`) | `bench_ring` on the Mac: 0.3 ns/sample; 153 MB resident after 40 s, as computed (144 MB + the app). **On the CM4**, the recording, 15 s: spectrum (`--keys 1`) 32 → 34% of a core, log (`--keys 5`) 21 → 22%. With a bounds check and a wrap test per sample it was 4 points, not 1–2 |
+| The picture of the selected event on the CM4 (the recording, 15 s, `smoke.py --keys 5` plus down arrows) | the log alone **22%** of a core; a row held with its picture **19%** (the list stands still); a new picture every 0.36 s (40 downs) **26%** |
 | Static aarch64 binary from CI | 4.6 MB with SQLite compiled in (2.4 before) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:
