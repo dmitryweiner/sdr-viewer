@@ -63,7 +63,22 @@ pub struct Args {
     /// Keep no events, not even with --rtlsdr.
     #[arg(long, conflicts_with = "db")]
     pub no_db: bool,
+
+    /// Seconds of samples held in memory, so that an event's samples can
+    /// be saved after it was seen: 2 bytes a sample, 144 MB for 30 s at
+    /// 2.4 MS/s. 0 holds none.
+    #[arg(long, value_name = "SECS", default_value_t = 30.0, value_parser = parse_buffer_arg)]
+    pub iq_buffer: f64,
+
+    /// Where the log's `r` saves an event's samples, as a SigMF pair of
+    /// files. Without it: sdr-viewer/iq under $XDG_DATA_HOME or
+    /// ~/.local/share.
+    #[arg(long, value_name = "DIR")]
+    pub iq_dir: Option<PathBuf>,
 }
+
+/// The longest --iq-buffer: 10 minutes are 2.9 GB at 2.4 MS/s.
+const MAX_IQ_BUFFER_S: f64 = 600.0;
 
 /// Where the events go, if anywhere; `env` looks up an environment
 /// variable.
@@ -74,13 +89,32 @@ pub fn db_path(args: &Args, env: impl Fn(&str) -> Option<String>) -> Option<Path
     if args.db.is_some() || !args.rtlsdr {
         return args.db.clone();
     }
+    Some(data_dir(env)?.join("events.db"))
+}
+
+/// Where saved samples go, if anywhere.
+pub fn iq_dir(args: &Args, env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    args.iq_dir
+        .clone()
+        .or_else(|| Some(data_dir(env)?.join("iq")))
+}
+
+/// The app's own directory among the user's data.
+fn data_dir(env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
     let set = |name: &str| {
         env(name)
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     };
     let data = set("XDG_DATA_HOME").or_else(|| Some(set("HOME")?.join(".local/share")))?;
-    Some(data.join("sdr-viewer/events.db"))
+    Some(data.join("sdr-viewer"))
+}
+
+fn parse_buffer_arg(text: &str) -> Result<f64, String> {
+    let seconds = text.parse().ok();
+    seconds
+        .filter(|seconds| (0.0..=MAX_IQ_BUFFER_S).contains(seconds))
+        .ok_or_else(|| format!("not a number of seconds from 0 to {MAX_IQ_BUFFER_S}: {text:?}"))
 }
 
 fn parse_size_arg(text: &str) -> Result<(u16, u16), String> {
@@ -250,6 +284,39 @@ mod tests {
         };
         assert!(parse(&["--db", "x.db", "--no-db"]).is_err());
         assert!(parse(&["--db", "x.db", "--snapshot", "160x45"]).is_err());
+    }
+
+    #[test]
+    fn samples_are_saved_beside_the_events_or_where_asked() {
+        let home = [("HOME", "/home/dmw")];
+        assert_eq!(
+            iq_dir(&args(&[]), env(&home)),
+            Some("/home/dmw/.local/share/sdr-viewer/iq".into())
+        );
+        let xdg = [("HOME", "/home/dmw"), ("XDG_DATA_HOME", "/data")];
+        assert_eq!(
+            iq_dir(&args(&["--rtlsdr"]), env(&xdg)),
+            Some("/data/sdr-viewer/iq".into())
+        );
+        assert_eq!(
+            iq_dir(&args(&["--iq-dir", "cuts"]), env(&home)),
+            Some("cuts".into())
+        );
+        assert_eq!(iq_dir(&args(&[]), env(&[])), None);
+    }
+
+    #[test]
+    fn the_iq_buffer_is_thirty_seconds_unless_told() {
+        assert_eq!(args(&[]).iq_buffer, 30.0);
+        assert_eq!(args(&["--iq-buffer", "0"]).iq_buffer, 0.0);
+        assert_eq!(args(&["--iq-buffer", "2.5"]).iq_buffer, 2.5);
+        let parse = |list: &[&str]| {
+            Args::try_parse_from(std::iter::once("sdr-viewer").chain(list.iter().copied()))
+        };
+        assert!(parse(&["--iq-buffer", "-1"]).is_err());
+        assert!(parse(&["--iq-buffer", "601"]).is_err());
+        assert!(parse(&["--iq-buffer", "nan"]).is_err());
+        assert!(parse(&["--iq-buffer", "long"]).is_err());
     }
 
     #[test]

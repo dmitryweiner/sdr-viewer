@@ -17,14 +17,14 @@ Phases of the plan (its section 14 has the detail):
 | 0 Hardware check | done — `docs/hardware.md` |
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
-| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time and the detector's threshold line on the spectrum work; next the waterfall fragment of an event and "save IQ" (needs the IQ ring buffer) |
+| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer and "save IQ" from the log work; next the waterfall fragment of the selected event |
 | 4–8 | not started |
 
 Left in phase 3, in the order agreed with the user (the plan's section 14
 has the reasons):
 
-1. The waterfall fragment of the selected event and "save IQ" — needs the
-   IQ ring buffer of the plan's section 4, which does not exist yet.
+1. The waterfall fragment of the selected event, from the IQ ring buffer
+   (`IqRing`, which "save IQ" already uses).
 2. A short reference recording in the repository for the detector's
    regression tests, cut from `capture-433.cu8`.
 3. An overload indicator and the count of dropped transfers.
@@ -40,13 +40,16 @@ has the reasons):
   `~/.local/share/sdr-viewer/events.db` (`--db FILE` elsewhere, and for a
   recording or the generator too; `--no-db` nowhere). On the user's
   uConsole only through `sdr-viewer-rx.sh` (see "The user's device").
+- With any source: `--iq-buffer SECS` (30; 0 = none) is the IQ ring in
+  memory, `--iq-dir DIR` (default `~/.local/share/sdr-viewer/iq`) is where
+  `r` in the log saves an event's samples as SigMF.
 - `cargo run --release -- [FILE … | --rtlsdr …] --snapshot 160x45 [--secs 10]`
   — no terminal: analyses the start of the stream (unpaced for files and
   the generator), prints the spectrum screen as text, the max-hold
   peaks and the detector's events. The way to look at a recording, at the air, or at the picture from
   a script. Below 80x24 it prints only "too small".
 - `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
-  of the generator per sample.
+  of the generator and of the IQ ring per sample.
 
 CI (`.github/workflows/ci.yml`) runs on pull requests and on `main`:
 `check.sh` on Linux x86-64; tests and a static `aarch64-unknown-linux-musl`
@@ -62,7 +65,9 @@ request gets no run: open a draft one to get a binary.
   a crash or non-zero exit, prints the CPU used and the bytes sent to the
   terminal. Enter is `\r` (`--keys $'f100M\r'`). `--bin PATH` runs a given
   binary; on the uConsole it needs only Python 3. `--words` prints the
-  pieces of text the app wrote, to grep for what must be on the screen. The default keys end
+  pieces of text the app wrote, to grep for what must be on the screen. An
+  escape sequence in `--keys` is one key (`$'5\x1b[Br'`: log, down, save
+  IQ). The default keys end
   on a placeholder screen: to measure a screen pass `--keys 1` (spectrum)
   or `--keys 5` (log), and compare builds side by side in one sitting.
 - `scripts/term-check.sh` — can this terminal show truecolor, bars, half
@@ -95,8 +100,11 @@ touching USB.
   no data and reset the hub.
 - A new binary: download the PR's `sdr-viewer-aarch64` artifact
   (`gh run download RUN -n sdr-viewer-aarch64`) and `scp` it to
-  `~/sdr-viewer-check/sdr-viewer`. What lies there now is PR #13's build
-  (history and wall-clock time in the log), with that PR's `smoke.py`.
+  `~/sdr-viewer-check/sdr-viewer`. What lies there now is PR #15's build
+  (the threshold line on the spectrum, the IQ ring, `r` in the log), with
+  that PR's `smoke.py`. Saving IQ was tried there on the recording with
+  `--iq-dir iq-test`, removed afterwards; the default
+  `~/.local/share/sdr-viewer/iq` does not exist yet.
 - The default database `~/.local/share/sdr-viewer/events.db` does not
   exist on the device yet: since the database was added nobody has
   received from the RTL-SDR there, so that path is proven only by tests.
@@ -129,7 +137,8 @@ a crate is added in the phase that needs it):
   samples; `generator` (seeded tones, gated bursts, noise), `file` (raw IQ
   formats, looping), `pace` (real-time playback, `Clock` trait), `rate`
   (`RateMeter`), `units` (parse/format Hz), `frame` (`SpectrumFrame`: dBFS
-  per bin, lowest frequency first).
+  per bin, lowest frequency first), `ring` (`IqRing`: the newest samples
+  as `cu8` pairs, numbered from the start of the stream).
 - `sdr-dsp` — `analyzer`: Hann window, FFT, power averaged over a number
   of blocks into one `SpectrumFrame` (2048 bins); `average`:
   `FrameAverager`, fast frames into slow ones.
@@ -140,7 +149,8 @@ a crate is added in the phase that needs it):
   for the screen).
 - `sdr-store` — `Store`: the SQLite event database (`rusqlite`, SQLite
   compiled in), `sessions` and `events`, the layout's version in
-  `user_version`.
+  `user_version`; `sigmf`: a recording as a `.sigmf-data` + `.sigmf-meta`
+  pair (the JSON is written by hand).
 - `sdr-rtl` — `RtlSource`: the RTL-SDR through `rtl-sdr-rs` (pure Rust on
   `nusb`), queued transfers, gain along the tuner's own steps, retuning.
 - `sdr-tui` — `app` (state, keys and the `Command`s they ask of the
@@ -154,8 +164,10 @@ a crate is added in the phase that needs it):
   (samples → detector frames at 100 a second → events, and their averages
   → screen frames at 10 a second, each with the detector's `Levels`; one
   pass of FFTs), `reader` (the source
-  thread: carry out `Command`s, read, run the pipeline, send `Update`s,
-  hand ended events to the store), `keep` (open the database, read the
+  thread: carry out `Command`s, read, fill the IQ ring, run the pipeline,
+  send `Update`s, hand ended events to the store and an event's samples
+  (`Cut`) to the saver — its `Sinks`), `save` (the saver thread: a `Cut`
+  to a SigMF pair, and the word that it is done), `keep` (open the database, read the
   week's history, start the writer thread, which first deletes what is
   older), `writer` (that thread's loop: one write a second),
   `snapshot` (`--snapshot`), `main` (terminal loop, redraws only when
@@ -180,6 +192,10 @@ a crate is added in the phase that needs it):
   hands events over an unbounded channel and never waits for the disk. A
   change of the tables raises `SCHEMA_VERSION` and migrates older files;
   a file from a newer build is refused, never rewritten.
+- The reader never waits for the disk when samples are saved either: it
+  copies them out of the ring (`Cut`) and the saver thread writes. Sample
+  number N of the ring is stream time N / rate, the same count the
+  analyser's frame times come from. A retune clears the ring.
 - An event's wall-clock time is its session's start plus its stream time.
   The log shows wall-clock time only when there is a database (`WallClock`
   with the local UTC offset, taken once at the start through `chrono` —
@@ -215,6 +231,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | Generator alone in the app, before the spectrum (phase 1) | 6%; **8% on the CM4** |
 | App playing a `.cu8` file | ~2% of one core |
 | The event database on the CM4 (`smoke.py --keys 5`, the recording, with and without `--db`) | nothing measurable: 22% against 21–22% of one core. The file grows ~93 bytes an event: on the recording's band (~80 events a second) that is ~660 MB a day of reception |
+| The IQ ring buffer (30 s; with and without `--iq-buffer 0`) | `bench_ring` on the Mac: 0.3 ns/sample; 153 MB resident after 40 s, as computed (144 MB + the app). **On the CM4**, the recording, 15 s: spectrum (`--keys 1`) 32 → 34% of a core, log (`--keys 5`) 21 → 22%. With a bounds check and a wrap test per sample it was 4 points, not 1–2 |
 | Static aarch64 binary from CI | 4.6 MB with SQLite compiled in (2.4 before) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:

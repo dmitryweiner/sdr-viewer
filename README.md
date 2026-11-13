@@ -55,6 +55,31 @@ began, how long it lasted, where, how wide, how strong:
 | `+` `-` | raise, lower the level above the noise below which events are hidden (10 dB at the start); hidden events are kept |
 | `s` | sort by time, level, duration, frequency |
 | `Enter` | tune to the selected event and show the spectrum |
+| `r` | save the selected event's IQ samples |
+
+### Saving an event's samples
+
+The app holds the last 30 s of samples in memory (`--iq-buffer SECS`;
+2 bytes a sample, 144 MB at 2.4 MS/s; `0` holds none), so an event can be
+saved after it was seen: `r` on a selected row of the log writes its
+samples, with 50 ms before and after, as a [SigMF](https://sigmf.org) pair
+of files into `sdr-viewer/iq` under `$XDG_DATA_HOME` or `~/.local/share`
+(`--iq-dir DIR` elsewhere):
+
+```
+20261112T170451.250Z_433.925MHz.sigmf-data   # cu8, the whole received band
+20261112T170451.250Z_433.925MHz.sigmf-meta   # rate, frequency, time; the event as an annotation
+```
+
+The name is when the event began (UTC) and its centre; for a recording or
+the generator, which do not run by the wall clock, the time in the stream
+(`at-12.345s_…`). The data file is what `rtl_sdr` would have written, so
+`rtl_433 -r`, `inspectrum` or `sdr-viewer FILE --format cu8` read it.
+
+Only what is still held can be saved: an event older than the buffer, one
+from before a retune, or one of an earlier run in the log's history has no
+samples. A source finer than 8 bits (a `.cs16` or `.cf32` recording, the
+generator) is saved in 8.
 
 ### The event database
 

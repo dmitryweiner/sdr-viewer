@@ -7,7 +7,7 @@ use std::sync::mpsc::{Receiver, Sender, SyncSender, TrySendError};
 use std::time::{Duration, Instant};
 
 use sdr_core::rate::RateMeter;
-use sdr_core::{Iq, Source, SourceInfo, SpectrumFrame};
+use sdr_core::{Iq, IqRing, Source, SourceInfo, SpectrumFrame};
 use sdr_detect::{Event, Levels};
 use sdr_tui::{Command, SourceState, SourceStatus};
 
@@ -35,8 +35,37 @@ pub enum Update {
     OpenEvents(Vec<Event>),
     /// The source after a command changed it.
     Source(SourceInfo),
-    /// A command the source refused, in its words.
+    /// A command that could not be carried out, and why.
     Notice(String),
+    /// What was asked for and took a while is done.
+    Done(String),
+}
+
+/// Samples around an event, cut from the ring to be saved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cut {
+    pub samples: Vec<[u8; 2]>,
+    /// The number of the first of them in the stream.
+    pub first_sample: u64,
+    /// The source as it received them.
+    pub source: SourceInfo,
+    pub event: Event,
+}
+
+/// Kept before and after an event that is saved: how it began and ended
+/// is a part of it.
+const AROUND_EVENT: Duration = Duration::from_millis(50);
+
+/// Where the reader puts what is to be kept; each may be missing.
+#[derive(Default)]
+pub struct Sinks {
+    /// Gets every ended event, and when reading stops — however it
+    /// stops — the events still on, ended there.
+    pub events: Option<Sender<Vec<Event>>>,
+    /// Holds the latest samples for `Command::SaveIq`.
+    pub ring: IqRing,
+    /// Gets the samples cut out for an event, to write them to the disk.
+    pub cuts: Option<Sender<Cut>>,
 }
 
 /// Reads until the source ends or fails, or `stop` is set, sending spectrum
@@ -44,16 +73,18 @@ pub enum Update {
 /// between reads. Frames and status the interface has no room for are
 /// dropped: reception never waits for drawing. Ended events wait for room
 /// instead, and the last of them go out before the end is reported.
-///
-/// `store`, if there is one, gets every ended event, and when reading
-/// stops — however it stops — the events still on, ended there.
 pub fn run(
     mut source: impl Source,
     updates: SyncSender<Update>,
     commands: Receiver<Command>,
     stop: Arc<AtomicBool>,
-    store: Option<Sender<Vec<Event>>>,
+    sinks: Sinks,
 ) {
+    let Sinks {
+        events: store,
+        mut ring,
+        cuts,
+    } = sinks;
     let started = Instant::now();
     let mut meter = RateMeter::new(REPORT_EVERY);
     let mut buf = vec![Iq::new(0.0, 0.0); CHUNK];
@@ -71,14 +102,29 @@ pub fn run(
     while !stop.load(Ordering::Relaxed) {
         for command in commands.try_iter() {
             let done = match command {
-                Command::Tune(center_hz) => source.tune(center_hz),
-                Command::Gain(change) => source.set_gain(change),
+                Command::Tune(center_hz) => match source.tune(center_hz) {
+                    Ok(()) => {
+                        // What is held was another band.
+                        ring.clear();
+                        Ok(Some(Update::Source(source.info())))
+                    }
+                    Err(err) => Err(err.to_string()),
+                },
+                Command::Gain(change) => match source.set_gain(change) {
+                    Ok(()) => Ok(Some(Update::Source(source.info()))),
+                    Err(err) => Err(err.to_string()),
+                },
+                // Whoever writes the file says when it is done.
+                Command::SaveIq(event) => {
+                    hand_over(&ring, event, source.info(), cuts.as_ref()).map(|()| None)
+                }
             };
             // The answer to a key press must not get lost: wait for room.
-            let _ = updates.send(match done {
-                Ok(()) => Update::Source(source.info()),
-                Err(err) => Update::Notice(err.to_string()),
-            });
+            let _ = match done {
+                Ok(Some(update)) => updates.send(update),
+                Ok(None) => Ok(()),
+                Err(why) => updates.send(Update::Notice(why)),
+            };
         }
         match source.read(&mut buf) {
             Ok(0) => {
@@ -91,6 +137,7 @@ pub fn run(
                 break;
             }
             Ok(n) => {
+                ring.push(&buf[..n]);
                 pipeline.push(&buf[..n], &source.info(), |output| match output {
                     Output::Frame(frame, levels) => {
                         let _ = updates.try_send(Update::Frame(frame, levels));
@@ -123,22 +170,64 @@ pub fn run(
     keep(pipeline.finish());
 }
 
+/// Cuts the samples of `event` out of the ring and hands them to whoever
+/// saves them: the copy is quick, the disk is not the reader's to wait for.
+fn hand_over(
+    ring: &IqRing,
+    event: Event,
+    source: SourceInfo,
+    cuts: Option<&Sender<Cut>>,
+) -> Result<(), String> {
+    let Some(cuts) = cuts else {
+        return Err("nowhere to save samples: name a directory with --iq-dir".into());
+    };
+    if ring.capacity() == 0 {
+        return Err("no samples are held: --iq-buffer is 0".into());
+    }
+    let rate = f64::from(source.sample_rate);
+    let sample = |time: Duration| (time.as_secs_f64() * rate).round() as u64;
+    let held = ring.held();
+    let (start, end) = (sample(event.start), sample(event.start + event.duration));
+    if end <= held.start || start >= held.end {
+        return Err(format!(
+            "this event's samples are gone: the last {} s on this frequency are held",
+            ring.capacity() as f64 / rate
+        ));
+    }
+    let around = sample(AROUND_EVENT);
+    let first_sample = start.saturating_sub(around).max(held.start);
+    let cut = Cut {
+        samples: ring.copy(first_sample..end + around),
+        first_sample,
+        source,
+        event,
+    };
+    cuts.send(cut)
+        .map_err(|_| "the thread that saves samples has stopped".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pipeline::FFT_SIZE;
-    use sdr_core::GainChange;
     use sdr_core::file::{FileSource, SampleFormat};
     use sdr_core::generator::{Generator, GeneratorConfig};
-    use sdr_core::{SourceError, SourceInfo};
+    use sdr_core::{GainChange, SourceError};
     use std::io::Cursor;
-    use std::sync::mpsc::{channel, sync_channel};
+    use std::sync::mpsc::{Sender, channel, sync_channel};
 
     fn info() -> SourceInfo {
         SourceInfo {
             sample_rate: 1000,
             center_hz: 1e6,
             description: "test".into(),
+        }
+    }
+
+    fn events_to(store: Sender<Vec<Event>>) -> Sinks {
+        Sinks {
+            events: Some(store),
+            ..Sinks::default()
         }
     }
 
@@ -151,14 +240,14 @@ mod tests {
         let (tx, rx) = sync_channel(64);
         let (command_tx, command_rx) = channel();
         for command in commands {
-            command_tx.send(*command).unwrap();
+            command_tx.send(command.clone()).unwrap();
         }
         run(
             source,
             tx,
             command_rx,
             Arc::new(AtomicBool::new(false)),
-            None,
+            Sinks::default(),
         );
         rx.try_iter().collect()
     }
@@ -259,7 +348,7 @@ mod tests {
         let (_command_tx, command_rx) = channel();
         let (store_tx, store_rx) = channel();
         let stop = Arc::new(AtomicBool::new(false));
-        run(demo(), tx, command_rx, stop, Some(store_tx));
+        run(demo(), tx, command_rx, stop, events_to(store_tx));
         let stored: Vec<Event> = store_rx.iter().flatten().collect();
         // The burst, then the carrier, ended where reading stopped.
         assert_eq!(stored.len(), 2, "{stored:?}");
@@ -278,7 +367,7 @@ mod tests {
         let source = Announced(demo(), over_tx);
         let reader = std::thread::spawn(move || {
             let stop = Arc::new(AtomicBool::new(false));
-            run(source, tx, command_rx, stop, Some(store_tx));
+            run(source, tx, command_rx, stop, events_to(store_tx));
         });
         over_rx.recv().unwrap();
         // The burst is stored before the interface has taken anything.
@@ -322,7 +411,7 @@ mod tests {
                 tx,
                 command_rx,
                 Arc::new(AtomicBool::new(false)),
-                None,
+                Sinks::default(),
             );
         });
         over_rx.recv().unwrap();
@@ -396,6 +485,144 @@ mod tests {
         }
     }
 
+    /// Sends each command when the read of its number is asked for.
+    struct Asking(Brief, usize, Vec<(usize, Command)>, Sender<Command>);
+
+    impl Source for Asking {
+        fn info(&self) -> SourceInfo {
+            self.0.info()
+        }
+        fn read(&mut self, buf: &mut [Iq]) -> Result<usize, SourceError> {
+            for (_, command) in self.2.iter().filter(|(at, _)| *at == self.1) {
+                self.3.send(command.clone()).unwrap();
+            }
+            self.1 += 1;
+            self.0.read(buf)
+        }
+        fn tune(&mut self, center_hz: f64) -> Result<(), SourceError> {
+            self.0.tune(center_hz)
+        }
+    }
+
+    /// An event of the demo's stream from `start_ms`, `ms` long.
+    fn event(start_ms: u64, ms: u64) -> Event {
+        Event {
+            start: Duration::from_millis(start_ms),
+            duration: Duration::from_millis(ms),
+            low_hz: 434.19e6,
+            high_hz: 434.21e6,
+            peak_hz: 434.2e6,
+            peak_dbfs: -25.0,
+            above_floor_db: 66.0,
+        }
+    }
+
+    /// What the reader cuts and says when 1.4 s of the demo are read with
+    /// a ring of `ring_s` seconds and `asks` are made at their reads (a
+    /// read is 16 384 samples: 6.8 ms).
+    fn cuts(ring_s: f64, asks: &[(usize, Command)]) -> (Vec<Cut>, Vec<String>) {
+        let (tx, rx) = sync_channel(1024);
+        let (command_tx, command_rx) = channel();
+        let (cut_tx, cut_rx) = channel();
+        let source = Asking(demo(), 0, asks.to_vec(), command_tx);
+        let sinks = Sinks {
+            ring: IqRing::for_seconds(ring_s, 2_400_000),
+            cuts: Some(cut_tx),
+            ..Sinks::default()
+        };
+        run(
+            source,
+            tx,
+            command_rx,
+            Arc::new(AtomicBool::new(false)),
+            sinks,
+        );
+        let notices = rx.try_iter().filter_map(|update| match update {
+            Update::Notice(notice) => Some(notice),
+            _ => None,
+        });
+        (cut_rx.try_iter().collect(), notices.collect())
+    }
+
+    #[test]
+    fn an_events_samples_are_cut_from_the_ring_with_some_before_and_after() {
+        // Asked 1.02 s into the stream for an event of 0.5 to 0.6 s.
+        let (cuts, notices) = cuts(2.0, &[(150, Command::SaveIq(event(500, 100)))]);
+        assert_eq!(notices, [] as [String; 0]);
+        assert_eq!(cuts.len(), 1);
+        let cut = &cuts[0];
+        // 50 ms on each side: 0.45 to 0.65 s at 2.4 MS/s.
+        assert_eq!(cut.first_sample, 1_080_000);
+        assert_eq!(cut.samples.len(), 480_000);
+        assert_eq!(cut.event, event(500, 100));
+        assert_eq!(cut.source.center_hz, 433.92e6);
+        // They are the samples the source gave then.
+        let mut generator = Generator::new(GeneratorConfig::demo());
+        let mut buf = vec![Iq::new(0.0, 0.0); 1_560_000];
+        generator.read(&mut buf).unwrap();
+        let mut ring = IqRing::new(480_000);
+        ring.push(&buf);
+        assert_eq!(cut.samples, ring.copy(1_080_000..1_560_000));
+    }
+
+    #[test]
+    fn an_event_is_cut_as_far_as_the_ring_and_the_stream_reach() {
+        // The ring holds 0.5 s; the commands sent in read 150 are carried
+        // out after it, 151 reads into the stream.
+        let read = 151 * 16_384;
+        let asks = [
+            (150, Command::SaveIq(event(400, 200))),
+            (150, Command::SaveIq(event(1_000, 500))),
+        ];
+        let (cuts, notices) = cuts(0.5, &asks);
+        assert_eq!(notices, [] as [String; 0]);
+        let held_from = read - 1_200_000;
+        assert_eq!(cuts[0].first_sample, held_from);
+        assert_eq!(cuts[0].samples.len() as u64, 1_560_000 - held_from);
+        // An event still on is cut up to now.
+        assert_eq!(cuts[1].first_sample, 2_280_000);
+        assert_eq!(cuts[1].samples.len() as u64, read - 2_280_000);
+    }
+
+    #[test]
+    fn an_event_that_left_the_ring_cannot_be_saved() {
+        let (cuts, notices) = cuts(0.5, &[(150, Command::SaveIq(event(100, 50)))]);
+        assert!(cuts.is_empty());
+        assert_eq!(
+            notices,
+            ["this event's samples are gone: the last 0.5 s on this frequency are held"]
+        );
+    }
+
+    #[test]
+    fn retuning_empties_the_ring() {
+        let asks = [
+            (100, Command::Tune(100e6)),
+            (150, Command::SaveIq(event(500, 100))),
+            (150, Command::SaveIq(event(900, 50))),
+        ];
+        let (cuts, notices) = cuts(2.0, &asks);
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("samples are gone"), "{notices:?}");
+        assert_eq!(cuts.len(), 1);
+        assert_eq!(cuts[0].event, event(900, 50));
+        assert_eq!(cuts[0].source.center_hz, 100e6);
+    }
+
+    #[test]
+    fn without_a_ring_or_a_place_to_save_the_reader_says_so() {
+        let (cuts, notices) = cuts(0.0, &[(150, Command::SaveIq(event(500, 100)))]);
+        assert!(cuts.is_empty());
+        assert_eq!(notices, ["no samples are held: --iq-buffer is 0"]);
+
+        let save = [Command::SaveIq(event(0, 100))];
+        let got = updates_after(Brief(Generator::new(GeneratorConfig::demo()), 2), &save);
+        assert_eq!(
+            got[0],
+            Update::Notice("nowhere to save samples: name a directory with --iq-dir".into())
+        );
+    }
+
     #[test]
     fn reports_a_failure_with_its_message() {
         assert_eq!(
@@ -414,7 +641,7 @@ mod tests {
             tx,
             command_rx,
             Arc::new(AtomicBool::new(true)),
-            None,
+            Sinks::default(),
         );
         assert!(rx.try_recv().is_err());
     }

@@ -4,6 +4,7 @@ mod cli;
 mod keep;
 mod pipeline;
 mod reader;
+mod save;
 mod snapshot;
 mod writer;
 
@@ -15,10 +16,11 @@ use std::time::{Duration, SystemTime};
 
 use clap::Parser;
 use ratatui::crossterm::event::{self, Event};
+use sdr_core::IqRing;
 use sdr_tui::log::WallClock;
 use sdr_tui::{App, ui};
 
-use crate::reader::Update;
+use crate::reader::{Sinks, Update};
 
 /// How long the interface waits for a key before looking for new frames.
 const TICK: Duration = Duration::from_millis(25);
@@ -72,9 +74,33 @@ fn main() -> ExitCode {
         }
         None => (None, None),
     };
+    // Samples are saved by a thread of their own; only a receiver's
+    // stream runs by the wall clock.
+    let (cuts_tx, saver) = match cli::iq_dir(&args, |name| std::env::var(name).ok()) {
+        Some(dir) => {
+            let (cuts_tx, cuts_rx) = channel();
+            let updates = updates_tx.clone();
+            let clock = args.rtlsdr.then_some(started);
+            let saver = std::thread::spawn(move || {
+                save::run(cuts_rx, &dir, clock, |told| {
+                    let _ = updates.send(match told {
+                        Ok(done) => Update::Done(done),
+                        Err(notice) => Update::Notice(notice),
+                    });
+                });
+            });
+            (Some(cuts_tx), Some(saver))
+        }
+        None => (None, None),
+    };
+    let sinks = Sinks {
+        events: store_tx,
+        ring: IqRing::for_seconds(args.iq_buffer, source.info().sample_rate),
+        cuts: cuts_tx,
+    };
     let reader = {
         let stop = Arc::clone(&stop);
-        std::thread::spawn(move || reader::run(source, updates_tx, commands_rx, stop, store_tx))
+        std::thread::spawn(move || reader::run(source, updates_tx, commands_rx, stop, sinks))
     };
 
     let mut terminal = ratatui::init();
@@ -99,6 +125,7 @@ fn main() -> ExitCode {
                     }
                     Update::Source(info) => app.source = info,
                     Update::Notice(notice) => app.notice = Some(notice),
+                    Update::Done(done) => app.done = Some(done),
                 }
                 dirty = true;
             }
@@ -131,6 +158,10 @@ fn main() -> ExitCode {
     // The reader has handed over its last events; let them reach the disk.
     if let Some(writer) = writer {
         let _ = writer.join();
+    }
+    // And a recording asked for a moment ago be written to its end.
+    if let Some(saver) = saver {
+        let _ = saver.join();
     }
     match result {
         Ok(()) => ExitCode::SUCCESS,
