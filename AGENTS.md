@@ -69,8 +69,9 @@ request gets no run: open a draft one to get a binary.
 - `scripts/term-check.sh` — can this terminal show truecolor, bars, half
   blocks, Braille.
 - `scripts/hub-speed.sh` — for the user's device, installed there as
-  `/usr/local/sbin/sdr-hub-speed` (root): `high [--while-pid PID]` puts the
-  hub at 480M for the RTL-SDR and unbinds the kernel's DVB driver, `full`
+  `/usr/local/sbin/sdr-hub-speed` (root): `high [--while-pid PID]` powers
+  the RTL-SDR (GPIO 7), puts the hub at 480M for it, waits for it on the
+  bus and unbinds the kernel's DVB driver, `full`
   returns to 12M, `status`.
 - `scripts/sdr-viewer-rx.sh ARGS` — on the device: `high` for as long as
   `sdr-viewer --rtlsdr ARGS` runs, then back, however the app exits.
@@ -273,4 +274,8 @@ measure on the device, the Mac's numbers do not scale.
   was first "measured" with the smoke's default keys, which leave the app
   on a placeholder, and compared with numbers taken on the spectrum. Name
   the keys with every number, and re-measure the old build alongside.
+- **"No device found" after a reboot is the SDR's power, not USB.** The
+  AIO board's GPIO 7 was high in phase 0 only because the user had set it
+  by hand; a boot leaves it undriven. Look at `pinctrl get 7` and at the
+  shell history before suspecting the hub (`docs/hardware.md`, section 4).
 - **zsh**: `"$H:path"` applies a modifier to `$H`; write `"${H}:path"`.

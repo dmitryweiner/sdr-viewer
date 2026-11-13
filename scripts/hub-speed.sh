@@ -8,8 +8,10 @@
 #   sudo sdr-hub-speed full                     # 12M, the normal state
 #   sdr-hub-speed status
 #
-# `high` also unbinds the kernel's DVB driver from the RTL-SDR, which our
-# driver cannot do itself. With --while-pid a watcher switches back to
+# `high` also switches the RTL-SDR's power on (GPIO 7 of the AIO V2 board:
+# after a boot nothing drives it, and the receiver is not on the bus at
+# all), waits for the receiver to appear, and unbinds the kernel's DVB
+# driver from it, which our driver cannot do itself. The power stays on. With --while-pid a watcher switches back to
 # `full` when that process exits, however it exits. The switch is a flag
 # file in /run that the udev rule of the workaround checks
 # (TEST!="/run/sdr-viewer-high-speed"), so a reboot always returns to 12M.
@@ -20,6 +22,7 @@ DRV=/sys/bus/platform/drivers/dwc2
 CTRL=fe980000.usb
 HUB=/sys/bus/usb/devices/1-1
 DVB=/sys/bus/usb/drivers/dvb_usb_rtl28xxu
+SDR_POWER_PIN=7
 
 speed() { cat $HUB/speed 2>/dev/null || echo none; }
 
@@ -43,6 +46,20 @@ settle() {
   return 1
 }
 
+# True once a 0bda:2838 is on the bus; gives it 10 s.
+rtl_present() {
+  i=0
+  while [ $i -lt 20 ]; do
+    for dev in /sys/bus/usb/devices/*; do
+      [ "$(cat "$dev/idVendor" 2>/dev/null)" = 0bda ] &&
+        [ "$(cat "$dev/idProduct" 2>/dev/null)" = 2838 ] && return 0
+    done
+    sleep 0.5
+    i=$((i + 1))
+  done
+  return 1
+}
+
 unbind_dvb() {
   i=0
   while [ $i -lt 20 ]; do
@@ -60,11 +77,17 @@ unbind_dvb() {
 case "${1:-}" in
   status) ;;
   high)
+    pinctrl set $SDR_POWER_PIN op dh
     touch $FLAG
     [ "$(speed)" = 480 ] || rebind
     if ! settle 480; then
       rm -f $FLAG; rebind; settle 12
       echo "the hub did not come up at 480M; now $(speed)M" >&2
+      exit 1
+    fi
+    if ! rtl_present; then
+      rm -f $FLAG; rebind; settle 12
+      echo "no RTL-SDR (0bda:2838) on the bus with GPIO $SDR_POWER_PIN high; the hub is back at $(speed)M" >&2
       exit 1
     fi
     unbind_dvb
