@@ -17,15 +17,13 @@ Phases of the plan (its section 14 has the detail):
 | 0 Hardware check | done — `docs/hardware.md` |
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
-| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; next the reference recording and the overload indicator |
+| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; next the overload indicator |
 | 4–8 | not started |
 
 Left in phase 3, in the order agreed with the user (the plan's section 14
 has the reasons):
 
-1. A short reference recording in the repository for the detector's
-   regression tests, cut from `capture-433.cu8`.
-2. An overload indicator and the count of dropped transfers.
+1. An overload indicator and the count of dropped transfers.
 
 ## Commands
 
@@ -114,7 +112,8 @@ touching USB.
   gain 30 dB, antenna on: LPD433 activity over a −71 dBFS floor. The
   detector finds 824 events in it: mostly 40–50 ms bursts ~9 kHz wide on
   the 25 kHz LPD grid (433.075 MHz + n × 25 kHz) over some 66 channels — a
-  frequency hopper. The reference recording until the detector has its own.
+  frequency hopper. `testdata/lpd433.cu8` in the repository is 0.16 s of
+  it, from 4.96 s.
 - Not set up yet: `meshtasticd` (LoRa is on `/dev/spidev4.0`), `gpsd`
   (installed, not configured), `aiov2_ctl`.
 - The terminal there: lxterminal, truecolor; the user sets the font size.
@@ -127,6 +126,7 @@ touching USB.
 | [plans/PLAN.md](plans/PLAN.md) | The agreed plan: screens, architecture, phases, decisions (12), open questions (13), progress (14) |
 | [docs/hardware.md](docs/hardware.md) | What phase 0 found on the device, and what is installed there |
 | [docs/hardware-check.md](docs/hardware-check.md) | The phase 0 checklist, for another device |
+| [testdata/README.md](testdata/README.md) | The recordings tests run on: what they are and how they were cut |
 
 ## Layout
 
@@ -219,6 +219,9 @@ a crate is added in the phase that needs it):
   reader thread carries them out and answers with `Update::Source` or
   `Update::Notice`.
 - `unsafe_code = "forbid"` across the workspace.
+- The numbers of the reference recording's tests (`pipeline.rs`) change
+  only on purpose too: look at what the detector now finds in
+  `testdata/lpd433.cu8` first.
 - `ui` snapshots change only on purpose: review `cargo insta review` (or
   `INSTA_UPDATE=always cargo test` and read the diff) before committing.
 - Each feature gets its own branch and a pull request.
