@@ -17,13 +17,12 @@ Phases of the plan (its section 14 has the detail):
 | 0 Hardware check | done — `docs/hardware.md` |
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
-| 3 Detector and log | **built, pull requests #14–#18 open**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples. Not yet tried on the air on the device |
+| 3 Detector and log | done, and found working on the air on the device by the user (2026-11-13): the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples |
 | 4–8 | not started |
 
-Nothing is left of phase 3's list. Before phase 4: merge #14–#18 in
-order (they are stacked), and one run on the air on the device with the
-user at it (the plan's section 14, "Known limits", says what has only
-seen the recording).
+Phase 4 (channel strip, spectral density, periodicity — the plan's
+sections 5.2–5.4 and 8) is next; nothing of it is started or agreed in
+detail.
 
 ## Commands
 
@@ -100,16 +99,19 @@ touching USB.
   `~/sdr-viewer-check/sdr-viewer`. What lies there now is PR #18's build
   (the threshold line on the spectrum, the IQ ring, the picture and `r` in
   the log, overload and lost samples in the status line), with PR #15's
-  `smoke.py` (arrow keys). Nobody has looked at
-  that build in the device's own terminal yet: how lxterminal's font draws
-  the Braille threshold line and the picture is for the user's eye. Saving IQ was tried there on the recording with
+  `smoke.py` (arrow keys). The user has run it on
+  the air there and found it working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-- The default database `~/.local/share/sdr-viewer/events.db` does not
-  exist on the device yet: since the database was added nobody has
-  received from the RTL-SDR there, so that path is proven only by tests.
-  Checks with a database used `--db test.db` in `~/sdr-viewer-check/` and
-  removed it.
+- The user has received from the RTL-SDR there since the database was
+  added, so `~/.local/share/sdr-viewer/events.db` should hold real
+  events now (not looked at: the device was off). Our own checks with a
+  database used `--db test.db` in `~/sdr-viewer-check/` and removed it.
+- Whether the installed `/usr/local/sbin/sdr-hub-speed` is the one that
+  powers the SDR (PR #19) is not known: compare it with
+  `scripts/hub-speed.sh` before relying on it, and ask before installing.
+- **SDR and LoRa are never used at the same time** (the user's decision):
+  GPIO 7 is the SDR's power and SPI4's clock, and that is fine.
 - `~/sdr-viewer-check/capture-433.cu8` — 10 s at 433.92 MHz, 2.4 MS/s,
   gain 30 dB, antenna on: LPD433 activity over a −71 dBFS floor. The
   detector finds 824 events in it: mostly 40–50 ms bursts ~9 kHz wide on
