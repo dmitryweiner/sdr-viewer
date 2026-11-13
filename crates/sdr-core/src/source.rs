@@ -68,6 +68,12 @@ pub trait Source: Send {
     fn set_gain(&mut self, _change: GainChange) -> Result<(), SourceError> {
         Err(SourceError::Unsupported("this source has no gain"))
     }
+
+    /// Samples the receiver delivered and nobody took in time, since the
+    /// start: holes in the stream. Only hardware has them.
+    fn lost_samples(&self) -> u64 {
+        0
+    }
 }
 
 impl<S: Source + ?Sized> Source for Box<S> {
@@ -85,5 +91,9 @@ impl<S: Source + ?Sized> Source for Box<S> {
 
     fn set_gain(&mut self, change: GainChange) -> Result<(), SourceError> {
         (**self).set_gain(change)
+    }
+
+    fn lost_samples(&self) -> u64 {
+        (**self).lost_samples()
     }
 }

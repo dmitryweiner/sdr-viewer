@@ -108,6 +108,23 @@ pub struct SourceStatus {
     /// Samples per second actually received.
     pub rate: f64,
     pub state: SourceState,
+    /// The share of the latest samples that were at full scale, 0 to 1:
+    /// the receiver is overloaded.
+    pub clipped: f64,
+    /// Samples lost since the start because nobody took them in time.
+    pub lost: u64,
+}
+
+impl SourceStatus {
+    /// A source in `state` with nothing clipped and nothing lost.
+    pub fn new(state: SourceState, rate: f64) -> Self {
+        SourceStatus {
+            rate,
+            state,
+            clipped: 0.0,
+            lost: 0,
+        }
+    }
 }
 
 /// What the interface asks of the source; the reader thread carries it out.
@@ -155,10 +172,7 @@ impl App {
             help: false,
             quit: false,
             source,
-            status: SourceStatus {
-                rate: 0.0,
-                state: SourceState::Running,
-            },
+            status: SourceStatus::new(SourceState::Running, 0.0),
             spectrum: SpectrumView::default(),
             log: LogView::default(),
             commands: Vec::new(),

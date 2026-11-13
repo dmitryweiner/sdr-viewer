@@ -17,13 +17,13 @@ Phases of the plan (its section 14 has the detail):
 | 0 Hardware check | done — `docs/hardware.md` |
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
-| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; next the overload indicator |
+| 3 Detector and log | **built, pull requests #14–#18 open**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples. Not yet tried on the air on the device |
 | 4–8 | not started |
 
-Left in phase 3, in the order agreed with the user (the plan's section 14
-has the reasons):
-
-1. An overload indicator and the count of dropped transfers.
+Nothing is left of phase 3's list. Before phase 4: merge #14–#18 in
+order (they are stacked), and one run on the air on the device with the
+user at it (the plan's section 14, "Known limits", says what has only
+seen the recording).
 
 ## Commands
 
@@ -96,9 +96,10 @@ touching USB.
   no data and reset the hub.
 - A new binary: download the PR's `sdr-viewer-aarch64` artifact
   (`gh run download RUN -n sdr-viewer-aarch64`) and `scp` it to
-  `~/sdr-viewer-check/sdr-viewer`. What lies there now is PR #16's build
+  `~/sdr-viewer-check/sdr-viewer`. What lies there now is PR #18's build
   (the threshold line on the spectrum, the IQ ring, the picture and `r` in
-  the log), with PR #15's `smoke.py` (arrow keys). Nobody has looked at
+  the log, overload and lost samples in the status line), with PR #15's
+  `smoke.py` (arrow keys). Nobody has looked at
   that build in the device's own terminal yet: how lxterminal's font draws
   the Braille threshold line and the picture is for the user's eye. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
@@ -133,8 +134,8 @@ touching USB.
 A Cargo workspace under `crates/` (the plan's section 4 lists all eight;
 a crate is added in the phase that needs it):
 
-- `sdr-core` — `Source` trait (`read`, `tune`, `set_gain`) and `Iq`
-  samples; `generator` (seeded tones, gated bursts, noise), `file` (raw IQ
+- `sdr-core` — `Source` trait (`read`, `tune`, `set_gain`,
+  `lost_samples`) and `Iq` samples; `clip` (samples at full scale); `generator` (seeded tones, gated bursts, noise), `file` (raw IQ
   formats, looping), `pace` (real-time playback, `Clock` trait), `rate`
   (`RateMeter`), `units` (parse/format Hz), `frame` (`SpectrumFrame`: dBFS
   per bin, lowest frequency first), `ring` (`IqRing`: the newest samples
@@ -186,6 +187,8 @@ a crate is added in the phase that needs it):
   status and drops what the UI has no room for.
 - Sources that are not hardware are wrapped in `Paced`; hardware paces
   itself.
+- Overload is counted on the samples (a part at ±1.0, an 8-bit
+  receiver's bytes 0 and 255), never guessed from the spectrum.
 - Levels are dBFS: a full-scale tone on a bin reads 0. Power is averaged,
   never decibels. Frames run from the lowest frequency up, the centre is
   bin `len / 2`.
@@ -243,6 +246,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | The event database on the CM4 (`smoke.py --keys 5`, the recording, with and without `--db`) | nothing measurable: 22% against 21–22% of one core. The file grows ~93 bytes an event: on the recording's band (~80 events a second) that is ~660 MB a day of reception |
 | The IQ ring buffer (30 s; with and without `--iq-buffer 0`) | `bench_ring` on the Mac: 0.3 ns/sample; 153 MB resident after 40 s, as computed (144 MB + the app). **On the CM4**, the recording, 15 s: spectrum (`--keys 1`) 32 → 34% of a core, log (`--keys 5`) 21 → 22%. With a bounds check and a wrap test per sample it was 4 points, not 1–2 |
 | The picture of the selected event on the CM4 (the recording, 15 s, `smoke.py --keys 5` plus down arrows) | the log alone **22%** of a core; a row held with its picture **19%** (the list stands still); a new picture every 0.36 s (40 downs) **26%** |
+| Counting clipped samples on the CM4 (the recording, 15 s, before and after) | within a point: spectrum 34 → 35% of a core, log 22 → 23% |
 | Static aarch64 binary from CI | 4.6 MB with SQLite compiled in (2.4 before) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:

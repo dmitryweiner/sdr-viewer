@@ -89,6 +89,10 @@ impl<S: Source, C: Clock> Source for Paced<S, C> {
     fn set_gain(&mut self, change: GainChange) -> Result<(), SourceError> {
         self.inner.set_gain(change)
     }
+
+    fn lost_samples(&self) -> u64 {
+        self.inner.lost_samples()
+    }
 }
 
 #[cfg(test)]

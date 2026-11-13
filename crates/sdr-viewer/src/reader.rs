@@ -110,7 +110,17 @@ pub fn run(
     // not taken yet.
     let mut fresh: Vec<Event> = Vec::new();
     let mut events: Vec<Event> = Vec::new();
-    let status = |state, rate| Update::Status(SourceStatus { rate, state });
+    // Samples at full scale and all samples since the last report.
+    let (mut clipped, mut seen) = (0u64, 0u64);
+    let status = |state, rate, clipped: f64, lost| {
+        Update::Status(SourceStatus {
+            rate,
+            state,
+            clipped,
+            lost,
+        })
+    };
+    let share = |clipped: u64, seen: u64| clipped as f64 / seen.max(1) as f64;
     let keep = |events: Vec<Event>| {
         if let (Some(store), false) = (&store, events.is_empty()) {
             let _ = store.send(events);
@@ -166,10 +176,18 @@ pub fn run(
                 }
                 let _ = updates.send(Update::OpenEvents(pipeline.open_events()));
                 // The end must not get lost either: wait for room.
-                let _ = updates.send(status(SourceState::Ended, 0.0));
+                let state = status(
+                    SourceState::Ended,
+                    0.0,
+                    share(clipped, seen),
+                    source.lost_samples(),
+                );
+                let _ = updates.send(state);
                 break;
             }
             Ok(n) => {
+                clipped += sdr_core::clip::clipped(&buf[..n]) as u64;
+                seen += n as u64;
                 ring.push(&buf[..n]);
                 pipeline.push(&buf[..n], &source.info(), |output| match output {
                     Output::Frame(frame, levels) => {
@@ -191,11 +209,24 @@ pub fn run(
                 }
                 if meter.record(started.elapsed(), n as u64) {
                     let _ = updates.try_send(Update::OpenEvents(pipeline.open_events()));
-                    let _ = updates.try_send(status(SourceState::Running, meter.rate()));
+                    let state = status(
+                        SourceState::Running,
+                        meter.rate(),
+                        share(clipped, seen),
+                        source.lost_samples(),
+                    );
+                    let _ = updates.try_send(state);
+                    (clipped, seen) = (0, 0);
                 }
             }
             Err(err) => {
-                let _ = updates.send(status(SourceState::Failed(err.to_string()), 0.0));
+                let state = status(
+                    SourceState::Failed(err.to_string()),
+                    0.0,
+                    share(clipped, seen),
+                    source.lost_samples(),
+                );
+                let _ = updates.send(state);
                 break;
             }
         }
@@ -330,7 +361,7 @@ mod tests {
     #[test]
     fn a_refused_command_comes_back_as_a_notice_and_reading_goes_on() {
         let source = FileSource::new(
-            Cursor::new(vec![0u8; 100]),
+            Cursor::new(vec![127u8; 100]),
             SampleFormat::Cu8,
             info(),
             false,
@@ -343,10 +374,7 @@ mod tests {
                 Update::Notice("not supported: a recording cannot be retuned".into()),
                 Update::Notice("not supported: this source has no gain".into()),
                 Update::OpenEvents(Vec::new()),
-                Update::Status(SourceStatus {
-                    rate: 0.0,
-                    state: SourceState::Ended
-                }),
+                Update::Status(SourceStatus::new(SourceState::Ended, 0.0)),
             ]
         );
     }
@@ -495,6 +523,38 @@ mod tests {
         assert_eq!(frames[0].power_db.len(), FFT_SIZE);
         assert_eq!(frames[0].center_hz, 1e6);
         assert_eq!(frames[1].time, Duration::from_secs_f64(0.1024));
+    }
+
+    #[test]
+    fn the_status_tells_the_share_of_clipped_samples_and_those_lost() {
+        // Every fourth sample has a part at full scale.
+        let bytes: Vec<u8> = (0..4000u32)
+            .flat_map(|i| if i % 4 == 0 { [255, 127] } else { [127, 128] })
+            .collect();
+        let source = FileSource::new(Cursor::new(bytes), SampleFormat::Cu8, info(), false);
+        let status = last_status(source);
+        assert_eq!(status.clipped, 0.25);
+        assert_eq!(status.lost, 0);
+
+        /// A receiver that has dropped two transfers.
+        struct Leaky(Brief);
+        impl Source for Leaky {
+            fn info(&self) -> SourceInfo {
+                self.0.info()
+            }
+            fn read(&mut self, buf: &mut [Iq]) -> Result<usize, SourceError> {
+                self.0.read(buf)
+            }
+            fn tune(&mut self, center_hz: f64) -> Result<(), SourceError> {
+                self.0.tune(center_hz)
+            }
+            fn lost_samples(&self) -> u64 {
+                65_536
+            }
+        }
+        let status = last_status(Leaky(Brief(Generator::new(GeneratorConfig::demo()), 3)));
+        assert_eq!(status.lost, 65_536);
+        assert_eq!(status.clipped, 0.0);
     }
 
     #[test]

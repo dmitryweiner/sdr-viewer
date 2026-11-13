@@ -139,7 +139,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             SourceState::Failed(message) => Span::raw(format!("error: {message}")).red(),
         },
     };
-    let left = Line::from(vec![
+    let mut left = vec![
         Span::raw(app.source.description.clone()).bold(),
         separator(),
         Span::raw(format_hz(app.source.center_hz)),
@@ -147,7 +147,11 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         Span::raw(format_rate(f64::from(app.source.sample_rate))),
         separator(),
         state,
-    ]);
+    ];
+    if app.notice.is_none() && app.done.is_none() {
+        left.extend(health(app));
+    }
+    let left = Line::from(left);
     let right = Line::from(vec![
         Span::raw("?").yellow(),
         Span::raw(" help  "),
@@ -191,6 +195,35 @@ fn draw_help(frame: &mut Frame, body: Rect) {
     );
 }
 
+/// Clipped samples from this share on are told; from `OVERLOAD` in red.
+const CLIP_WORTH_TELLING: f64 = 0.001;
+const OVERLOAD: f64 = 0.01;
+
+/// What is wrong with reception, if anything: the receiver overloaded,
+/// samples lost.
+fn health(app: &App) -> Vec<Span<'static>> {
+    let status = &app.status;
+    let mut spans = Vec::new();
+    if status.clipped >= CLIP_WORTH_TELLING {
+        let percent = status.clipped * 100.0;
+        let text = if percent < 10.0 {
+            format!(" · clip {percent:.1}%")
+        } else {
+            format!(" · clip {percent:.0}%")
+        };
+        spans.push(if status.clipped >= OVERLOAD {
+            Span::raw(text).red()
+        } else {
+            Span::raw(text).yellow()
+        });
+    }
+    if status.lost > 0 {
+        let seconds = status.lost as f64 / f64::from(app.source.sample_rate.max(1));
+        spans.push(Span::raw(format!(" · lost {seconds:.2} s")).red());
+    }
+    spans
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,10 +238,7 @@ mod tests {
             center_hz: 433.92e6,
             description: "generator".into(),
         });
-        app.status = SourceStatus {
-            rate: 2_398_000.0,
-            state: SourceState::Running,
-        };
+        app.status = SourceStatus::new(SourceState::Running, 2_398_000.0);
         app
     }
 
@@ -316,6 +346,34 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("rx 2.398"), "{text}");
+    }
+
+    #[test]
+    fn overload_and_lost_samples_are_told_beside_the_rate() {
+        let mut app = app();
+        let text = render_text(&app, 100, 24);
+        assert!(!text.contains("clip") && !text.contains("lost"), "{text}");
+        // A few clipped peaks are not worth a word.
+        app.status.clipped = 0.0004;
+        assert!(!render_text(&app, 100, 24).contains("clip"));
+        app.status.clipped = 0.004;
+        app.status.lost = 1_200_000;
+        let text = render_text(&app, 100, 24);
+        assert!(
+            text.contains("rx 2.398 MS/s · clip 0.4% · lost 0.50 s"),
+            "{text}"
+        );
+        app.status.clipped = 0.127;
+        assert!(render_text(&app, 100, 24).contains("· clip 13% ·"));
+        let terminal = render(&app, 100, 24);
+        let buffer = terminal.backend().buffer();
+        let x = (0..100)
+            .find(|&x| buffer[(x, 23)].symbol() == "c" && buffer[(x + 1, 23)].symbol() == "l")
+            .unwrap();
+        assert_eq!(buffer[(x, 23)].fg, Color::Red);
+        // They stay when the stream has ended.
+        app.status.state = SourceState::Ended;
+        assert!(render_text(&app, 100, 24).contains("ended · clip 13% · lost 0.50 s"));
     }
 
     #[test]
