@@ -355,13 +355,12 @@ As of 2026-11-12.
 | 0 | Hardware check | Done: `docs/hardware.md`. CM4 with 8 GB, R820T tuner, `rtl-sdr-rs` works, truecolor terminal. The device's hub is defective: see the decision "Defective USB hub" |
 | 1 | Skeleton | Done: workspace, CI with a static aarch64 binary, generator and file sources, tabs |
 | 2 | Spectrum and waterfall | Done on the generator, recordings and the RTL-SDR: bars with max hold, waterfall, a scale that follows the noise floor, cursor, tuning (`f`, `[` `]`, Enter), gain, zoom, pause, `--snapshot` |
-| 3 | Detector and log | In progress. Done: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. The spectrum shows the detector's threshold as a line and the dB above the floor in its header. The last 30 s of samples are held in a ring buffer; the log shows the picture of the selected event made of them, and `r` saves them as SigMF. Next: the reference recording, the overload indicator |
+| 3 | Detector and log | In progress. Done: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. The spectrum shows the detector's threshold as a line and the dB above the floor in its header. The last 30 s of samples are held in a ring buffer; the log shows the picture of the selected event made of them, and `r` saves them as SigMF. The detector has regression tests on a piece of real air (`testdata/`). Next: the overload indicator |
 | 4–8 | | Not started |
 
 Left in phase 3, in the agreed order:
 
-1. **A short reference recording in the repository** — see below.
-2. **An overload indicator and the count of dropped transfers.**
+1. **An overload indicator and the count of dropped transfers.**
 
 Done from that list:
 
@@ -369,6 +368,10 @@ Done from that list:
   interface with every screen frame (`Levels`) and is drawn as the
   threshold line (the decision "The floor on the spectrum" in section 12).
 - The IQ ring buffer and "save IQ" (the decision in section 12).
+- The reference recording: `testdata/lpd433.cu8`, 0.16 s (768 kB) of the
+  device's LPD433 recording, with the detector's regression tests on it —
+  the 24 events it finds, the strongest burst to the frame and the
+  decibel, and the clear ones on the 25 kHz grid.
 - The waterfall fragment of the selected event: a spectrogram under the
   log's list, time across and frequency up, made from the ring buffer by
   the thread that also saves — one 2048-point spectrum per 0.85 ms, at
@@ -413,9 +416,8 @@ Left out of phase 2 on purpose, with where it goes:
 - **The terminal emulator's cost on the device** — not measured (the smoke
   has no window); the user reports the picture does not stutter at 10
   frames a second.
-- **A short reference recording in the repository** — phase 3, cut from
-  `capture-433.cu8` on the device once the detector says which second has
-  a known event.
+- **A short reference recording in the repository** — done in phase 3:
+  `testdata/lpd433.cu8`.
 
 How the detector works (`crates/sdr-detect`), as built:
 
