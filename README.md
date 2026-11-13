@@ -5,10 +5,11 @@ with the HackerGadgets AIO V2 board. It watches the air through the board's
 RTL-SDR and shows what a person would otherwise miss: when, where and how
 often something was transmitted.
 
-**Status: phase 2 of 8 done** — the spectrum and waterfall screen works on
-the built-in signal generator, on IQ recordings and on an RTL-SDR, with
-tuning, gain and zoom from the keyboard; the other screens are still to
-come. See
+**Status: phase 3 of 8 built** — the spectrum and waterfall screen and the
+signal log work on the built-in signal generator, on IQ recordings and on
+an RTL-SDR: tuning, gain and zoom from the keyboard, detected events kept
+in a database, their pictures and their samples. The other screens are
+still to come. See
 [plans/PLAN.md](plans/PLAN.md) for what comes next.
 
 ## Run
@@ -45,6 +46,12 @@ Keys: `1`–`8` switch screens, `Tab` / `Shift+Tab` walk them, `?` help,
 The dotted line over the noise is the detector's threshold, 8 dB above the
 noise floor it follows: a bar that crosses it becomes an event in the log.
 The header says how far above that floor the peak, or the cursor, is.
+
+The status line at the bottom names the source and the rate samples
+arrive at. Beside it, only when there is something to tell: `clip 2.4%` —
+the share of samples at full scale, the receiver is overloaded (yellow
+from 0.1%, red from 1%: lower the gain with `G`); `lost 0.05 s` — samples
+the receiver delivered and the app did not take in time, since the start.
 
 On the signal log (`5`) — one row per signal the detector found: when it
 began, how long it lasted, where, how wide, how strong:

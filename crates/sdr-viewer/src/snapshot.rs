@@ -28,6 +28,7 @@ pub fn run(
     let wanted = (secs * f64::from(info.sample_rate)) as u64;
     let mut buf = vec![Iq::new(0.0, 0.0); 16 * 1024];
     let mut seen = 0u64;
+    let mut clipped = 0u64;
     let mut frames = 0;
     while seen < wanted {
         let n = source.read(&mut buf).map_err(|err| err.to_string())?;
@@ -35,6 +36,7 @@ pub fn run(
             break;
         }
         seen += n as u64;
+        clipped += sdr_core::clip::clipped(&buf[..n]) as u64;
         pipeline.push(&buf[..n], &info, |output| match output {
             Output::Frame(frame, levels) => {
                 app.spectrum.on_frame(frame, levels);
@@ -44,10 +46,18 @@ pub fn run(
         });
     }
     app.status.state = SourceState::Ended;
+    app.status.clipped = clipped as f64 / seen.max(1) as f64;
+    app.status.lost = source.lost_samples();
 
     let mut text = ui::render_text(&app, width, height);
     let seconds = seen as f64 / f64::from(info.sample_rate);
     let _ = writeln!(text, "\n{frames} frames from {seconds:.1} s.");
+    let _ = writeln!(
+        text,
+        "{:.2}% of the samples at full scale; {} lost.",
+        app.status.clipped * 100.0,
+        app.status.lost
+    );
     let (Some(latest), Some((bottom, _))) = (app.spectrum.latest(), app.spectrum.range()) else {
         return Ok(text);
     };
@@ -164,6 +174,10 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("29 frames from 3.0 s."), "{text}");
+        assert!(
+            text.contains("0.00% of the samples at full scale; 0 lost."),
+            "{text}"
+        );
         // The burst sits on a bin; the carrier falls between two and reads
         // 0.9 dB low, as a Hann window does.
         let listed: Vec<&str> = text

@@ -17,13 +17,13 @@ Phases of the plan (its section 14 has the detail):
 | 0 Hardware check | done — `docs/hardware.md` |
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
-| 3 Detector and log | **in progress**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; next the overload indicator |
+| 3 Detector and log | **built, pull requests #14–#18 open**: the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples. Not yet tried on the air on the device |
 | 4–8 | not started |
 
-Left in phase 3, in the order agreed with the user (the plan's section 14
-has the reasons):
-
-1. An overload indicator and the count of dropped transfers.
+Nothing is left of phase 3's list. Before phase 4: merge #14–#18 in
+order (they are stacked), and one run on the air on the device with the
+user at it (the plan's section 14, "Known limits", says what has only
+seen the recording).
 
 ## Commands
 
@@ -133,8 +133,8 @@ touching USB.
 A Cargo workspace under `crates/` (the plan's section 4 lists all eight;
 a crate is added in the phase that needs it):
 
-- `sdr-core` — `Source` trait (`read`, `tune`, `set_gain`) and `Iq`
-  samples; `generator` (seeded tones, gated bursts, noise), `file` (raw IQ
+- `sdr-core` — `Source` trait (`read`, `tune`, `set_gain`,
+  `lost_samples`) and `Iq` samples; `clip` (samples at full scale); `generator` (seeded tones, gated bursts, noise), `file` (raw IQ
   formats, looping), `pace` (real-time playback, `Clock` trait), `rate`
   (`RateMeter`), `units` (parse/format Hz), `frame` (`SpectrumFrame`: dBFS
   per bin, lowest frequency first), `ring` (`IqRing`: the newest samples
@@ -186,6 +186,8 @@ a crate is added in the phase that needs it):
   status and drops what the UI has no room for.
 - Sources that are not hardware are wrapped in `Paced`; hardware paces
   itself.
+- Overload is counted on the samples (a part at ±1.0, an 8-bit
+  receiver's bytes 0 and 255), never guessed from the spectrum.
 - Levels are dBFS: a full-scale tone on a bin reads 0. Power is averaged,
   never decibels. Frames run from the lowest frequency up, the centre is
   bin `len / 2`.

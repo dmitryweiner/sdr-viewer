@@ -355,19 +355,22 @@ As of 2026-11-12.
 | 0 | Hardware check | Done: `docs/hardware.md`. CM4 with 8 GB, R820T tuner, `rtl-sdr-rs` works, truecolor terminal. The device's hub is defective: see the decision "Defective USB hub" |
 | 1 | Skeleton | Done: workspace, CI with a static aarch64 binary, generator and file sources, tabs |
 | 2 | Spectrum and waterfall | Done on the generator, recordings and the RTL-SDR: bars with max hold, waterfall, a scale that follows the noise floor, cursor, tuning (`f`, `[` `]`, Enter), gain, zoom, pause, `--snapshot` |
-| 3 | Detector and log | In progress. Done: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. The spectrum shows the detector's threshold as a line and the dB above the floor in its header. The last 30 s of samples are held in a ring buffer; the log shows the picture of the selected event made of them, and `r` saves them as SigMF. The detector has regression tests on a piece of real air (`testdata/`). Next: the overload indicator |
+| 3 | Detector and log | Built, the last pull requests open; not yet tried on the air on the device. Done: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. The spectrum shows the detector's threshold as a line and the dB above the floor in its header. The last 30 s of samples are held in a ring buffer; the log shows the picture of the selected event made of them, and `r` saves them as SigMF. The detector has regression tests on a piece of real air (`testdata/`). The status line tells overload (`clip`) and lost samples. |
 | 4–8 | | Not started |
 
-Left in phase 3, in the agreed order:
-
-1. **An overload indicator and the count of dropped transfers.**
-
-Done from that list:
+Nothing is left of phase 3's list; what it still wants is a look at the
+real air on the device (below). Done from that list:
 
 - The noise-floor line — the detector's floor per bin comes to the
   interface with every screen frame (`Levels`) and is drawn as the
   threshold line (the decision "The floor on the spectrum" in section 12).
 - The IQ ring buffer and "save IQ" (the decision in section 12).
+- The overload indicator and the count of lost samples, in the status
+  line: `clip N%` is the share of samples with a part at full scale over
+  the last half second (told from 0.1%, red from 1%); `lost N s` is what
+  the RTL-SDR driver dropped because its queue to the app was full
+  (`dropped_chunks` × the transfer's size), since the start. `--snapshot`
+  prints both.
 - The reference recording: `testdata/lpd433.cu8`, 0.16 s (768 kB) of the
   device's LPD433 recording, with the detector's regression tests on it —
   the 24 events it finds, the strongest burst to the frame and the
@@ -401,7 +404,14 @@ Known limits of what phase 3 has built so far:
   with the event.
 - Receiving from the RTL-SDR with the database has not been run on the
   device; the pieces were checked there on the recording and the
-  generator with `--db`.
+  generator with `--db`. The same holds for everything built after it:
+  the threshold line, the IQ ring, the pictures, saving and the overload
+  indicator have seen the recording there, not the air; `lost` can only
+  be other than zero with the receiver.
+- `lost` counts what the driver dropped on its way to the app. Transfers
+  the kernel or the USB bus lost before the driver are not counted by
+  anyone; the measured rate (`rx`) falling below the nominal one is the
+  only sign of those.
 
 Left out of phase 2 on purpose, with where it goes:
 
@@ -411,8 +421,8 @@ Left out of phase 2 on purpose, with where it goes:
 - **The average trace** — not built, and still to be decided whether it
   is wanted: the bars are a 0.1 s average already. (The noise-floor line
   that stood here is done in phase 3.)
-- **An overload indicator and the count of dropped transfers** — phase 3
-  (item 3 above), next to the detector's own health numbers.
+- **An overload indicator and the count of dropped transfers** — done in
+  phase 3, in the status line.
 - **The terminal emulator's cost on the device** — not measured (the smoke
   has no window); the user reports the picture does not stutter at 10
   frames a second.

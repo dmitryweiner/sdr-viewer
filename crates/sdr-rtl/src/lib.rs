@@ -145,6 +145,12 @@ impl Source for RtlSource {
         self.info.description = describe(&self.tuner, gain);
         Ok(())
     }
+
+    fn lost_samples(&self) -> u64 {
+        // The driver's worker drops a whole transfer when its queue to
+        // us is full.
+        self.stream.dropped_chunks() * (TRANSFER_BYTES / 2) as u64
+    }
 }
 
 fn device_error(err: rtl_sdr_rs::error::RtlsdrError) -> SourceError {
