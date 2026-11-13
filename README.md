@@ -42,6 +42,10 @@ Keys: `1`–`8` switch screens, `Tab` / `Shift+Tab` walk them, `?` help,
 | `Space` | pause |
 | `m` | reset max hold |
 
+The dotted line over the noise is the detector's threshold, 8 dB above the
+noise floor it follows: a bar that crosses it becomes an event in the log.
+The header says how far above that floor the peak, or the cursor, is.
+
 On the signal log (`5`) — one row per signal the detector found: when it
 began, how long it lasted, where, how wide, how strong:
 

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use sdr_core::rate::RateMeter;
 use sdr_core::{Iq, Source, SourceInfo, SpectrumFrame};
-use sdr_detect::Event;
+use sdr_detect::{Event, Levels};
 use sdr_tui::{Command, SourceState, SourceStatus};
 
 use crate::pipeline::{Output, Pipeline};
@@ -27,7 +27,8 @@ const MAX_WAITING_EVENTS: usize = 10_000;
 #[derive(Debug, PartialEq)]
 pub enum Update {
     Status(SourceStatus),
-    Frame(SpectrumFrame),
+    /// A frame for the screen with the detector's floor under it.
+    Frame(SpectrumFrame, Levels),
     /// Events that have ended, in the order they ended.
     Events(Vec<Event>),
     /// The events going on now, as far as they have got.
@@ -91,8 +92,8 @@ pub fn run(
             }
             Ok(n) => {
                 pipeline.push(&buf[..n], &source.info(), |output| match output {
-                    Output::Frame(frame) => {
-                        let _ = updates.try_send(Update::Frame(frame));
+                    Output::Frame(frame, levels) => {
+                        let _ = updates.try_send(Update::Frame(frame, levels));
                     }
                     Output::Event(event) => fresh.push(event),
                 });
@@ -192,7 +193,7 @@ mod tests {
         let centers: Vec<f64> = got
             .iter()
             .filter_map(|update| match update {
-                Update::Frame(frame) => Some(frame.center_hz),
+                Update::Frame(frame, _) => Some(frame.center_hz),
                 _ => None,
             })
             .collect();
@@ -329,7 +330,7 @@ mod tests {
         reader.join().unwrap();
         match &got[..] {
             [
-                Update::Frame(_),
+                Update::Frame(..),
                 Update::Events(ended),
                 Update::OpenEvents(open),
                 Update::Status(status),
@@ -360,7 +361,7 @@ mod tests {
         let frames: Vec<SpectrumFrame> = updates(source)
             .into_iter()
             .filter_map(|update| match update {
-                Update::Frame(frame) => Some(frame),
+                Update::Frame(frame, _) => Some(frame),
                 _ => None,
             })
             .collect();

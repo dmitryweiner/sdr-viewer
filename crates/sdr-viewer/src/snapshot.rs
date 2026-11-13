@@ -36,8 +36,8 @@ pub fn run(
         }
         seen += n as u64;
         pipeline.push(&buf[..n], &info, |output| match output {
-            Output::Frame(frame) => {
-                app.spectrum.on_frame(frame);
+            Output::Frame(frame, levels) => {
+                app.spectrum.on_frame(frame, levels);
                 frames += 1;
             }
             Output::Event(event) => events.push(event),
@@ -168,6 +168,7 @@ mod tests {
         // 0.9 dB low, as a Hann window does.
         let listed: Vec<&str> = text
             .lines()
+            .skip(30)
             .take_while(|line| !line.starts_with("Events:"))
             .filter(|line| line.contains("dBFS  +"))
             .collect();

@@ -484,7 +484,8 @@ mod tests {
             app.commands.is_empty(),
             "nothing to move before the first frame"
         );
-        app.spectrum.on_frame(frame());
+        app.spectrum
+            .on_frame(frame(), sdr_detect::Levels::default());
         press(&mut app, KeyCode::Char(']'));
         press(&mut app, KeyCode::Char('+'));
         press(&mut app, KeyCode::Char('['));
@@ -497,7 +498,8 @@ mod tests {
     #[test]
     fn enter_tunes_to_the_cursor_and_brings_it_to_the_middle() {
         let mut app = app();
-        app.spectrum.on_frame(frame());
+        app.spectrum
+            .on_frame(frame(), sdr_detect::Levels::default());
         press(&mut app, KeyCode::Enter);
         assert!(app.commands.is_empty(), "no cursor, nowhere to go");
         app.spectrum.cursor = Some(0.75);

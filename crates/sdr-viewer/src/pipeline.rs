@@ -2,7 +2,7 @@
 //! event detector with fast frames and the screen with their averages.
 
 use sdr_core::{Iq, SourceInfo, SpectrumFrame};
-use sdr_detect::{Detector, DetectorConfig, Event};
+use sdr_detect::{Detector, DetectorConfig, Event, Levels};
 use sdr_dsp::{Analyzer, AnalyzerConfig, FrameAverager};
 
 /// Bins per spectrum frame: ~1.2 kHz each at 2.4 MS/s, and more than twice
@@ -19,8 +19,9 @@ pub const DETECTOR_FRAMES_PER_SECOND: f64 = 100.0;
 
 #[derive(Debug, PartialEq)]
 pub enum Output {
-    /// A frame for the screen.
-    Frame(SpectrumFrame),
+    /// A frame for the screen, and what the detector held its last part
+    /// against.
+    Frame(SpectrumFrame, Levels),
     /// An event that has ended.
     Event(Event),
 }
@@ -53,7 +54,7 @@ impl Pipeline {
         analyzer.push(samples, info, |frame| {
             detector.push(&frame, |event| out(Output::Event(event)));
             if let Some(frame) = averager.push(&frame) {
-                out(Output::Frame(frame));
+                out(Output::Frame(frame, detector.levels()));
             }
         });
     }
@@ -84,13 +85,27 @@ mod tests {
         let info = generator.info();
         let mut pipeline = Pipeline::new(info.sample_rate);
         let mut frames = Vec::new();
+        let mut floors = Vec::new();
         let mut events = Vec::new();
         let mut buf = vec![Iq::new(0.0, 0.0); 2_400_000];
         generator.read(&mut buf).unwrap();
         pipeline.push(&buf, &info, |output| match output {
-            Output::Frame(frame) => frames.push(frame),
+            Output::Frame(frame, levels) => {
+                frames.push(frame);
+                floors.push(levels);
+            }
             Output::Event(event) => events.push(event),
         });
+        // Every screen frame comes with the detector's floor under it:
+        // where the band is quiet, the frame's own level.
+        assert_eq!(floors.len(), frames.len());
+        for (frame, levels) in frames.iter().zip(&floors) {
+            assert_eq!(levels.floor_db.len(), FFT_SIZE);
+            assert_eq!(levels.threshold_db, 8.0);
+            let quiet = &frame.power_db[80..120];
+            let mean = quiet.iter().sum::<f32>() / quiet.len() as f32;
+            assert!((levels.floor_db[100] - mean).abs() < 1.0, "{mean}");
+        }
         // 12 FFTs to a detector frame, 10 of those to a screen frame:
         // 102.4 ms.
         assert_eq!(frames.len(), 9);
@@ -118,7 +133,7 @@ mod tests {
         let mut frames = 0;
         let silence = vec![Iq::new(0.0, 0.0); 300_000];
         pipeline.push(&silence, &info, |output| {
-            if matches!(output, Output::Frame(_)) {
+            if matches!(output, Output::Frame(..)) {
                 frames += 1;
             }
         });
