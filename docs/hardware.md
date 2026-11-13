@@ -65,10 +65,20 @@ a window.
 | 27 | GPS | output, high |
 | 23 | internal USB | **input, pulled down, low** |
 
-SDR, LoRa and GPS look powered, and the RTL-SDR is on the bus. What set
-the pins (boot overlay or a script) is not known yet, nor why GPIO 23 is an
-input while USB works; the user is in the `gpio` group, so the app could
-switch them without root.
+SDR, LoRa and GPS were powered then, and the RTL-SDR was on the bus —
+**because the user had set the pins by hand** (`sudo pinctrl 7 op`,
+`sudo pinctrl 7 dh`, the same for 27 and 16; it is in the shell history).
+Nothing sets them at boot: after the reboot of 2026-11-13 GPIO 16, 23 and
+27 were inputs pulled low, GPIO 7 was back at its boot function
+(`SPI4_SCLK`, low), `0bda:2838` was not in `lsusb`, and the app said
+"No device found at index 0". `sdr-hub-speed high` now drives GPIO 7 high
+itself and waits for the receiver to appear. Why GPIO 23 is an input while
+USB works is still not known.
+
+GPIO 7 doubles as the clock of SPI4, the bus of `/dev/spidev4.0`: if LoRa
+really is on that bus, powering the SDR this way and talking to the LoRa
+radio cannot both work. To be settled in phase 5, with the AIO V2 pinout
+in hand.
 
 ## 5. RTL-SDR
 

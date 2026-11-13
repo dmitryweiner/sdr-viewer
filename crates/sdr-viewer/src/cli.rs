@@ -150,7 +150,9 @@ pub fn open_source(args: &Args, paced: bool) -> Result<Box<dyn Source>, String> 
         // The hardware paces itself.
         return match RtlSource::open(&config) {
             Ok(source) => Ok(Box::new(source)),
-            Err(err) => Err(format!("cannot open the RTL-SDR: {err}")),
+            Err(err) => Err(format!(
+                "cannot open the RTL-SDR: {err} (is it powered and on the bus? `lsusb` lists it as 0bda:2838)"
+            )),
         };
     }
     let source: Box<dyn Source> = match &args.file {
