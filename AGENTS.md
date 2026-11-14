@@ -117,7 +117,8 @@ touching USB.
   GPIO 7 is the SDR's power and SPI4's clock, and that is fine.
 - `~/sdr-viewer-check/capture-433.cu8` — 10 s at 433.92 MHz, 2.4 MS/s,
   gain 30 dB, antenna on: LPD433 activity over a −71 dBFS floor. The
-  detector finds 824 events in it: mostly 40–50 ms bursts ~9 kHz wide on
+  detector finds 915 events in it (824 before PR #24, which stopped an
+  event taking in neighbours it had once touched): mostly 40–50 ms bursts ~9 kHz wide on
   the 25 kHz LPD grid (433.075 MHz + n × 25 kHz) over some 66 channels — a
   frequency hopper. `testdata/lpd433.cu8` in the repository is 0.16 s of
   it, from 4.96 s.
@@ -295,4 +296,10 @@ measure on the device, the Mac's numbers do not scale.
   AIO board's GPIO 7 was high in phase 0 only because the user had set it
   by hand; a boot leaves it undriven. Look at `pinctrl get 7` and at the
   shell history before suspecting the hub (`docs/hardware.md`, section 4).
+- **A test's signals are tidy; the air next to a transmitter is not.**
+  The detector matched an event against every bin it had ever touched.
+  Every test passed, the LPD recording too; the user's handheld radio
+  beside the receiver filled the band for a moment and its event then
+  never ended. The user's own `events.db` (copy it, read it with
+  `sqlite3` here) showed it at once: look there when something "sticks".
 - **zsh**: `"$H:path"` applies a modifier to `$H`; write `"${H}:path"`.
