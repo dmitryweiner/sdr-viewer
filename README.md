@@ -72,8 +72,15 @@ LPD 17       ····▂····▂····▂····▂····▂····▂�
 | `↑` `↓` `PgUp` `PgDn` `Home` `End` | select a channel (`Esc` lets go) |
 | `+` `-` | fewer, more seconds to a column: 1, 10, 60, 300 |
 | `Enter` | tune to the selected channel and show the spectrum |
+| `X` `X` | let go of the channels the app made (it asks once): from the strip and from the file; those with a name or `hide` stay |
 
 The last 4 hours of this run are remembered.
+
+The receiver's own spike — a few bins wide, exactly on the centre
+frequency — is not counted: it is not on the air, and after `Enter` it
+would sit on the very channel tuned to. A real carrier that narrow,
+exactly on the centre, is not counted either while it is there: tune a
+little aside to watch it.
 
 ### The channels file
 
@@ -97,7 +104,10 @@ The app reads the file when it starts and only ever adds new channels to
 its end: your names, order and comments stay as they are. Edit it while
 the app is not running, or your changes show only at the next start. To
 get rid of a row — the receiver's own spike at the centre frequency, say —
-hide the channel instead of removing it, or it is made again. A file that
+hide the channel instead of removing it, or it is made again. `X` pressed
+twice on the strip removes the channels that have neither a name nor
+`hide` — after a transmitter beside the receiver has left dozens of them;
+give a name to what is to stay. A file that
 does not read as TOML stops the app at the start with the line that is
 wrong; it is never overwritten.
 

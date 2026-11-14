@@ -34,10 +34,11 @@ const BAND_KEYS: [(&str, &str); 7] = [
     ("Space", "pause"),
 ];
 
-const CHANNEL_KEYS: [(&str, &str); 3] = [
+const CHANNEL_KEYS: [(&str, &str); 4] = [
     ("↑, ↓", "select a channel (PgUp, PgDn, Home, End)"),
     ("+, -", "fewer, more seconds to a column"),
     ("Enter", "tune to the selected channel"),
+    ("X, X", "let go of the channels the app made"),
 ];
 
 const LOG_KEYS: [(&str, &str); 5] = [

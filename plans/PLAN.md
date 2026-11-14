@@ -371,7 +371,18 @@ As of 2026-11-14.
 Known limits of the channel strip as built:
 
 - Channels are edited only in the file, and the file is read only at the
-  start: nothing on the screen renames, hides or merges a channel.
+  start: nothing on the screen renames, hides or merges a channel. The
+  one thing the screen does to the list is `X` twice: the channels
+  without a name or `hide` go, from the file too (asked for by the user
+  after a radio beside the receiver had left 98 of them).
+- The receiver's spike is told by its place and width alone (peak within
+  rate/1000 of the centre, no wider than rate/400 — 2.4 and 6 kHz at
+  2.4 MS/s; on the user's device it is 3.5 kHz wide, 15 dB over the
+  noise): a real carrier that narrow on the centre is not counted. The
+  log still lists the spike as an event.
+- A transmitter that overloads the receiver makes channels all over the
+  band (its splash is real energy in those bins); nothing tells them
+  from signals. `X` twice is the remedy for now.
 - A made channel sits where its first event was: on a grid of channels
   its centre may be a kilohertz or two off the grid's.
 - Two channels made for one wide signal's parts, or a channel 14 kHz wide

@@ -253,6 +253,13 @@ a crate is added in the phase that needs it):
   fed by the same events as the log; the main loop hands newly made
   channels to the saver thread. Channel numbers never change in a run
   (the list only grows), so the selection is a number.
+- An event that is the receiver's own spike (`ChannelsView::is_spike`:
+  on the centre of the band it began in, a few bins wide) is no channel
+  and no occupancy. The band of an event is told by its start time, not
+  by the order updates arrive in: after a retune the old band's last
+  events come after the new band's first frame.
+- The app removes text from the channels file in one case only: `X`
+  twice, and then only `[[channel]]` tables without `name` and `hide`.
 - The help shows the open screen's keys and the global ones: all keys at
   once do not fit 80×24 (a test renders every screen's help there).
 - `unsafe_code = "forbid"` across the workspace.

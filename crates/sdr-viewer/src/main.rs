@@ -146,9 +146,9 @@ fn main() -> ExitCode {
                 }
                 dirty = true;
             }
-            let made = app.channels.take_unsaved();
-            if let (Some(new_channels), false) = (&new_channels, made.is_empty()) {
-                let _ = new_channels.send(made);
+            let changes = app.channels.take_changes();
+            if let (Some(new_channels), false) = (&new_channels, changes.is_empty()) {
+                let _ = new_channels.send(changes);
             }
             if dirty {
                 terminal.draw(|frame| ui::draw(frame, &app))?;

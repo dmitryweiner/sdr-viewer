@@ -23,6 +23,8 @@ pub const HEADER: &str = "\
 #   hide = true          # optional: no row, and no new channel made there
 #
 # Removing a channel only lets it be made again; hide it instead.
+# X pressed twice on the channel strip removes from this file the channels
+# that have neither a name nor `hide`: give a name to what is to stay.
 ";
 
 /// The channels of a file's text, in its order.
@@ -96,6 +98,90 @@ pub fn append(text: &str, new: &[Channel]) -> Result<(String, usize), String> {
     Ok((out, added))
 }
 
+/// `text` without its channels that have neither a name nor `hide` —
+/// those the app made and the user did not take for their own — and how
+/// many that was. Everything else stays byte for byte; the comment lines
+/// that end a removed channel stay too, as they are most likely about
+/// the next one.
+pub fn forget_made(text: &str) -> Result<(String, usize), String> {
+    parse(text)?;
+    let is_header = |line: &str| line.trim_start().starts_with('[');
+    let is_channel = |line: &str| {
+        let code = line.split('#').next().unwrap_or_default();
+        code.split_whitespace().collect::<String>() == "[[channel]]"
+    };
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut out = String::new();
+    let mut removed = 0;
+    let mut start = 0;
+    while start < lines.len() {
+        // A table: its header and what follows up to the next header.
+        let rest = &lines[start + 1..];
+        let end = start
+            + 1
+            + rest
+                .iter()
+                .position(|line| is_header(line))
+                .unwrap_or(rest.len());
+        let table = &lines[start..end];
+        let made = is_channel(table[0])
+            && parse(&table.concat())?
+                .first()
+                .is_some_and(|channel| channel.name.is_none() && !channel.hidden);
+        if made {
+            removed += 1;
+            let blank_or_comment = |line: &str| {
+                let line = line.trim();
+                line.is_empty() || line.starts_with('#')
+            };
+            let tail = table
+                .iter()
+                .rev()
+                .take_while(|line| blank_or_comment(line))
+                .count();
+            let comments = table[table.len() - tail..].iter();
+            out.extend(comments.filter(|line| !line.trim().is_empty()).copied());
+        } else {
+            out.extend(table.iter().copied());
+        }
+        start = end;
+    }
+    // Blank lines that stood between the removed channels.
+    let out = match removed {
+        0 => out,
+        _ => format!("{}\n", out.trim_end()),
+    };
+    parse(&out)?;
+    Ok((out, removed))
+}
+
+/// Replaces the file at `path` in one step, so it is never half written.
+fn replace(path: &Path, text: &str) -> Result<(), String> {
+    let io = |err: std::io::Error| err.to_string();
+    if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).map_err(io)?;
+    }
+    let mut partial = path.as_os_str().to_owned();
+    partial.push(".part");
+    std::fs::write(&partial, text).map_err(io)?;
+    std::fs::rename(&partial, path).map_err(io)
+}
+
+/// Removes from the file at `path` the channels the app made (see
+/// [`forget_made`]); no file is nothing to do.
+pub fn forget(path: &Path) -> Result<usize, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(err.to_string()),
+    };
+    let (text, removed) = forget_made(&text)?;
+    if removed > 0 {
+        replace(path, &text)?;
+    }
+    Ok(removed)
+}
+
 /// The channels of the file at `path`; none when there is no file yet.
 pub fn load(path: &Path) -> Result<Vec<Channel>, String> {
     match std::fs::read_to_string(path) {
@@ -118,14 +204,7 @@ pub fn add(path: &Path, new: &[Channel]) -> Result<usize, String> {
     if added == 0 {
         return Ok(0);
     }
-    let io = |err: std::io::Error| err.to_string();
-    if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir).map_err(io)?;
-    }
-    let mut partial = path.as_os_str().to_owned();
-    partial.push(".part");
-    std::fs::write(&partial, text).map_err(io)?;
-    std::fs::rename(&partial, path).map_err(io)?;
+    replace(path, &text)?;
     Ok(added)
 }
 
@@ -310,6 +389,87 @@ hide = true
             std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
             1
         );
+    }
+
+    #[test]
+    fn the_made_channels_are_removed_and_the_users_text_stays() {
+        let text = "\
+# my channels
+
+[[channel]]
+freq_mhz = 433.2
+width_khz = 10.0
+
+[[channel]]
+name = \"LPD 17\"   # the gate
+freq_mhz = 433.475
+width_khz = 12.5
+
+[[channel]]   # made
+freq_mhz = 433.5
+width_khz = 10.0   # wide enough
+
+# the receiver's own
+[[channel]]
+freq_mhz = 433.92
+width_khz = 10
+hide = true
+
+[other]
+key = 1
+
+[[channel]]
+freq_mhz = 434.0
+width_khz = 10.0
+";
+        let (left, removed) = forget_made(text).unwrap();
+        assert_eq!(removed, 3);
+        assert_eq!(
+            left,
+            "\
+# my channels
+
+[[channel]]
+name = \"LPD 17\"   # the gate
+freq_mhz = 433.475
+width_khz = 12.5
+
+# the receiver's own
+[[channel]]
+freq_mhz = 433.92
+width_khz = 10
+hide = true
+
+[other]
+key = 1
+"
+        );
+        // Nothing made: not a byte changes.
+        assert_eq!(forget_made(&left).unwrap(), (left.clone(), 0));
+        assert_eq!(forget_made(MINE).unwrap(), (MINE.to_string(), 0));
+        assert_eq!(forget_made("").unwrap(), (String::new(), 0));
+        // Only made ones: the explanation stays.
+        let (made, _) = append(HEADER, &[made(433.5e6, 1e4), made(434.5e6, 1e4)]).unwrap();
+        assert_eq!(forget_made(&made).unwrap(), (HEADER.to_string(), 2));
+        assert!(forget_made("[[channel]\n").is_err());
+    }
+
+    #[test]
+    fn the_file_forgets_what_was_made_and_can_be_added_to_again() {
+        let dir = TempDir::new("forget");
+        let path = dir.0.join("channels.toml");
+        assert_eq!(forget(&path).unwrap(), 0);
+        assert!(!path.exists());
+        add(&path, &[made(433.5e6, 1e4), made(434.0e6, 1e4)]).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let named = text.replacen("\n[[channel]]", "\n[[channel]]\nname = \"gate\"", 1);
+        std::fs::write(&path, named).unwrap();
+        assert_eq!(forget(&path).unwrap(), 1);
+        assert_eq!(load(&path).unwrap().len(), 1);
+        assert_eq!(forget(&path).unwrap(), 0);
+        assert_eq!(add(&path, &[made(434.0e6, 1e4)]).unwrap(), 1);
+        assert_eq!(load(&path).unwrap().len(), 2);
+        assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 1);
     }
 
     #[test]

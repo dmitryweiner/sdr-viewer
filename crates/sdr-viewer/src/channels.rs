@@ -6,6 +6,7 @@ use std::sync::mpsc::{Sender, SyncSender, channel};
 use std::thread::JoinHandle;
 
 use sdr_detect::Channel;
+use sdr_tui::channels::Change;
 
 use crate::reader::Update;
 use crate::writer;
@@ -20,16 +21,32 @@ pub fn load(path: &Path) -> Result<Vec<Channel>, String> {
     })
 }
 
-/// Starts the thread that adds the channels sent to it to the file at
-/// `path`, until the sender is gone. A failure is told to the interface
-/// once; after it nothing more is written.
-pub fn save(path: PathBuf, updates: SyncSender<Update>) -> (Sender<Vec<Channel>>, JoinHandle<()>) {
+/// Carries the changes out on the file at `path`, in their order.
+fn write(path: &Path, changes: &[Change]) -> Result<(), String> {
+    let mut made = Vec::new();
+    for change in changes {
+        match change {
+            Change::Made(channel) => made.push(channel.clone()),
+            Change::ForgetMade => {
+                sdr_store::channels::add(path, &made)?;
+                made.clear();
+                sdr_store::channels::forget(path)?;
+            }
+        }
+    }
+    sdr_store::channels::add(path, &made).map(|_| ())
+}
+
+/// Starts the thread that carries out on the file at `path` the changes
+/// sent to it, until the sender is gone. A failure is told to the
+/// interface once; after it nothing more is written.
+pub fn save(path: PathBuf, updates: SyncSender<Update>) -> (Sender<Vec<Change>>, JoinHandle<()>) {
     let (new, rx) = channel();
     let saver = std::thread::spawn(move || {
-        let write = |new: &[Channel]| sdr_store::channels::add(&path, new).map(|_| ());
+        let write = |changes: &[Change]| write(&path, changes);
         if let Err(message) = writer::run(rx, write) {
             let _ = updates.send(Update::Notice(format!(
-                "new channels are not saved: {message}"
+                "the channels file is not changed: {message}"
             )));
         }
     });
@@ -65,11 +82,23 @@ mod tests {
         let path = temp("saved");
         let (updates, notices) = sync_channel(4);
         let (new, saver) = save(path.clone(), updates);
-        new.send(vec![made(433.5e6)]).unwrap();
-        new.send(vec![made(433.7e6)]).unwrap();
+        new.send(vec![Change::Made(made(433.5e6))]).unwrap();
+        new.send(vec![Change::Made(made(433.7e6))]).unwrap();
         drop(new);
         saver.join().unwrap();
         assert_eq!(load(&path).unwrap(), [made(433.5e6), made(433.7e6)]);
+        // Let go, and one made after that.
+        let (updates, _notices) = sync_channel(4);
+        let (new, saver) = save(path.clone(), updates);
+        let changes = [
+            Change::Made(made(434.1e6)),
+            Change::ForgetMade,
+            Change::Made(made(434.3e6)),
+        ];
+        new.send(changes.to_vec()).unwrap();
+        drop(new);
+        saver.join().unwrap();
+        assert_eq!(load(&path).unwrap(), [made(434.3e6)]);
         assert_eq!(notices.try_iter().count(), 0);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
@@ -85,12 +114,12 @@ mod tests {
         );
         let (updates, notices) = sync_channel(4);
         let (new, saver) = save(path.clone(), updates);
-        new.send(vec![made(433.5e6)]).unwrap();
+        new.send(vec![Change::Made(made(433.5e6))]).unwrap();
         drop(new);
         saver.join().unwrap();
         let notices: Vec<Update> = notices.try_iter().collect();
         assert!(
-            matches!(&notices[..], [Update::Notice(text)] if text.starts_with("new channels are not saved: ")),
+            matches!(&notices[..], [Update::Notice(text)] if text.starts_with("the channels file is not changed: ")),
             "{notices:?}"
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "[[channel]\n");

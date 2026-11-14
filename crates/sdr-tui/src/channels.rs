@@ -66,6 +66,24 @@ impl Occupancy {
     }
 }
 
+/// What the file of channels is to be told.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Change {
+    /// A channel was made here: add it.
+    Made(Channel),
+    /// The channels made by the app are let go: remove them.
+    ForgetMade,
+}
+
+/// A receiver's band: where its own spike is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Band {
+    center_hz: f64,
+    sample_rate: u32,
+    /// The stream time of the first frame seen of it.
+    since: Duration,
+}
+
 /// A row of the strip.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Row<'a> {
@@ -86,8 +104,12 @@ pub struct ChannelsView {
     scale: usize,
     /// The selected channel, by its number.
     selected: Option<usize>,
-    /// Channels made here and not yet handed over to be saved.
-    unsaved: Vec<Channel>,
+    /// What has changed here and is not yet handed over to the file.
+    changes: Vec<Change>,
+    /// The band being received, and the one before it: events come a
+    /// moment after the frames, the last of a band after a retune.
+    band: Option<Band>,
+    band_before: Option<Band>,
 }
 
 impl ChannelsView {
@@ -104,9 +126,67 @@ impl ChannelsView {
         let (index, made) = self.channels.admit(event)?;
         if made {
             self.history.push(Occupancy::default());
-            self.unsaved.push(self.channels.list()[index].clone());
+            let made = self.channels.list()[index].clone();
+            self.changes.push(Change::Made(made));
         }
         Some(index)
+    }
+
+    /// Whether `event` is the receiver's own spike: a few bins wide,
+    /// with its peak on the centre of the band it was received in. An
+    /// RTL-SDR has one always (3.5 kHz wide, 15 dB over the noise on the
+    /// user's device); it is not a signal on the air, and after `Enter`
+    /// on a channel it sits exactly on that channel. The price: a real
+    /// carrier this narrow, exactly on the centre, is not counted either.
+    fn is_spike(&self, event: &Event) -> bool {
+        let band = match (self.band, self.band_before) {
+            (Some(band), _) if event.start >= band.since => band,
+            (Some(_), Some(before)) => before,
+            _ => return false,
+        };
+        let rate = f64::from(band.sample_rate);
+        (event.peak_hz - band.center_hz).abs() <= rate / 1000.0 && event.width_hz() <= rate / 400.0
+    }
+
+    /// Takes the band and the stream time of a frame.
+    pub fn on_frame(&mut self, time: Duration, center_hz: f64, sample_rate: u32) {
+        let same = |band: &Band| band.center_hz == center_hz && band.sample_rate == sample_rate;
+        if !self.band.as_ref().is_some_and(same) {
+            self.band_before = self.band;
+            self.band = Some(Band {
+                center_hz,
+                sample_rate,
+                since: time,
+            });
+        }
+        self.set_now(time);
+    }
+
+    /// Lets go of the channels made here — those without a name that are
+    /// not hidden — with what was counted on them; the user's stay. Says
+    /// how many went.
+    pub fn forget_made(&mut self) -> usize {
+        let list = self.channels.list().to_vec();
+        let mine = |channel: &Channel| channel.name.is_some() || channel.hidden;
+        let history = std::mem::take(&mut self.history);
+        let kept = list
+            .iter()
+            .zip(history)
+            .filter(|(channel, _)| mine(channel));
+        let (channels, history): (Vec<Channel>, Vec<Occupancy>) = kept
+            .map(|(channel, history)| (channel.clone(), history))
+            .unzip();
+        let gone = list.len() - channels.len();
+        self.channels = Channels::new(channels);
+        self.history = history;
+        // The numbers have changed; the next word on what is on now
+        // comes within half a second.
+        self.open.clear();
+        self.selected = None;
+        self.changes
+            .retain(|change| !matches!(change, Change::Made(_)));
+        self.changes.push(Change::ForgetMade);
+        gone
     }
 
     /// Counts events that have ended. The stream has come at least as
@@ -114,6 +194,9 @@ impl ChannelsView {
     pub fn on_events(&mut self, events: &[Event]) {
         for event in events {
             self.set_now(event.start + event.duration);
+            if self.is_spike(event) {
+                continue;
+            }
             let Some(index) = self.admit(event) else {
                 continue;
             };
@@ -127,6 +210,9 @@ impl ChannelsView {
     pub fn set_open(&mut self, open: &[Event]) {
         self.open.clear();
         for event in open {
+            if self.is_spike(event) {
+                continue;
+            }
             let index = if event.duration >= OPEN_LONG_ENOUGH {
                 self.admit(event)
             } else {
@@ -144,9 +230,16 @@ impl ChannelsView {
         self.now = self.now.max(now);
     }
 
-    /// The channels made since the last call: to be saved.
-    pub fn take_unsaved(&mut self) -> Vec<Channel> {
-        std::mem::take(&mut self.unsaved)
+    /// What has changed since the last call: for the file.
+    pub fn take_changes(&mut self) -> Vec<Change> {
+        std::mem::take(&mut self.changes)
+    }
+
+    /// How many channels would go if those made here were let go.
+    pub fn made(&self) -> usize {
+        let list = self.channels.list().iter();
+        list.filter(|channel| channel.name.is_none() && !channel.hidden)
+            .count()
     }
 
     /// The rows from the lowest frequency up; hidden channels have none.
@@ -327,10 +420,10 @@ mod tests {
         assert_eq!(rows[1].index, 0);
         assert_eq!(rows[1].channel.name.as_deref(), Some("mine"));
         // Only what was made here is to be saved, and once.
-        let unsaved = view.take_unsaved();
-        assert_eq!(unsaved.len(), 2);
-        assert_eq!(unsaved[0].center_hz, 433.5e6);
-        assert!(view.take_unsaved().is_empty());
+        let changes = view.take_changes();
+        assert_eq!(changes.len(), 2);
+        assert!(matches!(&changes[0], Change::Made(made) if made.center_hz == 433.5e6));
+        assert!(view.take_changes().is_empty());
     }
 
     #[test]
@@ -343,7 +436,7 @@ mod tests {
         }]);
         view.on_events(&[event(0, 5000, 433.92e6)]);
         assert!(view.rows().is_empty());
-        assert!(view.take_unsaved().is_empty());
+        assert!(view.take_changes().is_empty());
         view.move_selection(1);
         assert_eq!(view.selected(), None);
     }
@@ -436,7 +529,7 @@ mod tests {
         assert!(view.rows().is_empty());
         view.set_open(&[event(0, 1000, 433.5e6)]);
         assert_eq!(view.rows().len(), 1);
-        assert_eq!(view.take_unsaved().len(), 1);
+        assert_eq!(view.take_changes().len(), 1);
         assert_eq!(shares(&view, 0, 2), [Some(1.0), Some(1.0)]);
         assert_eq!(view.quiet_for(0), None);
     }
@@ -479,6 +572,99 @@ mod tests {
         assert_eq!(view.selected().unwrap().center_hz, 433.1e6);
         view.release();
         assert_eq!(view.selected(), None);
+    }
+
+    /// The receiver's spike as the user's device has it: 3 bins on the
+    /// centre.
+    fn spike(start_ms: u64, duration_ms: u64, center_hz: f64) -> Event {
+        Event {
+            low_hz: center_hz - 1_758.0,
+            high_hz: center_hz + 1_758.0,
+            ..event(start_ms, duration_ms, center_hz)
+        }
+    }
+
+    #[test]
+    fn the_receivers_own_spike_is_not_a_signal() {
+        let mut view = ChannelsView::default();
+        view.on_frame(Duration::ZERO, 446.0e6, 2_400_000);
+        view.on_events(&[spike(0, 500, 446.0e6)]);
+        view.set_open(&[spike(600, 5000, 446.0e6)]);
+        assert!(view.rows().is_empty());
+        // A signal as wide as a voice there is one, and so is as narrow
+        // a one anywhere else.
+        view.on_events(&[event(1000, 500, 446.0e6), spike(1000, 500, 446.1e6)]);
+        assert_eq!(view.rows().len(), 2);
+        assert_eq!(view.share(0, 10), 0.5 / 1.5);
+    }
+
+    #[test]
+    fn after_a_retune_the_spike_is_where_the_band_was_when_the_event_began() {
+        let mut view = ChannelsView::new(vec![Channel {
+            name: Some("mine".into()),
+            center_hz: 446.1e6,
+            width_hz: 12.5e3,
+            hidden: false,
+        }]);
+        view.on_frame(Duration::ZERO, 446.0e6, 2_400_000);
+        // Enter on the channel: from 2 s the spike is on it. The frame
+        // of the new band comes before the old spike's end is told.
+        view.on_frame(secs(2), 446.1e6, 2_400_000);
+        view.on_events(&[spike(0, 2000, 446.0e6)]);
+        view.set_open(&[spike(2000, 3000, 446.1e6)]);
+        view.set_now(secs(5));
+        assert_eq!(view.rows().len(), 1);
+        assert!(!view.active(0));
+        assert_eq!(view.share(0, 10), 0.0);
+        // What was a spike is a signal when the centre has moved away...
+        view.on_events(&[spike(4000, 500, 446.0e6)]);
+        assert_eq!(view.rows().len(), 2);
+        // ...and before any frame nothing is known of a centre.
+        let mut early = ChannelsView::default();
+        early.on_events(&[spike(0, 500, 446.0e6)]);
+        assert_eq!(early.rows().len(), 1);
+    }
+
+    #[test]
+    fn letting_go_of_the_made_channels_keeps_the_users() {
+        let mine = |name: Option<&str>, center_hz: f64, hidden: bool| Channel {
+            name: name.map(String::from),
+            center_hz,
+            width_hz: 12.5e3,
+            hidden,
+        };
+        let mut view = ChannelsView::new(vec![
+            // Without a name and not hidden: as good as made here.
+            mine(None, 433.2e6, false),
+            mine(Some("gate"), 433.5e6, false),
+            mine(None, 433.92e6, true),
+        ]);
+        view.on_events(&[
+            event(0, 500, 433.5e6),
+            event(0, 500, 433.7e6),
+            event(0, 500, 433.92e6),
+        ]);
+        view.set_open(&[event(600, 2000, 433.7e6)]);
+        view.set_now(secs(1));
+        view.move_selection(isize::MAX);
+        assert_eq!(view.take_changes().len(), 1);
+        view.on_events(&[event(0, 500, 433.9e6)]);
+        assert_eq!(view.made(), 3);
+        assert_eq!(view.forget_made(), 3);
+        // What was not yet in the file never gets there.
+        assert_eq!(view.take_changes(), [Change::ForgetMade]);
+        let rows = view.rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].channel.name.as_deref(), Some("gate"));
+        // The gate keeps what was counted on it; nothing is selected.
+        assert_eq!(view.share(rows[0].index, 10), 0.5);
+        assert_eq!(view.selected(), None);
+        assert_eq!(view.made(), 0);
+        // The hidden one still takes its events; a signal makes its
+        // channel again.
+        view.on_events(&[event(1000, 500, 433.92e6), event(1000, 500, 433.7e6)]);
+        assert_eq!(view.rows().len(), 2);
+        assert_eq!(view.made(), 1);
     }
 
     #[test]
