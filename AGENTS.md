@@ -109,9 +109,9 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-14 `sdr-viewer` there is the build of PR #26's branch,
-  which is `main` after that pull request in all but docs; the one
-  before is `sdr-viewer.before-x`. With the
+  Since 2026-11-14 `sdr-viewer` there is the build of PR #28's branch
+  (periodicity); the one before (PR #26's, `main` before periodicity) is
+  `sdr-viewer.before-period`, and `sdr-viewer.before-x` is older still. With the
   receiver it makes `~/.config/sdr-viewer/channels.toml`: the user's, like
   the database — our checks use `--channels test.toml` and remove it. The user
   allows replacing `sdr-viewer` there with a newer build without asking.
@@ -130,7 +130,9 @@ touching USB.
   detector finds 915 events in it (824 before PR #24, which stopped an
   event taking in neighbours it had once touched): mostly 40–50 ms bursts ~9 kHz wide on
   the 25 kHz LPD grid (433.075 MHz + n × 25 kHz) over some 66 channels — a
-  frequency hopper. `testdata/lpd433.cu8` in the repository is 0.16 s of
+  frequency hopper: the strip's period column says it comes back to each
+  channel every 2.92 s (18 of the 80 channels have a period for sure
+  after 10 s). `testdata/lpd433.cu8` in the repository is 0.16 s of
   it, from 4.96 s.
 - Not set up yet: `meshtasticd` (LoRa is on `/dev/spidev4.0`), `gpsd`
   (installed, not configured), `aiov2_ctl`.
@@ -322,7 +324,8 @@ Measured on the dev Mac (Apple Silicon), release build:
 | The channel strip on the CM4 (the recording looped, 160×45, 15 s, PR #22's build and PR #23's side by side; 81 channels) | the strip (`--keys 2`) **22–23%** of a core, 16 kB/s to the terminal; counting channels adds nothing to the other screens: spectrum 37 → 35%, log 24 → 24% |
 | The detector's fix of PR #24 on the CM4 (the recording looped, 160×45, 15 s, before and after) | nothing measurable: spectrum 38 → 36 and 35%, channel strip 22 → 19% |
 | The density on the CM4 (the recording looped, 160×45, 15 s, main's build and PR #22's side by side, twice) | gathering it costs nothing measurable: spectrum (`--keys 1`) 37 and 34% before, 35 and 36% with it. The density screen (`--keys 3`) **33 and 34%** of a core, 0.6 MB/s to the terminal against the spectrum's 0.9 |
-| Static aarch64 binary from CI | 5.1 MB (4.8 before the `toml` crate, 2.4 before SQLite) |
+| Periodicity on the CM4 (the recording looped, 160×45, 15 s, PR #26's build and PR #28's side by side; 80 channels) | keeping bursts and working out one channel's period a frame costs nothing measurable: strip (`--keys 2`) 24 → 25% of a core, spectrum (`--keys 1`) 36 → 37%. The periodicity screen with a channel selected (`--keys $'4\x1b[B\x1b[B\x1b[B'`) **20%**, 11 kB/s to the terminal. On the Mac (generator, 12 s): spectrum 16%, strip 12%, periodicity 12% |
+| Static aarch64 binary from CI | 5.3 MB with periodicity; 5.1 MB before (4.8 before the `toml` crate, 2.4 before SQLite) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:
 measure on the device, the Mac's numbers do not scale.
