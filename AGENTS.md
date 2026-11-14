@@ -18,13 +18,12 @@ Phases of the plan (its section 14 has the detail):
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
 | 3 Detector and log | done, and found working on the air on the device by the user (2026-11-13): the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples |
-| 4 Accumulators | begun: the spectral density (screen 3) and the channel strip (screen 2) are built, tried by the user on the air on the device and approved (2026-11-14) — with what that trial asked for: the detector's stuck events fixed, the receiver's spike kept off the strip, `X` twice on the strip and on the log, the band's name in the spectrum's header. Periodicity (screen 4) is not started |
+| 4 Accumulators | built: the spectral density (screen 3) and the channel strip (screen 2) were tried by the user on the air on the device and approved (2026-11-14) — with what that trial asked for: the detector's stuck events fixed, the receiver's spike kept off the strip, `X` twice on the strip and on the log, the band's name in the spectrum's header. Periodicity (screen 4, and the period in the strip's rows) is built as the user decided (the plan's section 12) and tried on the generator and on the device's recording only: the user has not yet tried it on the air |
 | 5–8 | not started |
 
-Next is periodicity (the plan's 5.4), the last piece of phase 4, as its
-own pull request. Nothing of it is agreed in detail: ask the user how the
-channel is chosen and what the screen should say before building. No
-pull request is open; `main` has everything (PR #26 was the last).
+Next: the user's trial of periodicity on the air, and what it asks for;
+then phase 5 (Meshtastic), of which nothing is agreed in detail and
+`meshtasticd` is not set up on the device — ask the user before building.
 
 ## Commands
 
@@ -48,7 +47,8 @@ pull request is open; `main` has everything (PR #26 was the last).
   the generator), prints the spectrum screen as text, the max-hold
   peaks and the detector's events. The way to look at a recording, at the air, or at the picture from
   a script. Below 80x24 it prints only "too small". `--screen 2` prints the channel strip, `--screen 3` prints
-  the density screen instead.
+  the density screen instead, `--screen 4` the periodicity of the channel
+  that repeats most surely (or of the first row).
 - `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
   of the generator and of the IQ ring per sample.
 
@@ -70,7 +70,8 @@ request gets no run: open a draft one to get a binary.
   escape sequence in `--keys` is one key (`$'5\x1b[Br'`: log, down, save
   IQ). The default keys walk all eight screens and end on the
   spectrum under the help: to measure a screen pass its digit alone
-  (`--keys 1` spectrum, `2` channels, `3` density, `5` log), and compare
+  (`--keys 1` spectrum, `2` channels, `3` density, `5` log;
+  `--keys $'4\x1b[B'` periodicity with the first channel selected), and compare
   builds side by side in one sitting.
 - `scripts/term-check.sh` — can this terminal show truecolor, bars, half
   blocks, Braille.
@@ -159,7 +160,9 @@ a crate is added in the phase that needs it):
   as `cu8` pairs, numbered from the start of the stream).
 - `sdr-dsp` — `analyzer`: Hann window, FFT, power averaged over a number
   of blocks into one `SpectrumFrame` (2048 bins); `average`:
-  `FrameAverager`, fast frames into slow ones.
+  `FrameAverager`, fast frames into slow ones; `period`:
+  `autocorrelation` of an envelope (by FFT) and its `peaks` (the main
+  period first, no multiples).
 - `sdr-detect` — `floor` (`NoiseFloor`: per-segment medians followed over
   time, slow up and fast down) and `detector` (`Detector`: bins above the
   floor joined across frequency and time into `Event`s; keying splash of a
@@ -186,7 +189,9 @@ a crate is added in the phase that needs it):
   waiting, gone or ready), `density` (a `DensityMap` reduced to the
   pixels of a plot, a share of time as a brightness), `density_ui`, `channels` (`ChannelsView`: the channels, each one's
   busy milliseconds per second of the last 4 h, the selection, the time
-  scale), `channels_ui`.
+  scale; each channel's `Bursts` and its period), `channels_ui`, `period`
+  (`Bursts`: when a channel was on; the envelope of a range of `DELAYS`,
+  its `Analysis`, the channel's `Period`), `period_ui`.
   Snapshot tests in
   `src/snapshots/`.
 - `sdr-viewer` — the binary: `cli` (arguments → source), `pipeline`
@@ -265,6 +270,15 @@ a crate is added in the phase that needs it):
   fed by the same events as the log; the main loop hands newly made
   channels to the saver thread. Channel numbers never change in a run
   (the list only grows), so the selection is a number.
+- Periodicity is read from the events, in the interface: every channel
+  keeps its bursts always, so a selected channel has its past at once.
+  The screen's analysis is worked out when it is drawn, as of now (a
+  few FFTs of up to 16k points, ten times a second); the strip's periods
+  are worked out for one channel a frame (`ChannelsView::on_frame`) and
+  for the selected one at a key. Its selection is the strip's.
+- A peak of the autocorrelation is no period before the envelope has
+  `period::ENOUGH` steps, and the strip tells one only from
+  `period::SURE`: in a short or sparse envelope chance makes peaks.
 - An event that is the receiver's own spike (`ChannelsView::is_spike`:
   on the centre of the band it began in, a few bins wide) is no channel
   and no occupancy. The band of an event is told by its start time, not

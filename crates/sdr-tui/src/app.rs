@@ -8,6 +8,7 @@ use sdr_detect::{DensityMap, Event, Levels};
 use crate::channels::ChannelsView;
 use crate::fragment::{Fragment, Picture};
 use crate::log::LogView;
+use crate::period::{DELAYS, USUAL};
 use crate::spectrum::SpectrumView;
 
 /// The screens of the plan (section 5), in the order of their digit keys.
@@ -156,6 +157,9 @@ pub struct App {
     pub spectrum: SpectrumView,
     pub log: LogView,
     pub channels: ChannelsView,
+    /// The range of delays chosen on the periodicity screen, of
+    /// `period::DELAYS`; until one is, the range follows the channel.
+    pub delays: Option<usize>,
     /// How often each frequency was at each level; comes only while its
     /// screen is open.
     pub density: Option<DensityMap>,
@@ -192,6 +196,7 @@ impl App {
             spectrum: SpectrumView::default(),
             log: LogView::default(),
             channels: ChannelsView::default(),
+            delays: None,
             density: None,
             commands: Vec::new(),
             input: None,
@@ -209,6 +214,10 @@ impl App {
         let watched = self.screen == Screen::Density;
         self.handle_key(key);
         self.follow_selection();
+        if self.screen == Screen::Periodicity {
+            // The channel in sight is not to wait for its turn.
+            self.channels.refresh_selected_period();
+        }
         let watch = self.screen == Screen::Density;
         if watch != watched {
             self.commands.push(Command::WatchDensity(watch));
@@ -298,7 +307,8 @@ impl App {
                 self.log.release();
             }
             KeyCode::Esc
-                if self.screen == Screen::Channels && self.channels.selected().is_some() =>
+                if matches!(self.screen, Screen::Channels | Screen::Periodicity)
+                    && self.channels.selected().is_some() =>
             {
                 self.channels.release();
             }
@@ -313,19 +323,65 @@ impl App {
             _ if self.screen == Screen::Spectrum => self.on_spectrum_key(key),
             _ if self.screen == Screen::Channels => self.on_channels_key(key),
             _ if self.screen == Screen::Density => self.on_density_key(key),
+            _ if self.screen == Screen::Periodicity => self.on_period_key(key),
             _ if self.screen == Screen::Log => self.on_log_key(key),
             _ => {}
         }
     }
 
-    fn on_channels_key(&mut self, key: KeyEvent) {
+    /// The range of delays the periodicity screen shows: the one chosen
+    /// there, or else the one the selected channel's period is in.
+    pub fn delay_scale(&self) -> usize {
+        let selected = self.channels.selected_index();
+        let found = selected.and_then(|index| self.channels.period(index));
+        self.delays
+            .or(found.map(|period| period.scale))
+            .unwrap_or(USUAL)
+    }
+
+    /// The keys that select a channel, on the strip and on the
+    /// periodicity screen alike. Another channel has its own delays.
+    fn on_channel_selection_key(&mut self, key: KeyEvent) -> bool {
+        let by = match key.code {
+            KeyCode::Up => -1,
+            KeyCode::Down => 1,
+            KeyCode::PageUp => -LOG_PAGE,
+            KeyCode::PageDown => LOG_PAGE,
+            KeyCode::Home => isize::MIN,
+            KeyCode::End => isize::MAX,
+            _ => return false,
+        };
+        self.channels.move_selection(by);
+        self.delays = None;
+        true
+    }
+
+    fn tune_to_selected_channel(&mut self) {
+        if let Some(center_hz) = self.channels.selected().map(|channel| channel.center_hz) {
+            self.tune(center_hz);
+            self.screen = Screen::Spectrum;
+        }
+    }
+
+    fn on_period_key(&mut self, key: KeyEvent) {
+        if self.on_channel_selection_key(key) {
+            return;
+        }
         match key.code {
-            KeyCode::Up => self.channels.move_selection(-1),
-            KeyCode::Down => self.channels.move_selection(1),
-            KeyCode::PageUp => self.channels.move_selection(-LOG_PAGE),
-            KeyCode::PageDown => self.channels.move_selection(LOG_PAGE),
-            KeyCode::Home => self.channels.move_selection(isize::MIN),
-            KeyCode::End => self.channels.move_selection(isize::MAX),
+            KeyCode::Char('+' | '=') => self.delays = Some(self.delay_scale().saturating_sub(1)),
+            KeyCode::Char('-') => {
+                self.delays = Some((self.delay_scale() + 1).min(DELAYS.len() - 1));
+            }
+            KeyCode::Enter => self.tune_to_selected_channel(),
+            _ => {}
+        }
+    }
+
+    fn on_channels_key(&mut self, key: KeyEvent) {
+        if self.on_channel_selection_key(key) {
+            return;
+        }
+        match key.code {
             KeyCode::Char('+' | '=') => self.channels.zoom_in(),
             KeyCode::Char('-') => self.channels.zoom_out(),
             // Not to be undone: asked twice.
@@ -339,12 +395,7 @@ impl App {
                     ));
                 }
             },
-            KeyCode::Enter => {
-                if let Some(center_hz) = self.channels.selected().map(|channel| channel.center_hz) {
-                    self.tune(center_hz);
-                    self.screen = Screen::Spectrum;
-                }
-            }
+            KeyCode::Enter => self.tune_to_selected_channel(),
             _ => {}
         }
     }
@@ -614,6 +665,73 @@ mod tests {
         // Neither the spectrum's zoom nor the log's filter moved.
         assert_eq!(app.spectrum.magnification(), 1);
         assert_eq!(app.log.min_above_db(), 10.0);
+        press(&mut app, KeyCode::Esc);
+        assert!(app.channels.selected().is_none() && !app.quit);
+        press(&mut app, KeyCode::Home);
+        press(&mut app, KeyCode::Enter);
+        let center = app.channels.selected().unwrap().center_hz;
+        assert_eq!(app.commands, [Command::Tune(center)]);
+        assert_eq!(app.screen, Screen::Spectrum);
+    }
+
+    /// Two channels: a burst every 2.04 s at +100 kHz, one every 34 s at
+    /// +300 kHz, ten minutes of both.
+    fn app_with_rhythms() -> App {
+        use crate::log::tests::event;
+        let mut app = app();
+        let every = |period_ms: u64, khz: f64| {
+            let starts = (0..600_000 / period_ms).map(move |turn| turn * period_ms);
+            starts.map(move |start| event(start, 300, khz, 20.0))
+        };
+        app.on_events(every(2040, 100.0).chain(every(34_000, 300.0)).collect());
+        app
+    }
+
+    #[test]
+    fn the_periodicity_screen_shares_the_strips_selection_and_follows_the_period() {
+        let mut app = app_with_rhythms();
+        press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.delay_scale(), USUAL);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.commands.is_empty());
+        // The first channel repeats within 10 s, the second within 60:
+        // each is shown in its own range at once, without a frame.
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.channels.selected_row(), Some(0));
+        assert_eq!(app.delay_scale(), 1);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.delay_scale(), 2);
+        // The selection is the strip's.
+        press(&mut app, KeyCode::Char('2'));
+        assert_eq!(app.channels.selected_row(), Some(1));
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.channels.selected_row(), Some(0));
+        assert_eq!(app.delay_scale(), 1);
+    }
+
+    #[test]
+    fn plus_and_minus_choose_the_delays_until_another_channel_is_selected() {
+        let mut app = app_with_rhythms();
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('-'));
+        assert_eq!(app.delay_scale(), 2);
+        for _ in 0..5 {
+            press(&mut app, KeyCode::Char('-'));
+        }
+        assert_eq!(app.delay_scale(), DELAYS.len() - 1);
+        for _ in 0..5 {
+            press(&mut app, KeyCode::Char('+'));
+        }
+        assert_eq!(app.delay_scale(), 0);
+        // Neither the strip's scale nor the spectrum's zoom moved.
+        assert_eq!(app.channels.seconds_per_column(), 1);
+        assert_eq!(app.spectrum.magnification(), 1);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.delay_scale(), 2);
+        // Enter tunes to the channel; Esc lets it go before it quits.
+        press(&mut app, KeyCode::Char('4'));
         press(&mut app, KeyCode::Esc);
         assert!(app.channels.selected().is_none() && !app.quit);
         press(&mut app, KeyCode::Home);

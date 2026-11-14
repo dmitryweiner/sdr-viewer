@@ -8,6 +8,8 @@ use std::time::Duration;
 
 use sdr_detect::{Channel, Channels, Event};
 
+use crate::period::{Analysis, Bursts, Period};
+
 /// Seconds of occupancy kept per channel: what the coarsest scale shows
 /// on the widest screen.
 pub const HISTORY_S: u64 = 4 * 3600;
@@ -29,12 +31,18 @@ struct Occupancy {
     first: u64,
     /// When its latest event ended.
     last_end: Option<Duration>,
+    /// When it had a signal, to the detector's step: what its period is
+    /// read from.
+    bursts: Bursts,
+    /// Its period as last worked out.
+    period: Option<Period>,
 }
 
 impl Occupancy {
     fn add(&mut self, start: Duration, end: Duration) {
         self.last_end = Some(self.last_end.map_or(end, |last| last.max(end)));
         let (start_ms, end_ms) = (start.as_millis() as u64, end.as_millis() as u64);
+        self.bursts.add(start_ms, end_ms);
         if self.busy_ms.is_empty() {
             self.first = start_ms / 1000;
         }
@@ -111,6 +119,8 @@ pub struct ChannelsView {
     /// moment after the frames, the last of a band after a retune.
     band: Option<Band>,
     band_before: Option<Band>,
+    /// The channel whose period is worked out next: one a frame.
+    period_next: usize,
 }
 
 impl ChannelsView {
@@ -161,6 +171,59 @@ impl ChannelsView {
             });
         }
         self.set_now(time);
+        // A period costs a few FFTs: the channels take turns.
+        if !self.history.is_empty() {
+            self.period_next = (self.period_next + 1) % self.history.len();
+            self.refresh_period(self.period_next);
+        }
+    }
+
+    /// The starts, in milliseconds, of the events going on in a channel.
+    fn going(&self, index: usize) -> Vec<u64> {
+        let open = self.open.iter().filter(|(of, _)| *of == index);
+        open.map(|(_, start)| start.as_millis() as u64).collect()
+    }
+
+    fn refresh_period(&mut self, index: usize) {
+        let period = if self.channels.list()[index].hidden {
+            None
+        } else {
+            let now_ms = self.now.as_millis() as u64;
+            self.history[index]
+                .bursts
+                .period(&self.going(index), now_ms)
+        };
+        self.history[index].period = period;
+    }
+
+    /// Works out every channel's period as of now; frames do it for one
+    /// channel each.
+    pub fn refresh_periods(&mut self) {
+        for index in 0..self.history.len() {
+            self.refresh_period(index);
+        }
+    }
+
+    /// Works out the selected channel's period as of now.
+    pub fn refresh_selected_period(&mut self) {
+        if let Some(index) = self.selected {
+            self.refresh_period(index);
+        }
+    }
+
+    /// The period of channel `index` as last worked out, if it has one
+    /// for sure.
+    pub fn period(&self, index: usize) -> Option<Period> {
+        self.history[index].period
+    }
+
+    /// What repeats in channel `index` in range `scale` of the delays,
+    /// as of now.
+    pub fn analysis(&self, index: usize, scale: usize) -> Analysis {
+        let now_ms = self.now.as_millis() as u64;
+        self.history[index]
+            .bursts
+            .analyse(&self.going(index), now_ms, scale)
     }
 
     /// Whether `X` would let the channel go: made by the app (no name,
@@ -359,6 +422,18 @@ impl ChannelsView {
     /// The selected channel.
     pub fn selected(&self) -> Option<&Channel> {
         self.selected.map(|index| &self.channels.list()[index])
+    }
+
+    /// The selected channel's number.
+    pub fn selected_index(&self) -> Option<usize> {
+        self.selected
+    }
+
+    /// Selects channel `index`, if it has a row.
+    pub fn select(&mut self, index: usize) {
+        if self.rows().iter().any(|row| row.index == index) {
+            self.selected = Some(index);
+        }
     }
 
     /// The row the selection is on.
@@ -711,6 +786,64 @@ mod tests {
         // When the signals stop, those channels can go too.
         view.set_open(&[]);
         assert_eq!(view.made(), 3);
+    }
+
+    #[test]
+    fn a_channels_period_is_worked_out_a_channel_a_frame() {
+        let mut view = ChannelsView::default();
+        let every = |period_ms: u64, khz: f64| -> Vec<Event> {
+            let starts = (0..60_000 / period_ms).map(|turn| turn * period_ms);
+            starts
+                .map(|start| event(start, 300, 433e6 + khz * 1e3))
+                .collect()
+        };
+        view.on_events(&every(2040, 100.0));
+        view.on_events(&every(5000, 300.0));
+        // A carrier, still on.
+        view.on_events(&[event(0, 40, 433.5e6)]);
+        view.set_open(&[event(1000, 59_000, 433.5e6)]);
+        assert_eq!(view.period(0), None);
+        for frame in 0..3 {
+            let time = Duration::from_millis(60_000 + frame * 100);
+            view.on_frame(time, 433.92e6, 2_400_000);
+        }
+        let seconds = |index: usize| view.period(index).map(|period| period.seconds);
+        assert!((seconds(0).unwrap() - 2.04).abs() < 0.005);
+        assert!((seconds(1).unwrap() - 5.0).abs() < 0.005);
+        assert_eq!(seconds(2), None);
+        // The screen's own look at a channel is as of now, with what is
+        // still on.
+        let analysis = view.analysis(2, 1);
+        assert_eq!(analysis.envelope.len(), 6000);
+        assert_eq!(analysis.envelope[5999], 1.0);
+        assert!((view.analysis(0, 1).period().unwrap().seconds - 2.04).abs() < 0.005);
+    }
+
+    #[test]
+    fn all_periods_can_be_worked_out_at_once_and_a_hidden_channel_has_none() {
+        let mut view = ChannelsView::new(vec![Channel {
+            name: None,
+            center_hz: 433.1e6,
+            width_hz: 10e3,
+            hidden: true,
+        }]);
+        for turn in 0..30 {
+            view.on_events(&[
+                event(turn * 2000, 300, 433.1e6),
+                event(turn * 2000, 300, 433.3e6),
+            ]);
+        }
+        view.refresh_periods();
+        assert_eq!(view.period(0), None);
+        assert!(view.period(1).is_some());
+        // A channel is selected by its number; a hidden one cannot be.
+        view.select(0);
+        assert_eq!(view.selected_index(), None);
+        view.select(1);
+        assert_eq!(view.selected().unwrap().center_hz, 433.3e6);
+        // Letting the made channels go takes their periods with them.
+        view.forget_made();
+        assert_eq!(view.rows().len(), 0);
     }
 
     #[test]
