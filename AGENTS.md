@@ -102,9 +102,9 @@ touching USB.
   keys). The user has run phase 3 on the air there and found it working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-14 `sdr-viewer` there is the build of the `channels`
-  branch with PR #24 merged in (the channel strip, the detector's fix);
-  the one before is `sdr-viewer.before-fixes`. With the
+  Since 2026-11-14 `sdr-viewer` there is the build of the `band-names`
+  branch (PR #26, with PR #25 in it: `X` twice, the band's name in the
+  header); the one before is `sdr-viewer.before-x`. With the
   receiver it makes `~/.config/sdr-viewer/channels.toml`: the user's, like
   the database — our checks use `--channels test.toml` and remove it. The user
   allows replacing `sdr-viewer` there with a newer build without asking.
