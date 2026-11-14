@@ -18,12 +18,13 @@ Phases of the plan (its section 14 has the detail):
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
 | 3 Detector and log | done, and found working on the air on the device by the user (2026-11-13): the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples |
-| 4 Accumulators | begun: the spectral density (screen 3) and the channel strip (screen 2) are built. Periodicity is not started |
+| 4 Accumulators | begun: the spectral density (screen 3) and the channel strip (screen 2) are built, tried by the user on the air on the device and approved (2026-11-14) — with what that trial asked for: the detector's stuck events fixed, the receiver's spike kept off the strip, `X` twice on the strip and on the log, the band's name in the spectrum's header. Periodicity (screen 4) is not started |
 | 5–8 | not started |
 
-Phase 4's order (the plan's section 12): density, the channel strip, then
-periodicity (5.4), each its own pull request. Nothing of periodicity is
-agreed in detail.
+Next is periodicity (the plan's 5.4), the last piece of phase 4, as its
+own pull request. Nothing of it is agreed in detail: ask the user how the
+channel is chosen and what the screen should say before building. No
+pull request is open; `main` has everything (PR #26 was the last).
 
 ## Commands
 
@@ -34,7 +35,10 @@ agreed in detail.
 - `cargo run --release -- --rtlsdr --center 433.92M [--gain 30] [--rate 2.4M]`
   — receive from an RTL-SDR. Events go to
   `~/.local/share/sdr-viewer/events.db` (`--db FILE` elsewhere, and for a
-  recording or the generator too; `--no-db` nowhere). On the user's
+  recording or the generator too; `--no-db` nowhere). The channels made
+  for new signals go to `~/.config/sdr-viewer/channels.toml` (`--channels
+  FILE` elsewhere, and for a recording or the generator too;
+  `--no-channels` nowhere). On the user's
   uConsole only through `sdr-viewer-rx.sh` (see "The user's device").
 - With any source: `--iq-buffer SECS` (30; 0 = none) is the IQ ring in
   memory, `--iq-dir DIR` (default `~/.local/share/sdr-viewer/iq`) is where
@@ -64,9 +68,10 @@ request gets no run: open a draft one to get a binary.
   binary; on the uConsole it needs only Python 3. `--words` prints the
   pieces of text the app wrote, to grep for what must be on the screen. An
   escape sequence in `--keys` is one key (`$'5\x1b[Br'`: log, down, save
-  IQ). The default keys end
-  on a placeholder screen: to measure a screen pass `--keys 1` (spectrum)
-  or `--keys 5` (log), and compare builds side by side in one sitting.
+  IQ). The default keys walk all eight screens and end on the
+  spectrum under the help: to measure a screen pass its digit alone
+  (`--keys 1` spectrum, `2` channels, `3` density, `5` log), and compare
+  builds side by side in one sitting.
 - `scripts/term-check.sh` — can this terminal show truecolor, bars, half
   blocks, Braille.
 - `scripts/hub-speed.sh` — for the user's device, installed there as
@@ -99,12 +104,13 @@ touching USB.
 - A new binary: download the PR's `sdr-viewer-aarch64` artifact
   (`gh run download RUN -n sdr-viewer-aarch64`) and `scp` it to
   `~/sdr-viewer-check/sdr-viewer`. `smoke.py` there is PR #15's (arrow
-  keys). The user has run phase 3 on the air there and found it working. Saving IQ was tried there on the recording with
+  keys). The user has run phase 3, the density and the channel strip on
+  the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-14 `sdr-viewer` there is the build of the `band-names`
-  branch (PR #26, with PR #25 in it: `X` twice, the band's name in the
-  header); the one before is `sdr-viewer.before-x`. With the
+  Since 2026-11-14 `sdr-viewer` there is the build of PR #26's branch,
+  which is `main` after that pull request in all but docs; the one
+  before is `sdr-viewer.before-x`. With the
   receiver it makes `~/.config/sdr-viewer/channels.toml`: the user's, like
   the database — our checks use `--channels test.toml` and remove it. The user
   allows replacing `sdr-viewer` there with a newer build without asking.
@@ -188,7 +194,8 @@ a crate is added in the phase that needs it):
   → screen frames at 10 a second, each with the detector's `Levels`; the
   density gathered from every detector frame; one pass of FFTs), `reader` (the source
   thread: carry out `Command`s, read, fill the IQ ring, run the pipeline,
-  send `Update`s, hand ended events to the store and an event's samples
+  send `Update`s, hand ended events (and the word that the log was
+  erased: `Kept`) to the store and an event's samples
   (`Cut`, as a `Job`) to the worker — its `Sinks`), `jobs` (the worker
   thread: saves a cut, or makes its picture; of pictures that piled up
   only the last), `save` (a `Cut` to a SigMF pair), `fragment` (a `Cut`

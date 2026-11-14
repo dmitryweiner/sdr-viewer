@@ -324,6 +324,7 @@ The first useful version comes after phase 3.
 | The spectral density (5.3) | A histogram of the detector's frames (100 a second, so a 10 ms burst counts at its own level): per bin of the spectrum, 1 dB levels from −120 to 0 dBFS. It forgets exponentially, half-life 30 s, and is gathered all the time, whichever screen is open. Brightness is the logarithm of the share of time, from 10⁻⁴ to 1; a cell of the screen shows the largest share among its bins and levels. The screen shares the spectrum's band, zoom, cursor, scale and keys; `m` starts it afresh. The half-life is fixed for now |
 | The channel strip (5.2) and its channels | The user's decision (2026-11-14): channels are made automatically, saved to TOML, and the user may edit them. As built: an event ≥ 10 dB above the floor whose centre is in no channel makes one (the event's width, at least 10 kHz; an event still on makes it after 1 s, or a carrier would never have one; at most 500 a run). The file is `sdr-viewer/channels.toml` in the user's config directory, by default only for the RTL-SDR, like the database. The app reads it at the start and only appends to it — the text on the disk is re-read before every addition and never rewritten, so names, order and comments are the user's. `hide = true` takes a channel off the strip without it being made again. Occupancy is counted in the interface from the detector's events, per second, 4 hours back, in stream time; a column is 1, 10, 60 or 300 s |
 | Band names on the spectrum | Asked for by the user (2026-11-14), ahead of phase 8's frequency plan: the header of the spectrum and of the density names the band the middle of the view is in, and the cursor's when it differs. The names are a table compiled into the app (`sdr-core::bands`, ITU Region 1 as commonly used, written from memory and not checked against Israel's national plan); bands may nest, the narrowest names a frequency. The user's own plan and bookmarks from a config stay with phase 8 |
+| Looking a frequency up on the internet | Proposed by the user (a key that searches what transmitter a frequency may be) and withdrawn by them the same day, 2026-11-14, before anything was built: not to be done. The reasons it was not simple: no source with an API for "what transmits here in Israel"; a browser opened on the device is not seen over SSH; an HTTP client with TLS and the parsing of other people's pages in a static binary |
 | Phase 4's order | Density first (it needs only the frames), then the channel strip, then periodicity: each its own pull request |
 | How long events are kept | 7 days: older events are deleted when the app starts. Nothing is filtered on the way in (~93 bytes an event, ~660 MB a day on a band as busy as the LPD recording, so the file settles under ~5 GB there) |
 | Phase order on start | Phase 1 before phase 0: no SSH access to the device yet; phase 0 follows `docs/hardware-check.md` when there is |
@@ -366,7 +367,7 @@ As of 2026-11-14.
 | 1 | Skeleton | Done: workspace, CI with a static aarch64 binary, generator and file sources, tabs |
 | 2 | Spectrum and waterfall | Done on the generator, recordings and the RTL-SDR: bars with max hold, waterfall, a scale that follows the noise floor, cursor, tuning (`f`, `[` `]`, Enter), gain, zoom, pause, `--snapshot` |
 | 3 | Detector and log | Done; the user ran it on the air on the device on 2026-11-13 and found it working. Built: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. The spectrum shows the detector's threshold as a line and the dB above the floor in its header. The last 30 s of samples are held in a ring buffer; the log shows the picture of the selected event made of them, and `r` saves them as SigMF. The detector has regression tests on a piece of real air (`testdata/`). The status line tells overload (`clip`) and lost samples. |
-| 4 | Accumulators | Begun: the spectral density (screen 5.3) and the channel strip (5.2) are built — their decisions are in section 12. Periodicity (5.4) is not started |
+| 4 | Accumulators | Begun: the spectral density (screen 5.3) and the channel strip (5.2) are built — their decisions are in section 12 — and were tried on the air and approved by the user on 2026-11-14, together with `X` twice on the strip and the log and the band's name in the header. Periodicity (5.4) is not started |
 | 5–8 | | Not started |
 
 Known limits of the channel strip as built:
@@ -406,7 +407,10 @@ Known limits of the channel strip as built:
   hopper's 25 kHz grid, each within a kilohertz or two of its place, and
   a dozen weak ones between grid channels (433.593, 433.618, 433.643 MHz
   — 0.2% busy each) that a person would remove. The strip there costs
-  22–23% of a CM4 core. Not yet seen by the user, nor on the air.
+  22–23% of a CM4 core.
+- On the air the user tried it on 2026-11-14 with a handheld radio beside
+  the receiver (PMR446), found the two kinds of sticking that were then
+  fixed, and approved the result by eye; nothing was measured there.
 
 Known limits of the density as built:
 
@@ -421,7 +425,8 @@ Known limits of the density as built:
 - On the device it was measured on the recording (33–34% of a core at
   160×45, the spectrum's cost; gathering adds nothing measurable) and
   looked at as a text snapshot: the hopper's channels stand as columns
-  over the noise. Not yet seen by the user, nor on the air.
+  over the noise. The user has seen it on the air since (2026-11-14) and
+  made no remark on it.
 
 Nothing is left of phase 3's list. Done from that list:
 
