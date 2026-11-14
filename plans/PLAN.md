@@ -383,7 +383,11 @@ Known limits of the channel strip as built:
 - A retune does not change the list: the channels of every band visited
   are rows, those outside the received band dimmed.
 - Rows are in the order of frequency only.
-- Not yet seen on the device or on the air.
+- On the device's recording (10 s of LPD433) 81 channels are made: the
+  hopper's 25 kHz grid, each within a kilohertz or two of its place, and
+  a dozen weak ones between grid channels (433.593, 433.618, 433.643 MHz
+  — 0.2% busy each) that a person would remove. The strip there costs
+  22–23% of a CM4 core. Not yet seen by the user, nor on the air.
 
 Known limits of the density as built:
 
