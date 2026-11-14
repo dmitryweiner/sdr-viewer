@@ -510,7 +510,9 @@ How the detector works (`crates/sdr-detect`), as built:
   pure tone reads ~10 kHz wide (the window's skirts); a signal that never
   ends is one open event forever.
 
-On the device's recording (`capture-433.cu8`, 10 s) it finds 824 events:
+On the device's recording (`capture-433.cu8`, 10 s) it finds 915 events
+(824 while an event was matched against every bin it had ever touched;
+which 91 were split off was not looked at one by one):
 most are 40–50 ms long and ~9 kHz wide, exactly on the 25 kHz LPD grid
 over some 66 channels — a frequency hopper nobody had noticed on the
 waterfall. 90 are one bin for one frame at 8–10.5 dB above the floor: more
