@@ -284,7 +284,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | The density screen on the Mac (generator, 160×45, 10 s, `smoke.py --keys 1` / `--keys 3`, one sitting) | spectrum 16%, density **16%** of one core (3.1 MB to the terminal against 8.0); at 80×24 9% |
 | The channel strip on the CM4 (the recording looped, 160×45, 15 s, PR #22's build and PR #23's side by side; 81 channels) | the strip (`--keys 2`) **22–23%** of a core, 16 kB/s to the terminal; counting channels adds nothing to the other screens: spectrum 37 → 35%, log 24 → 24% |
 | The density on the CM4 (the recording looped, 160×45, 15 s, main's build and PR #22's side by side, twice) | gathering it costs nothing measurable: spectrum (`--keys 1`) 37 and 34% before, 35 and 36% with it. The density screen (`--keys 3`) **33 and 34%** of a core, 0.6 MB/s to the terminal against the spectrum's 0.9 |
-| Static aarch64 binary from CI | 4.8 MB (4.6 when SQLite was compiled in, 2.4 before that) |
+| Static aarch64 binary from CI | 5.1 MB (4.8 before the `toml` crate, 2.4 before SQLite) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:
 measure on the device, the Mac's numbers do not scale.
