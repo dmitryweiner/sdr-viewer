@@ -1,5 +1,5 @@
-//! The spectrum screen without a terminal: read the start of a stream as
-//! fast as it comes, print the screen as text and list the strongest
+//! A screen without a terminal: read the start of a stream as fast as it
+//! comes, print the spectrum screen (or the density) as text and list the strongest
 //! signals and the detector's events. For looking at a recording from a script or over SSH.
 
 use std::fmt::Write;
@@ -7,7 +7,7 @@ use std::fmt::Write;
 use sdr_core::units::format_hz;
 use sdr_core::{Iq, Source, SpectrumFrame};
 use sdr_detect::Event;
-use sdr_tui::{App, SourceState, ui};
+use sdr_tui::{App, Screen, SourceState, ui};
 
 use crate::pipeline::{FFT_SIZE, Output, Pipeline};
 
@@ -20,10 +20,13 @@ pub fn run(
     mut source: impl Source,
     (width, height): (u16, u16),
     secs: f64,
+    screen: Screen,
 ) -> Result<String, String> {
     let info = source.info();
     let mut app = App::new(info.clone());
+    app.screen = screen;
     let mut pipeline = Pipeline::new(info.sample_rate);
+    pipeline.watch_density(screen == Screen::Density);
     let mut events = Vec::new();
     let wanted = (secs * f64::from(info.sample_rate)) as u64;
     let mut buf = vec![Iq::new(0.0, 0.0); 16 * 1024];
@@ -43,6 +46,7 @@ pub fn run(
                 frames += 1;
             }
             Output::Event(event) => events.push(event),
+            Output::Density(map) => app.on_density(map),
         });
     }
     app.status.state = SourceState::Ended;
@@ -167,7 +171,7 @@ mod tests {
     #[test]
     fn a_snapshot_of_the_demo_scene_shows_and_lists_both_signals() {
         let generator = Generator::new(GeneratorConfig::demo());
-        let text = run(generator, (100, 30), 3.0).unwrap();
+        let text = run(generator, (100, 30), 3.0, Screen::Spectrum).unwrap();
         assert_eq!(text.lines().take(30).count(), 30);
         assert!(
             text.contains("peak 434.200 MHz") || text.contains("peak 433.500 MHz"),
@@ -198,9 +202,23 @@ mod tests {
     }
 
     #[test]
+    fn a_snapshot_of_the_density_screen_shows_what_was_gathered() {
+        let generator = Generator::new(GeneratorConfig::demo());
+        let text = run(generator, (100, 30), 3.0, Screen::Density).unwrap();
+        let screen: Vec<&str> = text.lines().take(30).collect();
+        assert!(screen[1].contains("half-life 30 s"), "{text}");
+        // Half blocks from the noise at the bottom up to the carrier.
+        let marks = |line: &str| line.chars().filter(|&c| c == '▀' || c == '▄').count();
+        assert!(marks(screen[26]) > 90, "{text}");
+        assert!((1..=4).contains(&marks(screen[10])), "{text}");
+        // The lists under the screen are the same.
+        assert!(text.contains("Events: 2 ended, 1 still on"), "{text}");
+    }
+
+    #[test]
     fn a_snapshot_lists_the_events_in_the_order_they_began() {
         let generator = Generator::new(GeneratorConfig::demo());
-        let text = run(generator, (100, 30), 3.0).unwrap();
+        let text = run(generator, (100, 30), 3.0, Screen::Spectrum).unwrap();
         let from = text.find("Events:").expect(&text);
         let lines: Vec<&str> = text[from..].lines().collect();
         assert_eq!(lines[0], "Events: 2 ended, 1 still on at the end.");

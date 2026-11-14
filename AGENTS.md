@@ -18,11 +18,12 @@ Phases of the plan (its section 14 has the detail):
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
 | 3 Detector and log | done, and found working on the air on the device by the user (2026-11-13): the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples |
-| 4–8 | not started |
+| 4 Accumulators | begun: the spectral density (screen 3) is built, on the generator and recordings; not yet seen on the device. The channel strip and periodicity are not started |
+| 5–8 | not started |
 
-Phase 4 (channel strip, spectral density, periodicity — the plan's
-sections 5.2–5.4 and 8) is next; nothing of it is started or agreed in
-detail.
+Phase 4's order (the plan's section 12): density, then the channel strip
+(5.2), then periodicity (5.4), each its own pull request. Nothing of the
+last two is agreed in detail.
 
 ## Commands
 
@@ -42,7 +43,8 @@ detail.
   — no terminal: analyses the start of the stream (unpaced for files and
   the generator), prints the spectrum screen as text, the max-hold
   peaks and the detector's events. The way to look at a recording, at the air, or at the picture from
-  a script. Below 80x24 it prints only "too small".
+  a script. Below 80x24 it prints only "too small". `--screen 3` prints
+  the density screen instead.
 - `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
   of the generator and of the IQ ring per sample.
 
@@ -149,6 +151,8 @@ a crate is added in the phase that needs it):
   time, slow up and fast down) and `detector` (`Detector`: bins above the
   floor joined across frequency and time into `Event`s; keying splash of a
   strong signal masked; `Levels`: its floor per bin and its threshold,
+  for the screen), `density` (`Density`: how often each bin was at each
+  level, forgetting with a half-life; `DensityMap`: that as plain numbers,
   for the screen).
 - `sdr-store` — `Store`: the SQLite event database (`rusqlite`, SQLite
   compiled in), `sessions` and `events`, the layout's version in
@@ -163,12 +167,14 @@ a crate is added in the phase that needs it):
   state: the last 10 000 events, the level filter, the order, a held
   list while a row is selected), `log_ui`, `fragment` (`Fragment`: the
   spectra around one event, and their reduction to pixels; `Picture`:
-  waiting, gone or ready). Snapshot tests in
+  waiting, gone or ready), `density` (a `DensityMap` reduced to the
+  pixels of a plot, a share of time as a brightness), `density_ui`.
+  Snapshot tests in
   `src/snapshots/`.
 - `sdr-viewer` — the binary: `cli` (arguments → source), `pipeline`
   (samples → detector frames at 100 a second → events, and their averages
-  → screen frames at 10 a second, each with the detector's `Levels`; one
-  pass of FFTs), `reader` (the source
+  → screen frames at 10 a second, each with the detector's `Levels`; the
+  density gathered from every detector frame; one pass of FFTs), `reader` (the source
   thread: carry out `Command`s, read, fill the IQ ring, run the pipeline,
   send `Update`s, hand ended events to the store and an event's samples
   (`Cut`, as a `Job`) to the worker — its `Sinks`), `jobs` (the worker
@@ -223,6 +229,12 @@ a crate is added in the phase that needs it):
 - The interface never touches the source: keys become `Command`s, the
   reader thread carries them out and answers with `Update::Source` or
   `Update::Notice`.
+- The density is gathered from every detector frame, always; its map (a
+  megabyte) goes to the interface only while the density screen is open
+  (`Command::WatchDensity`), with the screen's frames, and may be dropped
+  like them.
+- The density screen has no view of its own: band, zoom, cursor, scale
+  and pause are the spectrum's (`SpectrumView`).
 - `unsafe_code = "forbid"` across the workspace.
 - The numbers of the reference recording's tests (`pipeline.rs`) change
   only on purpose too: look at what the detector now finds in
@@ -249,6 +261,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | The IQ ring buffer (30 s; with and without `--iq-buffer 0`) | `bench_ring` on the Mac: 0.3 ns/sample; 153 MB resident after 40 s, as computed (144 MB + the app). **On the CM4**, the recording, 15 s: spectrum (`--keys 1`) 32 → 34% of a core, log (`--keys 5`) 21 → 22%. With a bounds check and a wrap test per sample it was 4 points, not 1–2 |
 | The picture of the selected event on the CM4 (the recording, 15 s, `smoke.py --keys 5` plus down arrows) | the log alone **22%** of a core; a row held with its picture **19%** (the list stands still); a new picture every 0.36 s (40 downs) **26%** |
 | Counting clipped samples on the CM4 (the recording, 15 s, before and after) | within a point: spectrum 34 → 35% of a core, log 22 → 23% |
+| The density screen on the Mac (generator, 160×45, 10 s, `smoke.py --keys 1` / `--keys 3`, one sitting) | spectrum 16%, density **16%** of one core (3.1 MB to the terminal against 8.0); at 80×24 9%. Not measured on the CM4 yet |
 | Static aarch64 binary from CI | 4.8 MB (4.6 when SQLite was compiled in, 2.4 before that) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:

@@ -15,7 +15,7 @@ use crate::spectrum::{
 };
 
 /// Columns left of the plot for the dB labels: "-100 ".
-const GUTTER: u16 = 5;
+pub(crate) const GUTTER: u16 = 5;
 
 const HELD: Color = Color::Rgb(70, 70, 80);
 
@@ -103,7 +103,7 @@ fn draw_header(
 }
 
 /// The frequency being typed, in place of the header.
-fn draw_input(frame: &mut Frame, typed: &str, area: Rect) {
+pub(crate) fn draw_input(frame: &mut Frame, typed: &str, area: Rect) {
     let line = Line::from(vec![
         Span::raw("frequency ").dark_gray(),
         Span::raw(format!("{typed}▏")).bold(),
@@ -122,7 +122,7 @@ fn strongest(power_db: &[f32]) -> (usize, f32) {
 }
 
 /// The dB at the top, the middle and the bottom of the bars.
-fn draw_scale(frame: &mut Frame, (bottom, top): (f32, f32), bars: Rect) {
+pub(crate) fn draw_scale(frame: &mut Frame, (bottom, top): (f32, f32), bars: Rect) {
     let rows = bars.height;
     for (row, db) in [
         (0, top),
@@ -200,7 +200,7 @@ fn draw_bars(
 
 /// Frequencies of the left edge, the centre and the right edge, and the
 /// cursor's mark.
-fn draw_axis(
+pub(crate) fn draw_axis(
     frame: &mut Frame,
     view: &SpectrumView,
     latest: &SpectrumFrame,

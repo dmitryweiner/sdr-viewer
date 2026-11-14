@@ -11,6 +11,7 @@ use sdr_core::pace::{Paced, SystemClock};
 use sdr_core::units::parse_hz;
 use sdr_core::{Source, SourceInfo};
 use sdr_rtl::{RtlConfig, RtlSource};
+use sdr_tui::Screen;
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -48,6 +49,11 @@ pub struct Args {
     /// as it reads and print the spectrum screen as text, COLSxROWS.
     #[arg(long, value_name = "COLSxROWS", value_parser = parse_size_arg)]
     pub snapshot: Option<(u16, u16)>,
+
+    /// The screen a snapshot prints, by its digit: 1 the spectrum, 3 the
+    /// density.
+    #[arg(long, value_name = "DIGIT", default_value = "1", requires = "snapshot", value_parser = parse_screen_arg)]
+    pub screen: Screen,
 
     /// Seconds of the stream a snapshot looks at.
     #[arg(long, default_value_t = 5.0)]
@@ -122,6 +128,17 @@ fn parse_size_arg(text: &str) -> Result<(u16, u16), String> {
         .split_once('x')
         .and_then(|(cols, rows)| Some((cols.parse().ok()?, rows.parse().ok()?)));
     size.ok_or_else(|| format!("not a size: {text:?} (try 160x45)"))
+}
+
+/// The screens a snapshot can fill.
+fn parse_screen_arg(text: &str) -> Result<Screen, String> {
+    match text {
+        "1" => Ok(Screen::Spectrum),
+        "3" => Ok(Screen::Density),
+        _ => Err(format!(
+            "no snapshot of screen {text:?}: 1 (spectrum) or 3 (density)"
+        )),
+    }
 }
 
 fn parse_hz_arg(text: &str) -> Result<f64, String> {
@@ -345,6 +362,11 @@ mod tests {
         assert!(parse(&["--rate", "fast"]).is_err());
         assert!(parse(&["--format", "wav"]).is_err());
         assert!(parse(&["--snapshot", "big"]).is_err());
+        assert!(parse(&["--screen", "3"]).is_err());
+        assert!(parse(&["--snapshot", "80x24", "--screen", "2"]).is_err());
+        assert_eq!(args(&[]).screen, Screen::Spectrum);
+        let density = args(&["--snapshot", "80x24", "--screen", "3"]);
+        assert_eq!(density.screen, Screen::Density);
         assert!(parse(&["--rtlsdr", "x.cu8"]).is_err());
         assert!(parse(&["--gain", "30"]).is_err());
         assert_eq!(args(&["--rtlsdr", "--gain", "29.7"]).gain, Some(29.7));

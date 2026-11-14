@@ -14,7 +14,7 @@ use crate::app::{App, Screen, SourceState};
 pub const MIN_WIDTH: u16 = 80;
 pub const MIN_HEIGHT: u16 = 24;
 
-const KEYS: [(&str, &str); 18] = [
+const KEYS: [(&str, &str); 19] = [
     ("?", "this help"),
     ("1–8", "switch screens"),
     ("Tab, Shift+Tab", "next, previous screen"),
@@ -26,6 +26,10 @@ const KEYS: [(&str, &str); 18] = [
     ("g, G, a", "spectrum: gain up, down, automatic"),
     ("Space", "spectrum: pause"),
     ("m", "spectrum: reset max hold"),
+    (
+        "m",
+        "density: start afresh (the other keys as on the spectrum)",
+    ),
     ("↑, ↓", "log: select an event (PgUp, PgDn, Home, End)"),
     ("+, -", "log: raise, lower the level that hides weak events"),
     ("s", "log: sort by time, level, duration, frequency"),
@@ -51,6 +55,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
     match app.screen {
         Screen::Spectrum => {
             crate::spectrum_ui::draw(frame, &app.spectrum, app.input.as_deref(), body);
+        }
+        Screen::Density => {
+            let (view, map) = (&app.spectrum, app.density.as_ref());
+            crate::density_ui::draw(frame, view, map, app.input.as_deref(), body);
         }
         Screen::Log => crate::log_ui::draw(frame, &app.log, app.picture(), body),
         screen => frame.render_widget(placeholder(screen), body),
@@ -253,7 +261,7 @@ mod tests {
     fn app_with_signal() -> App {
         use sdr_core::generator::{Gate, Generator, GeneratorConfig, Tone};
         use sdr_core::{Iq, Source};
-        use sdr_detect::{Detector, DetectorConfig};
+        use sdr_detect::{Density, DensityConfig, Detector, DetectorConfig};
         use sdr_dsp::{Analyzer, AnalyzerConfig};
 
         let mut app = app();
@@ -284,14 +292,17 @@ mod tests {
             average: 100,
         });
         let mut detector = Detector::new(DetectorConfig::default());
+        let mut density = Density::new(DensityConfig::default());
         let mut buf = vec![Iq::new(0.0, 0.0); 1_024_000];
         for _ in 0..2 {
             generator.read(&mut buf).unwrap();
             analyzer.push(&buf, &generator.info(), |frame| {
                 detector.push(&frame, |_| {});
+                density.push(&frame);
                 app.spectrum.on_frame(frame, detector.levels());
             });
         }
+        app.on_density(density.map().clone());
         app
     }
 
@@ -321,6 +332,83 @@ mod tests {
         app.spectrum.zoom_in();
         app.input = Some("433.5M".into());
         insta::assert_snapshot!(render(&app, 80, 24).backend());
+    }
+
+    fn app_on_the_density() -> App {
+        let mut app = app_with_signal();
+        app.screen = Screen::Density;
+        app
+    }
+
+    #[test]
+    fn density_waits_for_samples() {
+        let mut app = app();
+        app.screen = Screen::Density;
+        assert!(render_text(&app, 80, 24).contains("Waiting for samples…"));
+        // A spectrum alone is not enough, nor a map of another one.
+        let mut app = app_on_the_density();
+        app.density = None;
+        assert!(render_text(&app, 80, 24).contains("Waiting for samples…"));
+    }
+
+    #[test]
+    fn density_at_the_minimum_size() {
+        insta::assert_snapshot!(render(&app_on_the_density(), 80, 24).backend());
+    }
+
+    #[test]
+    fn density_with_a_cursor_on_the_burst_on_the_uconsole_screen() {
+        let mut app = app_on_the_density();
+        // 300 kHz above the centre of 1.024 MHz; on for the first of the
+        // 2 s, which by now weighs a little less than the second.
+        app.spectrum.cursor = Some(0.793);
+        let terminal = render(&app, 160, 45);
+        let text = render_text(&app, 160, 45);
+        assert!(
+            text.contains("cursor 434.217 MHz  busy 49% of the time  half-life 30 s"),
+            "{text}"
+        );
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn the_density_is_brightest_where_the_signal_always_is() {
+        let app = app_on_the_density();
+        let terminal = render(&app, 80, 24);
+        let buffer = terminal.backend().buffer();
+        // The carrier, as in the waterfall's test: always there, at the
+        // top of the scale, on one level or two.
+        let carrier = 5 + 22;
+        let top = &buffer[(carrier, 2)];
+        assert_eq!(top.symbol(), "▀");
+        assert!(
+            matches!(top.fg, Color::Rgb(255, g, _) if g > 235),
+            "{top:?}"
+        );
+        // Between its level and the noise it never was: nothing is drawn.
+        assert_eq!(buffer[(carrier + 6, 10)].symbol(), " ");
+        // The noise is there all the time too.
+        let noise = &buffer[(carrier + 6, 21)];
+        assert_eq!(noise.symbol(), "▀");
+        assert!(
+            matches!(noise.fg, Color::Rgb(r, _, _) if r > 200),
+            "{noise:?}"
+        );
+    }
+
+    #[test]
+    fn the_densitys_zoom_and_typing_are_the_spectrums() {
+        let mut app = app_on_the_density();
+        app.spectrum.zoom_in();
+        app.spectrum.paused = true;
+        let text = render_text(&app, 80, 24);
+        assert!(text.contains("half-life 30 s  ×2  paused"), "{text}");
+        assert!(
+            text.contains("433.664 MHz") && text.contains("434.176 MHz"),
+            "{text}"
+        );
+        app.input = Some("433.5M".into());
+        assert!(render_text(&app, 80, 24).contains("frequency 433.5M▏"));
     }
 
     #[test]

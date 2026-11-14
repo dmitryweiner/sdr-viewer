@@ -5,11 +5,11 @@ with the HackerGadgets AIO V2 board. It watches the air through the board's
 RTL-SDR and shows what a person would otherwise miss: when, where and how
 often something was transmitted.
 
-**Status: phase 3 of 8 done** — the spectrum and waterfall screen and the
-signal log work on the built-in signal generator, on IQ recordings and on
-an RTL-SDR: tuning, gain and zoom from the keyboard, detected events kept
-in a database, their pictures and their samples. The other screens are
-still to come. See
+**Status: phase 3 of 8 done, phase 4 begun** — the spectrum and waterfall
+screen, the signal log and the spectral density work on the built-in
+signal generator, on IQ recordings and on an RTL-SDR: tuning, gain and
+zoom from the keyboard, detected events kept in a database, their pictures
+and their samples. The other screens are still to come. See
 [plans/PLAN.md](plans/PLAN.md) for what comes next.
 
 ## Run
@@ -52,6 +52,21 @@ arrive at. Beside it, only when there is something to tell: `clip 2.4%` —
 the share of samples at full scale, the receiver is overloaded (yellow
 from 0.1%, red from 1%: lower the gain with `G`); `lost 0.05 s` — samples
 the receiver delivered and the app did not take in time, since the start.
+
+The spectral density (`3`) answers "which frequencies are busy at all?":
+frequency runs across and level up, as on the spectrum, and a point is the
+brighter, the more of the time the signal was at that level. The noise is
+a bright band at the bottom, a carrier a bright spot above it, and a short
+burst that an eye on the waterfall misses stays as a faint mark over its
+frequency. Brightness grows with the logarithm of the share of time: from
+one hundredth of a second in a hundred seconds to "always". The picture
+forgets: what happened 30 s ago weighs half of what happens now. It is
+gathered from the start, whichever screen is open.
+
+The band, the zoom, the cursor and the scale are the spectrum's, and so
+are its keys. With the cursor on, the header tells how much of the time
+the frequency under it was above the detector's threshold (`busy 4.1%`).
+`m` starts the picture afresh; `Space` holds it still.
 
 On the signal log (`5`) — one row per signal the detector found: when it
 began, how long it lasted, where, how wide, how strong:
@@ -127,6 +142,8 @@ detected events of the first seconds of a recording:
 ```sh
 cargo run --release -- capture.cu8 --rate 2.4M --center 433.92M --snapshot 160x45 --secs 10
 ```
+
+`--screen 3` prints the density screen instead of the spectrum.
 
 On the uConsole: take the static `aarch64` binary from the CI artifact
 `sdr-viewer-aarch64`. The first run on a device is the
