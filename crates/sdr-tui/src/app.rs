@@ -2,9 +2,10 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use sdr_core::units::parse_hz;
-use sdr_core::{GainChange, SourceInfo};
-use sdr_detect::{DensityMap, Event};
+use sdr_core::{GainChange, SourceInfo, SpectrumFrame};
+use sdr_detect::{DensityMap, Event, Levels};
 
+use crate::channels::ChannelsView;
 use crate::fragment::{Fragment, Picture};
 use crate::log::LogView;
 use crate::spectrum::SpectrumView;
@@ -151,6 +152,7 @@ pub struct App {
     pub status: SourceStatus,
     pub spectrum: SpectrumView,
     pub log: LogView,
+    pub channels: ChannelsView,
     /// How often each frequency was at each level; comes only while its
     /// screen is open.
     pub density: Option<DensityMap>,
@@ -164,6 +166,9 @@ pub struct App {
     pub done: Option<String>,
     /// The event selected in the log and what there is of its picture.
     picture: Option<(Event, Picture)>,
+    /// `X` on the channel strip was pressed once: the next one lets the
+    /// made channels go.
+    forgetting: bool,
 }
 
 /// Cursor steps as shares of the width: fine, and coarse with Shift.
@@ -183,12 +188,14 @@ impl App {
             status: SourceStatus::new(SourceState::Running, 0.0),
             spectrum: SpectrumView::default(),
             log: LogView::default(),
+            channels: ChannelsView::default(),
             density: None,
             commands: Vec::new(),
             input: None,
             notice: None,
             done: None,
             picture: None,
+            forgetting: false,
         }
     }
 
@@ -203,6 +210,25 @@ impl App {
         if watch != watched {
             self.commands.push(Command::WatchDensity(watch));
         }
+    }
+
+    /// A frame for the screen, and the stream's time with it.
+    pub fn on_frame(&mut self, frame: SpectrumFrame, levels: Levels) {
+        self.channels
+            .on_frame(frame.time, frame.center_hz, frame.sample_rate);
+        self.spectrum.on_frame(frame, levels);
+    }
+
+    /// Events that have ended: rows of the log, and the channels' time.
+    pub fn on_events(&mut self, events: Vec<Event>) {
+        self.channels.on_events(&events);
+        self.log.on_events(events);
+    }
+
+    /// The events going on now.
+    pub fn on_open_events(&mut self, open: Vec<Event>) {
+        self.channels.set_open(&open);
+        self.log.set_open(open);
     }
 
     /// Takes the density as of the latest frame; like the spectrum, the
@@ -249,6 +275,15 @@ impl App {
     fn handle_key(&mut self, key: KeyEvent) {
         self.notice = None;
         self.done = None;
+        let forgetting = std::mem::take(&mut self.forgetting);
+        if forgetting && self.screen == Screen::Channels && key.code == KeyCode::Char('X') {
+            let gone = self.channels.forget_made();
+            self.done = Some(format!(
+                "{} let go; new signals make new ones",
+                count_channels(gone)
+            ));
+            return;
+        }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             self.quit = true;
             return;
@@ -263,6 +298,11 @@ impl App {
             KeyCode::Esc if self.screen == Screen::Log && self.log.selected().is_some() => {
                 self.log.release();
             }
+            KeyCode::Esc
+                if self.screen == Screen::Channels && self.channels.selected().is_some() =>
+            {
+                self.channels.release();
+            }
             KeyCode::Esc if self.spectrum.cursor.is_some() => self.spectrum.cursor = None,
             KeyCode::Esc => self.quit = true,
             KeyCode::Char('?') => self.help = !self.help,
@@ -272,8 +312,40 @@ impl App {
                 self.screen = Screen::ALL[usize::from(c as u8 - b'1')];
             }
             _ if self.screen == Screen::Spectrum => self.on_spectrum_key(key),
+            _ if self.screen == Screen::Channels => self.on_channels_key(key),
             _ if self.screen == Screen::Density => self.on_density_key(key),
             _ if self.screen == Screen::Log => self.on_log_key(key),
+            _ => {}
+        }
+    }
+
+    fn on_channels_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Up => self.channels.move_selection(-1),
+            KeyCode::Down => self.channels.move_selection(1),
+            KeyCode::PageUp => self.channels.move_selection(-LOG_PAGE),
+            KeyCode::PageDown => self.channels.move_selection(LOG_PAGE),
+            KeyCode::Home => self.channels.move_selection(isize::MIN),
+            KeyCode::End => self.channels.move_selection(isize::MAX),
+            KeyCode::Char('+' | '=') => self.channels.zoom_in(),
+            KeyCode::Char('-') => self.channels.zoom_out(),
+            // Not to be undone: asked twice.
+            KeyCode::Char('X') => match self.channels.made() {
+                0 => self.notice = Some("no channels were made here: nothing to let go".into()),
+                made => {
+                    self.forgetting = true;
+                    self.notice = Some(format!(
+                        "X again lets go of the {} the app made; named and hidden stay",
+                        count_channels(made)
+                    ));
+                }
+            },
+            KeyCode::Enter => {
+                if let Some(center_hz) = self.channels.selected().map(|channel| channel.center_hz) {
+                    self.tune(center_hz);
+                    self.screen = Screen::Spectrum;
+                }
+            }
             _ => {}
         }
     }
@@ -392,6 +464,11 @@ impl App {
     }
 }
 
+/// "1 channel", "2 channels".
+fn count_channels(count: usize) -> String {
+    format!("{count} channel{}", if count == 1 { "" } else { "s" })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,6 +557,88 @@ mod tests {
         press(&mut app, KeyCode::Char(' '));
         app.on_density(density_map(16));
         assert_eq!(app.density.as_ref().map(|map| map.bins), Some(16));
+    }
+
+    #[test]
+    fn channel_keys_select_change_the_time_scale_and_tune() {
+        use crate::log::tests::event;
+        let mut app = app();
+        app.on_events(vec![
+            event(100, 50, 100.0, 20.0),
+            event(200, 10, 300.0, 20.0),
+        ]);
+        // The log has them too.
+        assert_eq!(app.log.rows().len(), 2);
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.commands.is_empty());
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::End);
+        assert_eq!(app.channels.selected_row(), Some(1));
+        press(&mut app, KeyCode::Char('-'));
+        assert_eq!(app.channels.seconds_per_column(), 10);
+        press(&mut app, KeyCode::Char('+'));
+        assert_eq!(app.channels.seconds_per_column(), 1);
+        // Neither the spectrum's zoom nor the log's filter moved.
+        assert_eq!(app.spectrum.magnification(), 1);
+        assert_eq!(app.log.min_above_db(), 10.0);
+        press(&mut app, KeyCode::Esc);
+        assert!(app.channels.selected().is_none() && !app.quit);
+        press(&mut app, KeyCode::Home);
+        press(&mut app, KeyCode::Enter);
+        let center = app.channels.selected().unwrap().center_hz;
+        assert_eq!(app.commands, [Command::Tune(center)]);
+        assert_eq!(app.screen, Screen::Spectrum);
+    }
+
+    #[test]
+    fn x_twice_lets_go_of_the_made_channels() {
+        use crate::channels::Change;
+        use crate::log::tests::event;
+        let mut app = app();
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('X'));
+        assert!(
+            app.notice
+                .as_deref()
+                .unwrap()
+                .starts_with("no channels were made")
+        );
+        app.on_events(vec![
+            event(100, 50, 100.0, 20.0),
+            event(200, 10, 300.0, 20.0),
+        ]);
+        app.channels.take_changes();
+        press(&mut app, KeyCode::Char('X'));
+        let asked = app.notice.clone().unwrap();
+        assert!(
+            asked.starts_with("X again lets go of the 2 channels"),
+            "{asked}"
+        );
+        assert_eq!(app.channels.rows().len(), 2);
+        // Any other key calls it off.
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.notice, None);
+        press(&mut app, KeyCode::Char('X'));
+        assert_eq!(app.channels.rows().len(), 2);
+        press(&mut app, KeyCode::Char('X'));
+        assert!(app.channels.rows().is_empty());
+        assert_eq!(app.channels.take_changes(), [Change::ForgetMade]);
+        assert_eq!(
+            app.done.as_deref(),
+            Some("2 channels let go; new signals make new ones")
+        );
+        // On another screen X is nothing.
+        app.on_events(vec![event(100, 50, 100.0, 20.0)]);
+        press(&mut app, KeyCode::Char('X'));
+        let asked = app.notice.clone().unwrap();
+        assert!(
+            asked.starts_with("X again lets go of the 1 channel the"),
+            "{asked}"
+        );
+        press(&mut app, KeyCode::Char('5'));
+        press(&mut app, KeyCode::Char('X'));
+        assert_eq!(app.channels.rows().len(), 1);
     }
 
     #[test]

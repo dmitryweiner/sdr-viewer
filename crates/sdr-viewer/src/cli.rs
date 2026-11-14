@@ -50,8 +50,8 @@ pub struct Args {
     #[arg(long, value_name = "COLSxROWS", value_parser = parse_size_arg)]
     pub snapshot: Option<(u16, u16)>,
 
-    /// The screen a snapshot prints, by its digit: 1 the spectrum, 3 the
-    /// density.
+    /// The screen a snapshot prints, by its digit: 1 the spectrum, 2 the
+    /// channel strip, 3 the density.
     #[arg(long, value_name = "DIGIT", default_value = "1", requires = "snapshot", value_parser = parse_screen_arg)]
     pub screen: Screen,
 
@@ -69,6 +69,18 @@ pub struct Args {
     /// Keep no events, not even with --rtlsdr.
     #[arg(long, conflicts_with = "db")]
     pub no_db: bool,
+
+    /// The channels of the channel strip: a TOML file read at the start,
+    /// to which the channels made for new signals are added. With
+    /// --rtlsdr it is sdr-viewer/channels.toml under $XDG_CONFIG_HOME or
+    /// ~/.config anyway; a recording or the generator has a file only
+    /// when this names one. A snapshot reads it and adds nothing.
+    #[arg(long, value_name = "FILE")]
+    pub channels: Option<PathBuf>,
+
+    /// Read and write no channels file, not even with --rtlsdr.
+    #[arg(long, conflicts_with = "channels")]
+    pub no_channels: bool,
 
     /// Seconds of samples held in memory, so that an event's samples can
     /// be saved after it was seen: 2 bytes a sample, 144 MB for 30 s at
@@ -96,6 +108,23 @@ pub fn db_path(args: &Args, env: impl Fn(&str) -> Option<String>) -> Option<Path
         return args.db.clone();
     }
     Some(data_dir(env)?.join("events.db"))
+}
+
+/// The channels file, if there is to be one.
+pub fn channels_path(args: &Args, env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    if args.no_channels {
+        return None;
+    }
+    if args.channels.is_some() || !args.rtlsdr || args.snapshot.is_some() {
+        return args.channels.clone();
+    }
+    let set = |name: &str| {
+        env(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let config = set("XDG_CONFIG_HOME").or_else(|| Some(set("HOME")?.join(".config")))?;
+    Some(config.join("sdr-viewer/channels.toml"))
 }
 
 /// Where saved samples go, if anywhere.
@@ -134,9 +163,10 @@ fn parse_size_arg(text: &str) -> Result<(u16, u16), String> {
 fn parse_screen_arg(text: &str) -> Result<Screen, String> {
     match text {
         "1" => Ok(Screen::Spectrum),
+        "2" => Ok(Screen::Channels),
         "3" => Ok(Screen::Density),
         _ => Err(format!(
-            "no snapshot of screen {text:?}: 1 (spectrum) or 3 (density)"
+            "no snapshot of screen {text:?}: 1 (spectrum), 2 (channels) or 3 (density)"
         )),
     }
 }
@@ -293,6 +323,37 @@ mod tests {
     }
 
     #[test]
+    fn the_channels_file_is_the_users_config_for_a_receiver_or_the_one_named() {
+        let home = [("HOME", "/home/u")];
+        let path = |list: &[&str]| channels_path(&args(list), env(&home));
+        assert_eq!(path(&[]), None);
+        assert_eq!(path(&["x.cu8"]), None);
+        assert_eq!(
+            path(&["--rtlsdr"]),
+            Some("/home/u/.config/sdr-viewer/channels.toml".into())
+        );
+        let xdg = [("HOME", "/home/u"), ("XDG_CONFIG_HOME", "/cfg")];
+        assert_eq!(
+            channels_path(&args(&["--rtlsdr"]), env(&xdg)),
+            Some("/cfg/sdr-viewer/channels.toml".into())
+        );
+        assert_eq!(
+            path(&["--rtlsdr", "--channels", "c.toml"]),
+            Some("c.toml".into())
+        );
+        assert_eq!(
+            path(&["x.cu8", "--channels", "c.toml"]),
+            Some("c.toml".into())
+        );
+        assert_eq!(path(&["--rtlsdr", "--no-channels"]), None);
+        // A snapshot reads only a file it is given.
+        assert_eq!(path(&["--rtlsdr", "--snapshot", "80x24"]), None);
+        let named = ["--snapshot", "80x24", "--channels", "c.toml"];
+        assert_eq!(path(&named), Some("c.toml".into()));
+        assert_eq!(channels_path(&args(&["--rtlsdr"]), env(&[])), None);
+    }
+
+    #[test]
     fn no_db_and_snapshots_keep_nothing() {
         let home = [("HOME", "/home/dmw")];
         assert_eq!(db_path(&args(&["--rtlsdr", "--no-db"]), env(&home)), None);
@@ -363,7 +424,8 @@ mod tests {
         assert!(parse(&["--format", "wav"]).is_err());
         assert!(parse(&["--snapshot", "big"]).is_err());
         assert!(parse(&["--screen", "3"]).is_err());
-        assert!(parse(&["--snapshot", "80x24", "--screen", "2"]).is_err());
+        assert!(parse(&["--snapshot", "80x24", "--screen", "4"]).is_err());
+        assert!(parse(&["--channels", "x.toml", "--no-channels"]).is_err());
         assert_eq!(args(&[]).screen, Screen::Spectrum);
         let density = args(&["--snapshot", "80x24", "--screen", "3"]);
         assert_eq!(density.screen, Screen::Density);

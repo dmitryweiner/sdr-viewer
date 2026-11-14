@@ -322,6 +322,7 @@ The first useful version comes after phase 3.
 | The floor on the spectrum | Drawn as the detector's threshold (its floor per bin + 8 dB), a dotted Braille line behind the bars: the floor itself runs along the tops of the noise bars, where a character cell cannot show a bar and a line at once. The header gives the dB above the floor. The scale keeps its own, faster estimate (the frame's median): the detector's floor takes 10 s to rise after the gain goes up |
 | The IQ ring buffer and "save IQ" | The last 30 s of samples are held in memory as `cu8` pairs (144 MB at 2.4 MS/s; `--iq-buffer SECS`, 0 for none) — lossless for the 8-bit RTL-SDR, a quarter of what `f32` would take. `r` on a row of the log saves the event with 50 ms on each side, the whole band, as a SigMF pair in `sdr-viewer/iq` beside the database (`--iq-dir`). A retune empties the buffer. Saving is by hand for now; saving by itself is idea 3 of section 6 |
 | The spectral density (5.3) | A histogram of the detector's frames (100 a second, so a 10 ms burst counts at its own level): per bin of the spectrum, 1 dB levels from −120 to 0 dBFS. It forgets exponentially, half-life 30 s, and is gathered all the time, whichever screen is open. Brightness is the logarithm of the share of time, from 10⁻⁴ to 1; a cell of the screen shows the largest share among its bins and levels. The screen shares the spectrum's band, zoom, cursor, scale and keys; `m` starts it afresh. The half-life is fixed for now |
+| The channel strip (5.2) and its channels | The user's decision (2026-11-14): channels are made automatically, saved to TOML, and the user may edit them. As built: an event ≥ 10 dB above the floor whose centre is in no channel makes one (the event's width, at least 10 kHz; an event still on makes it after 1 s, or a carrier would never have one; at most 500 a run). The file is `sdr-viewer/channels.toml` in the user's config directory, by default only for the RTL-SDR, like the database. The app reads it at the start and only appends to it — the text on the disk is re-read before every addition and never rewritten, so names, order and comments are the user's. `hide = true` takes a channel off the strip without it being made again. Occupancy is counted in the interface from the detector's events, per second, 4 hours back, in stream time; a column is 1, 10, 60 or 300 s |
 | Phase 4's order | Density first (it needs only the frames), then the channel strip, then periodicity: each its own pull request |
 | How long events are kept | 7 days: older events are deleted when the app starts. Nothing is filtered on the way in (~93 bytes an event, ~660 MB a day on a band as busy as the LPD recording, so the file settles under ~5 GB there) |
 | Phase order on start | Phase 1 before phase 0: no SSH access to the device yet; phase 0 follows `docs/hardware-check.md` when there is |
@@ -364,8 +365,40 @@ As of 2026-11-14.
 | 1 | Skeleton | Done: workspace, CI with a static aarch64 binary, generator and file sources, tabs |
 | 2 | Spectrum and waterfall | Done on the generator, recordings and the RTL-SDR: bars with max hold, waterfall, a scale that follows the noise floor, cursor, tuning (`f`, `[` `]`, Enter), gain, zoom, pause, `--snapshot` |
 | 3 | Detector and log | Done; the user ran it on the air on the device on 2026-11-13 and found it working. Built: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. The spectrum shows the detector's threshold as a line and the dB above the floor in its header. The last 30 s of samples are held in a ring buffer; the log shows the picture of the selected event made of them, and `r` saves them as SigMF. The detector has regression tests on a piece of real air (`testdata/`). The status line tells overload (`clip`) and lost samples. |
-| 4 | Accumulators | Begun: the spectral density (screen 5.3) is built — the decision "The spectral density" in section 12. The channel strip (5.2) and periodicity (5.4) are not started |
+| 4 | Accumulators | Begun: the spectral density (screen 5.3) and the channel strip (5.2) are built — their decisions are in section 12. Periodicity (5.4) is not started |
 | 5–8 | | Not started |
+
+Known limits of the channel strip as built:
+
+- Channels are edited only in the file, and the file is read only at the
+  start: nothing on the screen renames, hides or merges a channel. The
+  one thing the screen does to the list is `X` twice: the channels
+  without a name or `hide` go, from the file too (asked for by the user
+  after a radio beside the receiver had left 98 of them).
+- The receiver's spike is told by its place and width alone (peak within
+  rate/1000 of the centre, no wider than rate/400 — 2.4 and 6 kHz at
+  2.4 MS/s; on the user's device it is 3.5 kHz wide, 15 dB over the
+  noise): a real carrier that narrow on the centre is not counted. The
+  log still lists the spike as an event.
+- A transmitter that overloads the receiver makes channels all over the
+  band (its splash is real energy in those bins); nothing tells them
+  from signals. `X` twice is the remedy for now.
+- A made channel sits where its first event was: on a grid of channels
+  its centre may be a kilohertz or two off the grid's.
+- Two channels made for one wide signal's parts, or a channel 14 kHz wide
+  for a pure carrier (the detector's width is down to the threshold), are
+  the user's to mend in the file.
+- The strip knows this run only: occupancy is not kept, and the events of
+  earlier runs in the database are not put on it.
+- Time is the stream's: nothing says what o'clock a column was.
+- A retune does not change the list: the channels of every band visited
+  are rows, those outside the received band dimmed.
+- Rows are in the order of frequency only.
+- On the device's recording (10 s of LPD433) 81 channels are made: the
+  hopper's 25 kHz grid, each within a kilohertz or two of its place, and
+  a dozen weak ones between grid channels (433.593, 433.618, 433.643 MHz
+  — 0.2% busy each) that a person would remove. The strip there costs
+  22–23% of a CM4 core. Not yet seen by the user, nor on the air.
 
 Known limits of the density as built:
 

@@ -98,7 +98,7 @@ fn draw_header(
 }
 
 /// A share of time with as many digits as it is worth.
-fn percent(share: f32) -> String {
+pub(crate) fn percent(share: f32) -> String {
     let percent = share * 100.0;
     if percent >= 10.0 || percent == 0.0 {
         format!("{percent:.0}%")

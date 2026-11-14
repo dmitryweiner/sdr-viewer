@@ -2,6 +2,7 @@
 //! sessions of reception and the events the detector found in them.
 //! Recordings of samples are in [`sigmf`].
 
+pub mod channels;
 pub mod sigmf;
 
 use std::fmt;

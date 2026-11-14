@@ -18,12 +18,12 @@ Phases of the plan (its section 14 has the detail):
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
 | 3 Detector and log | done, and found working on the air on the device by the user (2026-11-13): the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples |
-| 4 Accumulators | begun: the spectral density (screen 3) is built; on the device it was measured and looked at as a snapshot of the recording, not yet seen by the user or on the air. The channel strip and periodicity are not started |
+| 4 Accumulators | begun: the spectral density (screen 3) and the channel strip (screen 2) are built. Periodicity is not started |
 | 5–8 | not started |
 
-Phase 4's order (the plan's section 12): density, then the channel strip
-(5.2), then periodicity (5.4), each its own pull request. Nothing of the
-last two is agreed in detail.
+Phase 4's order (the plan's section 12): density, the channel strip, then
+periodicity (5.4), each its own pull request. Nothing of periodicity is
+agreed in detail.
 
 ## Commands
 
@@ -43,7 +43,7 @@ last two is agreed in detail.
   — no terminal: analyses the start of the stream (unpaced for files and
   the generator), prints the spectrum screen as text, the max-hold
   peaks and the detector's events. The way to look at a recording, at the air, or at the picture from
-  a script. Below 80x24 it prints only "too small". `--screen 3` prints
+  a script. Below 80x24 it prints only "too small". `--screen 2` prints the channel strip, `--screen 3` prints
   the density screen instead.
 - `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
   of the generator and of the IQ ring per sample.
@@ -102,8 +102,11 @@ touching USB.
   keys). The user has run phase 3 on the air there and found it working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-14 `sdr-viewer` there is PR #22's build (the density
-  screen); main's build after PR #20 is `sdr-viewer.before-pr22`. The user
+  Since 2026-11-14 `sdr-viewer` there is the build of the `channels`
+  branch with PR #24 merged in (the channel strip, the detector's fix);
+  the one before is `sdr-viewer.before-fixes`. With the
+  receiver it makes `~/.config/sdr-viewer/channels.toml`: the user's, like
+  the database — our checks use `--channels test.toml` and remove it. The user
   allows replacing `sdr-viewer` there with a newer build without asking.
 - `~/.local/share/sdr-viewer/events.db` exists there (1.1 MB on
   2026-11-14): the user's own receptions. It is theirs — read it, do not
@@ -156,11 +159,14 @@ a crate is added in the phase that needs it):
   strong signal masked; `Levels`: its floor per bin and its threshold,
   for the screen), `density` (`Density`: how often each bin was at each
   level, forgetting with a half-life; `DensityMap`: that as plain numbers,
-  for the screen).
+  for the screen), `channel` (`Channel`; `Channels`: which channel an
+  event is in, and making one where it is in none).
 - `sdr-store` — `Store`: the SQLite event database (`rusqlite`, SQLite
   compiled in), `sessions` and `events`, the layout's version in
   `user_version`; `sigmf`: a recording as a `.sigmf-data` + `.sigmf-meta`
-  pair (the JSON is written by hand).
+  pair (the JSON is written by hand); `channels`: the channels file
+  (TOML read with the `toml` crate, additions written by hand to the end
+  of the text as it is).
 - `sdr-rtl` — `RtlSource`: the RTL-SDR through `rtl-sdr-rs` (pure Rust on
   `nusb`), queued transfers, gain along the tuner's own steps, retuning.
 - `sdr-tui` — `app` (state, keys and the `Command`s they ask of the
@@ -171,7 +177,9 @@ a crate is added in the phase that needs it):
   list while a row is selected), `log_ui`, `fragment` (`Fragment`: the
   spectra around one event, and their reduction to pixels; `Picture`:
   waiting, gone or ready), `density` (a `DensityMap` reduced to the
-  pixels of a plot, a share of time as a brightness), `density_ui`.
+  pixels of a plot, a share of time as a brightness), `density_ui`, `channels` (`ChannelsView`: the channels, each one's
+  busy milliseconds per second of the last 4 h, the selection, the time
+  scale), `channels_ui`.
   Snapshot tests in
   `src/snapshots/`.
 - `sdr-viewer` — the binary: `cli` (arguments → source), `pipeline`
@@ -185,7 +193,8 @@ a crate is added in the phase that needs it):
   only the last), `save` (a `Cut` to a SigMF pair), `fragment` (a `Cut`
   to a `Fragment`), `keep` (open the database, read the
   week's history, start the writer thread, which first deletes what is
-  older), `writer` (that thread's loop: one write a second),
+  older), `writer` (the loop of a thread that writes: one write a second),
+  `channels` (read the channels file; the thread that adds to it),
   `snapshot` (`--snapshot`), `main` (terminal loop, redraws only when
   something changed).
 
@@ -238,6 +247,23 @@ a crate is added in the phase that needs it):
   like them.
 - The density screen has no view of its own: band, zoom, cursor, scale
   and pause are the spectrum's (`SpectrumView`).
+- The channels file is the user's: the app reads it at the start and
+  only appends (`sdr_store::channels::add` re-reads the disk, keeps the
+  text byte for byte, skips what is already covered). A file that does
+  not parse is refused at the start and never written.
+- Channels and their occupancy live in the interface (`ChannelsView`),
+  fed by the same events as the log; the main loop hands newly made
+  channels to the saver thread. Channel numbers never change in a run
+  (the list only grows), so the selection is a number.
+- An event that is the receiver's own spike (`ChannelsView::is_spike`:
+  on the centre of the band it began in, a few bins wide) is no channel
+  and no occupancy. The band of an event is told by its start time, not
+  by the order updates arrive in: after a retune the old band's last
+  events come after the new band's first frame.
+- The app removes text from the channels file in one case only: `X`
+  twice, and then only `[[channel]]` tables without `name` and `hide`.
+- The help shows the open screen's keys and the global ones: all keys at
+  once do not fit 80×24 (a test renders every screen's help there).
 - `unsafe_code = "forbid"` across the workspace.
 - The numbers of the reference recording's tests (`pipeline.rs`) change
   only on purpose too: look at what the detector now finds in
@@ -265,8 +291,10 @@ Measured on the dev Mac (Apple Silicon), release build:
 | The picture of the selected event on the CM4 (the recording, 15 s, `smoke.py --keys 5` plus down arrows) | the log alone **22%** of a core; a row held with its picture **19%** (the list stands still); a new picture every 0.36 s (40 downs) **26%** |
 | Counting clipped samples on the CM4 (the recording, 15 s, before and after) | within a point: spectrum 34 → 35% of a core, log 22 → 23% |
 | The density screen on the Mac (generator, 160×45, 10 s, `smoke.py --keys 1` / `--keys 3`, one sitting) | spectrum 16%, density **16%** of one core (3.1 MB to the terminal against 8.0); at 80×24 9% |
+| The channel strip on the CM4 (the recording looped, 160×45, 15 s, PR #22's build and PR #23's side by side; 81 channels) | the strip (`--keys 2`) **22–23%** of a core, 16 kB/s to the terminal; counting channels adds nothing to the other screens: spectrum 37 → 35%, log 24 → 24% |
+| The detector's fix of PR #24 on the CM4 (the recording looped, 160×45, 15 s, before and after) | nothing measurable: spectrum 38 → 36 and 35%, channel strip 22 → 19% |
 | The density on the CM4 (the recording looped, 160×45, 15 s, main's build and PR #22's side by side, twice) | gathering it costs nothing measurable: spectrum (`--keys 1`) 37 and 34% before, 35 and 36% with it. The density screen (`--keys 3`) **33 and 34%** of a core, 0.6 MB/s to the terminal against the spectrum's 0.9 |
-| Static aarch64 binary from CI | 4.8 MB (4.6 when SQLite was compiled in, 2.4 before that) |
+| Static aarch64 binary from CI | 5.1 MB (4.8 before the `toml` crate, 2.4 before SQLite) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:
 measure on the device, the Mac's numbers do not scale.

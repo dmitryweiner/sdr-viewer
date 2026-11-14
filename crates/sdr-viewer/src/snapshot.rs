@@ -3,10 +3,12 @@
 //! signals and the detector's events. For looking at a recording from a script or over SSH.
 
 use std::fmt::Write;
+use std::time::Duration;
 
 use sdr_core::units::format_hz;
 use sdr_core::{Iq, Source, SpectrumFrame};
-use sdr_detect::Event;
+use sdr_detect::{Channel, Event};
+use sdr_tui::channels::ChannelsView;
 use sdr_tui::{App, Screen, SourceState, ui};
 
 use crate::pipeline::{FFT_SIZE, Output, Pipeline};
@@ -21,10 +23,12 @@ pub fn run(
     (width, height): (u16, u16),
     secs: f64,
     screen: Screen,
+    channels: Vec<Channel>,
 ) -> Result<String, String> {
     let info = source.info();
     let mut app = App::new(info.clone());
     app.screen = screen;
+    app.channels = ChannelsView::new(channels);
     let mut pipeline = Pipeline::new(info.sample_rate);
     pipeline.watch_density(screen == Screen::Density);
     let mut events = Vec::new();
@@ -42,13 +46,21 @@ pub fn run(
         clipped += sdr_core::clip::clipped(&buf[..n]) as u64;
         pipeline.push(&buf[..n], &info, |output| match output {
             Output::Frame(frame, levels) => {
-                app.spectrum.on_frame(frame, levels);
+                app.on_frame(frame, levels);
                 frames += 1;
             }
-            Output::Event(event) => events.push(event),
+            Output::Event(event) => {
+                app.channels.on_events(std::slice::from_ref(&event));
+                events.push(event);
+            }
             Output::Density(map) => app.on_density(map),
         });
     }
+    // The stream's time to the sample, not to the last frame's start.
+    app.channels.set_now(Duration::from_secs_f64(
+        seen as f64 / f64::from(info.sample_rate),
+    ));
+    app.channels.set_open(&pipeline.open_events());
     app.status.state = SourceState::Ended;
     app.status.clipped = clipped as f64 / seen.max(1) as f64;
     app.status.lost = source.lost_samples();
@@ -171,7 +183,7 @@ mod tests {
     #[test]
     fn a_snapshot_of_the_demo_scene_shows_and_lists_both_signals() {
         let generator = Generator::new(GeneratorConfig::demo());
-        let text = run(generator, (100, 30), 3.0, Screen::Spectrum).unwrap();
+        let text = run(generator, (100, 30), 3.0, Screen::Spectrum, Vec::new()).unwrap();
         assert_eq!(text.lines().take(30).count(), 30);
         assert!(
             text.contains("peak 434.200 MHz") || text.contains("peak 433.500 MHz"),
@@ -204,7 +216,7 @@ mod tests {
     #[test]
     fn a_snapshot_of_the_density_screen_shows_what_was_gathered() {
         let generator = Generator::new(GeneratorConfig::demo());
-        let text = run(generator, (100, 30), 3.0, Screen::Density).unwrap();
+        let text = run(generator, (100, 30), 3.0, Screen::Density, Vec::new()).unwrap();
         let screen: Vec<&str> = text.lines().take(30).collect();
         assert!(screen[1].contains("half-life 30 s"), "{text}");
         // Half blocks from the noise at the bottom up to the carrier.
@@ -216,9 +228,33 @@ mod tests {
     }
 
     #[test]
+    fn a_snapshot_of_the_channel_strip_has_a_row_for_each_signal() {
+        let generator = Generator::new(GeneratorConfig::demo());
+        let mine = vec![Channel {
+            name: Some("the carrier".into()),
+            center_hz: 433.5e6,
+            width_hz: 25e3,
+            hidden: false,
+        }];
+        let text = run(generator, (100, 30), 5.0, Screen::Channels, mine).unwrap();
+        let screen: Vec<&str> = text.lines().take(30).collect();
+        assert!(
+            screen[1].contains("2 channels · 1 s a column · the last 5 s"),
+            "{text}"
+        );
+        // On all the time, and on at the end.
+        assert!(screen[2].starts_with("the carrier"), "{text}");
+        assert!(screen[2].contains("█████"), "{text}");
+        assert!(screen[2].ends_with("100%   now"), "{text}");
+        // 0.3 s of every 2.04: at 0, 2.04 and 4.08 s.
+        assert!(screen[3].starts_with("434.200 MHz"), "{text}");
+        assert!(screen[3].contains("▂·▂·▂"), "{text}");
+    }
+
+    #[test]
     fn a_snapshot_lists_the_events_in_the_order_they_began() {
         let generator = Generator::new(GeneratorConfig::demo());
-        let text = run(generator, (100, 30), 3.0, Screen::Spectrum).unwrap();
+        let text = run(generator, (100, 30), 3.0, Screen::Spectrum, Vec::new()).unwrap();
         let from = text.find("Events:").expect(&text);
         let lines: Vec<&str> = text[from..].lines().collect();
         assert_eq!(lines[0], "Events: 2 ended, 1 still on at the end.");
