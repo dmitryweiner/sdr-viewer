@@ -98,14 +98,13 @@ touching USB.
   no data and reset the hub.
 - A new binary: download the PR's `sdr-viewer-aarch64` artifact
   (`gh run download RUN -n sdr-viewer-aarch64`) and `scp` it to
-  `~/sdr-viewer-check/sdr-viewer`. What lies there now is the build of
-  `main` after PR #20 (all of phase 3), with PR #15's `smoke.py` (arrow
+  `~/sdr-viewer-check/sdr-viewer`. `smoke.py` there is PR #15's (arrow
   keys). The user has run phase 3 on the air there and found it working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  `~/sdr-viewer-check/sdr-viewer-density` is PR #22's build (the density
-  screen), beside it until that is merged and it takes the place of
-  `sdr-viewer`.
+  Since 2026-11-14 `sdr-viewer` there is PR #22's build (the density
+  screen); main's build after PR #20 is `sdr-viewer.before-pr22`. The user
+  allows replacing `sdr-viewer` there with a newer build without asking.
 - `~/.local/share/sdr-viewer/events.db` exists there (1.1 MB on
   2026-11-14): the user's own receptions. It is theirs — read it, do not
   remove it; the device has no `sqlite3`. Our own checks with a database
