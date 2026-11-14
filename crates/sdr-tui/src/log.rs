@@ -147,6 +147,21 @@ impl LogView {
         self.trim();
     }
 
+    /// Forgets every event that has ended — this run's and the earlier
+    /// ones' — and lets the list go; those still on stay. Says how many
+    /// went.
+    pub fn clear(&mut self) -> usize {
+        let gone = self.ended.len();
+        self.ended.clear();
+        self.release();
+        gone
+    }
+
+    /// How many ended events the log holds, hidden ones too.
+    pub fn ended(&self) -> usize {
+        self.ended.len()
+    }
+
     /// Replaces the events still going on.
     pub fn set_open(&mut self, open: Vec<Event>) {
         self.open = open.into_iter().map(|event| self.stamp(event)).collect();
@@ -409,6 +424,25 @@ pub(crate) mod tests {
             peak_dbfs: -71.0 + above,
             above_floor_db: above,
         }
+    }
+
+    #[test]
+    fn clearing_forgets_what_has_ended_and_keeps_what_is_on() {
+        let mut log = LogView::default();
+        log.on_events([event(100, 50, 100.0, 20.0), event(200, 10, 300.0, 5.0)]);
+        log.set_open(vec![event(300, 400, 50.0, 30.0)]);
+        log.move_selection(1);
+        assert_eq!(log.ended(), 2);
+        assert_eq!(log.clear(), 2);
+        assert_eq!(log.ended(), 0);
+        assert_eq!(log.selected(), None);
+        assert_eq!(log.hidden(), 0);
+        let rows = log.rows();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].event.start, Duration::from_millis(300));
+        // It goes on being a log.
+        log.on_events([event(300, 500, 50.0, 30.0)]);
+        assert_eq!(log.ended(), 1);
     }
 
     fn log() -> LogView {

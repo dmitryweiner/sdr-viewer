@@ -27,10 +27,10 @@ fn write(path: &Path, changes: &[Change]) -> Result<(), String> {
     for change in changes {
         match change {
             Change::Made(channel) => made.push(channel.clone()),
-            Change::ForgetMade => {
+            Change::ForgetMade { keep } => {
                 sdr_store::channels::add(path, &made)?;
                 made.clear();
-                sdr_store::channels::forget(path)?;
+                sdr_store::channels::forget(path, keep)?;
             }
         }
     }
@@ -92,13 +92,15 @@ mod tests {
         let (new, saver) = save(path.clone(), updates);
         let changes = [
             Change::Made(made(434.1e6)),
-            Change::ForgetMade,
+            Change::ForgetMade {
+                keep: vec![made(433.7e6)],
+            },
             Change::Made(made(434.3e6)),
         ];
         new.send(changes.to_vec()).unwrap();
         drop(new);
         saver.join().unwrap();
-        assert_eq!(load(&path).unwrap(), [made(434.3e6)]);
+        assert_eq!(load(&path).unwrap(), [made(433.7e6), made(434.3e6)]);
         assert_eq!(notices.try_iter().count(), 0);
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }

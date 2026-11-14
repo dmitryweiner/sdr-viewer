@@ -71,8 +71,9 @@ impl Occupancy {
 pub enum Change {
     /// A channel was made here: add it.
     Made(Channel),
-    /// The channels made by the app are let go: remove them.
-    ForgetMade,
+    /// The channels made by the app are let go: remove them, but for
+    /// these, which have a signal on.
+    ForgetMade { keep: Vec<Channel> },
 }
 
 /// A receiver's band: where its own spike is.
@@ -162,30 +163,53 @@ impl ChannelsView {
         self.set_now(time);
     }
 
-    /// Lets go of the channels made here — those without a name that are
-    /// not hidden — with what was counted on them; the user's stay. Says
-    /// how many went.
+    /// Whether `X` would let the channel go: made by the app (no name,
+    /// not hidden) and silent now.
+    fn idle_made(&self, index: usize) -> bool {
+        let channel = &self.channels.list()[index];
+        channel.name.is_none() && !channel.hidden && !self.active(index)
+    }
+
+    /// Lets go of the channels the app made that are silent now, with
+    /// what was counted on them; the user's — named or hidden — stay, and
+    /// so do those with a signal on. Says how many went.
     pub fn forget_made(&mut self) -> usize {
         let list = self.channels.list().to_vec();
-        let mine = |channel: &Channel| channel.name.is_some() || channel.hidden;
-        let history = std::mem::take(&mut self.history);
-        let kept = list
+        let stays: Vec<bool> = (0..list.len())
+            .map(|index| !self.idle_made(index))
+            .collect();
+        // The channels' numbers change: where each one goes.
+        let mut next = 0;
+        let moved: Vec<Option<usize>> = stays
             .iter()
-            .zip(history)
-            .filter(|(channel, _)| mine(channel));
-        let (channels, history): (Vec<Channel>, Vec<Occupancy>) = kept
-            .map(|(channel, history)| (channel.clone(), history))
-            .unzip();
+            .map(|&stays| {
+                stays.then(|| {
+                    next += 1;
+                    next - 1
+                })
+            })
+            .collect();
+        let mut keep = stays.iter();
+        self.history.retain(|_| *keep.next().unwrap_or(&true));
+        let kept = list.iter().zip(&stays).filter(|(_, stays)| **stays);
+        let channels: Vec<Channel> = kept.map(|(channel, _)| channel.clone()).collect();
         let gone = list.len() - channels.len();
-        self.channels = Channels::new(channels);
-        self.history = history;
-        // The numbers have changed; the next word on what is on now
-        // comes within half a second.
-        self.open.clear();
+        let open = std::mem::take(&mut self.open).into_iter();
+        self.open = open
+            .filter_map(|(index, start)| Some((moved[index]?, start)))
+            .collect();
         self.selected = None;
-        self.changes
-            .retain(|change| !matches!(change, Change::Made(_)));
-        self.changes.push(Change::ForgetMade);
+        // Those that stay without a name: the file is told, or it would
+        // take them for let go too.
+        let unnamed = |channel: &&Channel| channel.name.is_none() && !channel.hidden;
+        let keep: Vec<Channel> = channels.iter().filter(unnamed).cloned().collect();
+        let stays_made = |change: &Change| match change {
+            Change::Made(made) => keep.contains(made),
+            Change::ForgetMade { .. } => true,
+        };
+        self.changes.retain(stays_made);
+        self.changes.push(Change::ForgetMade { keep });
+        self.channels = Channels::new(channels);
         gone
     }
 
@@ -235,11 +259,10 @@ impl ChannelsView {
         std::mem::take(&mut self.changes)
     }
 
-    /// How many channels would go if those made here were let go.
+    /// How many channels `X` would let go.
     pub fn made(&self) -> usize {
-        let list = self.channels.list().iter();
-        list.filter(|channel| channel.name.is_none() && !channel.hidden)
-            .count()
+        let all = 0..self.channels.list().len();
+        all.filter(|&index| self.idle_made(index)).count()
     }
 
     /// The rows from the lowest frequency up; hidden channels have none.
@@ -626,7 +649,7 @@ mod tests {
     }
 
     #[test]
-    fn letting_go_of_the_made_channels_keeps_the_users() {
+    fn letting_go_of_the_made_channels_keeps_the_users_and_those_on_now() {
         let mine = |name: Option<&str>, center_hz: f64, hidden: bool| Channel {
             name: name.map(String::from),
             center_hz,
@@ -642,29 +665,52 @@ mod tests {
         view.on_events(&[
             event(0, 500, 433.5e6),
             event(0, 500, 433.7e6),
+            event(0, 500, 433.8e6),
             event(0, 500, 433.92e6),
         ]);
-        view.set_open(&[event(600, 2000, 433.7e6)]);
         view.set_now(secs(1));
         view.move_selection(isize::MAX);
-        assert_eq!(view.take_changes().len(), 1);
-        view.on_events(&[event(0, 500, 433.9e6)]);
+        assert_eq!(view.take_changes().len(), 2);
+        // Two more, not yet told to the file; one of them is on now,
+        // and so is one the file has.
+        view.on_events(&[event(0, 500, 433.9e6), event(0, 500, 434.0e6)]);
+        view.set_open(&[event(600, 400, 433.7e6), event(700, 300, 434.0e6)]);
         assert_eq!(view.made(), 3);
         assert_eq!(view.forget_made(), 3);
-        // What was not yet in the file never gets there.
-        assert_eq!(view.take_changes(), [Change::ForgetMade]);
+        let on_now = |view: &ChannelsView| -> Vec<Channel> {
+            let rows = view.rows().into_iter();
+            let unnamed = rows.filter(|row| row.channel.name.is_none());
+            unnamed.map(|row| row.channel.clone()).collect()
+        };
+        let stay = on_now(&view);
+        assert_eq!(stay.len(), 2);
+        assert_eq!(stay[1].center_hz, 434.0e6);
+        // The one on now that the file has not seen is still to be
+        // added; the silent one never gets there.
+        assert_eq!(
+            view.take_changes(),
+            [
+                Change::Made(stay[1].clone()),
+                Change::ForgetMade { keep: stay.clone() }
+            ]
+        );
         let rows = view.rows();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].channel.name.as_deref(), Some("gate"));
-        // The gate keeps what was counted on it; nothing is selected.
+        let centers: Vec<f64> = rows.iter().map(|row| row.channel.center_hz).collect();
+        assert_eq!(centers, [433.5e6, 433.7e6, 434.0e6]);
+        // What stays keeps what was counted on it and is still on.
         assert_eq!(view.share(rows[0].index, 10), 0.5);
+        assert_eq!(view.share(rows[1].index, 10), 0.9);
+        assert!(view.active(rows[1].index) && view.active(rows[2].index));
+        assert!(!view.active(rows[0].index));
         assert_eq!(view.selected(), None);
         assert_eq!(view.made(), 0);
         // The hidden one still takes its events; a signal makes its
         // channel again.
-        view.on_events(&[event(1000, 500, 433.92e6), event(1000, 500, 433.7e6)]);
-        assert_eq!(view.rows().len(), 2);
-        assert_eq!(view.made(), 1);
+        view.on_events(&[event(1000, 500, 433.92e6), event(1000, 500, 433.8e6)]);
+        assert_eq!(view.rows().len(), 4);
+        // When the signals stop, those channels can go too.
+        view.set_open(&[]);
+        assert_eq!(view.made(), 3);
     }
 
     #[test]
