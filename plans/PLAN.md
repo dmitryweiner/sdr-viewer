@@ -309,6 +309,7 @@ The first useful version comes after phase 3.
 | Phase order | As in section 8: the signal log (phase 3) before Meshtastic (phase 5) |
 | Meshtastic | Through `meshtasticd` (the default, no objections) |
 | Defective USB hub | The user's device needs its hub at 12 Mbit/s for the keyboard and at 480 for the RTL-SDR (`docs/hardware.md`). Until the mainboard is replaced: a "reception without the keyboard" mode that switches the hub for the time of reception; control over SSH or Bluetooth |
+| SDR and LoRa together | Never: the user listens to one or the other. So the AIO board's GPIO 7 may be both the SDR's power and SPI4's clock (`docs/hardware.md`, section 4), and the app need not receive from the RTL-SDR while it talks to `meshtasticd` over a radio of its own |
 | Mesh network | Haifa: region US, preset MediumFast, frequency slot 70 = 919.375 MHz, max hops 7. Goes into the default bookmarks; the app still reads the frequency from `meshtasticd` |
 | Language | UI in English; docs, README and code comments in English (the shared conventions in `~/projects/CLAUDE.md`) |
 | aarch64 build | Static musl binary built on GitHub's native arm64 runner instead of `cross` |
@@ -355,11 +356,10 @@ As of 2026-11-12.
 | 0 | Hardware check | Done: `docs/hardware.md`. CM4 with 8 GB, R820T tuner, `rtl-sdr-rs` works, truecolor terminal. The device's hub is defective: see the decision "Defective USB hub" |
 | 1 | Skeleton | Done: workspace, CI with a static aarch64 binary, generator and file sources, tabs |
 | 2 | Spectrum and waterfall | Done on the generator, recordings and the RTL-SDR: bars with max hold, waterfall, a scale that follows the noise floor, cursor, tuning (`f`, `[` `]`, Enter), gain, zoom, pause, `--snapshot` |
-| 3 | Detector and log | Built, the last pull requests open; not yet tried on the air on the device. Done: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. The spectrum shows the detector's threshold as a line and the dB above the floor in its header. The last 30 s of samples are held in a ring buffer; the log shows the picture of the selected event made of them, and `r` saves them as SigMF. The detector has regression tests on a piece of real air (`testdata/`). The status line tells overload (`clip`) and lost samples. |
+| 3 | Detector and log | Done; the user ran it on the air on the device on 2026-11-13 and found it working. Built: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. The spectrum shows the detector's threshold as a line and the dB above the floor in its header. The last 30 s of samples are held in a ring buffer; the log shows the picture of the selected event made of them, and `r` saves them as SigMF. The detector has regression tests on a piece of real air (`testdata/`). The status line tells overload (`clip`) and lost samples. |
 | 4–8 | | Not started |
 
-Nothing is left of phase 3's list; what it still wants is a look at the
-real air on the device (below). Done from that list:
+Nothing is left of phase 3's list. Done from that list:
 
 - The noise-floor line — the detector's floor per bin comes to the
   interface with every screen frame (`Levels`) and is drawn as the
@@ -402,12 +402,11 @@ Known limits of what phase 3 has built so far:
   pixel at best: a 10 ms burst is a dozen columns. It is made once, when
   the row is selected, and gone with the samples: nothing of it is kept
   with the event.
-- Receiving from the RTL-SDR with the database has not been run on the
-  device; the pieces were checked there on the recording and the
-  generator with `--db`. The same holds for everything built after it:
-  the threshold line, the IQ ring, the pictures, saving and the overload
-  indicator have seen the recording there, not the air; `lost` can only
-  be other than zero with the receiver.
+- On the air the phase was checked by the user's eye (2026-11-13, "works
+  well"); nothing was measured there. The numbers of this phase — CPU,
+  what the ring and the pictures cost — are from the recording played on
+  the device, and whether `lost` ever leaves zero with the receiver is
+  not known.
 - `lost` counts what the driver dropped on its way to the app. Transfers
   the kernel or the USB bus lost before the driver are not counted by
   anyone; the measured rate (`rx`) falling below the nominal one is the

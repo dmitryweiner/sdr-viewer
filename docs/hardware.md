@@ -77,8 +77,10 @@ USB works is still not known.
 
 GPIO 7 doubles as the clock of SPI4, the bus of `/dev/spidev4.0`: if LoRa
 really is on that bus, powering the SDR this way and talking to the LoRa
-radio cannot both work. To be settled in phase 5, with the AIO V2 pinout
-in hand.
+radio cannot both work. Decided (the plan's section 12): they are never
+used together, so nothing has to be done about it — but whoever sets up
+`meshtasticd` in phase 5 gives the pin back to SPI4 first, and the SDR is
+off meanwhile.
 
 ## 5. RTL-SDR
 
