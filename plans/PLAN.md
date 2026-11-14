@@ -377,7 +377,10 @@ Known limits of the density as built:
   reads lower than it was.
 - "busy" in the header is held against the detector's threshold as it is
   now, not as it was when the frames were counted.
-- Not yet seen on the device or on the air.
+- On the device it was measured on the recording (33–34% of a core at
+  160×45, the spectrum's cost; gathering adds nothing measurable) and
+  looked at as a text snapshot: the hopper's channels stand as columns
+  over the noise. Not yet seen by the user, nor on the air.
 
 Nothing is left of phase 3's list. Done from that list:
 

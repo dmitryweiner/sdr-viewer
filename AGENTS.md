@@ -18,7 +18,7 @@ Phases of the plan (its section 14 has the detail):
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
 | 3 Detector and log | done, and found working on the air on the device by the user (2026-11-13): the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples |
-| 4 Accumulators | begun: the spectral density (screen 3) is built, on the generator and recordings; not yet seen on the device. The channel strip and periodicity are not started |
+| 4 Accumulators | begun: the spectral density (screen 3) is built; on the device it was measured and looked at as a snapshot of the recording, not yet seen by the user or on the air. The channel strip and periodicity are not started |
 | 5–8 | not started |
 
 Phase 4's order (the plan's section 12): density, then the channel strip
@@ -103,6 +103,9 @@ touching USB.
   keys). The user has run phase 3 on the air there and found it working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
+  `~/sdr-viewer-check/sdr-viewer-density` is PR #22's build (the density
+  screen), beside it until that is merged and it takes the place of
+  `sdr-viewer`.
 - `~/.local/share/sdr-viewer/events.db` exists there (1.1 MB on
   2026-11-14): the user's own receptions. It is theirs — read it, do not
   remove it; the device has no `sqlite3`. Our own checks with a database
@@ -261,7 +264,8 @@ Measured on the dev Mac (Apple Silicon), release build:
 | The IQ ring buffer (30 s; with and without `--iq-buffer 0`) | `bench_ring` on the Mac: 0.3 ns/sample; 153 MB resident after 40 s, as computed (144 MB + the app). **On the CM4**, the recording, 15 s: spectrum (`--keys 1`) 32 → 34% of a core, log (`--keys 5`) 21 → 22%. With a bounds check and a wrap test per sample it was 4 points, not 1–2 |
 | The picture of the selected event on the CM4 (the recording, 15 s, `smoke.py --keys 5` plus down arrows) | the log alone **22%** of a core; a row held with its picture **19%** (the list stands still); a new picture every 0.36 s (40 downs) **26%** |
 | Counting clipped samples on the CM4 (the recording, 15 s, before and after) | within a point: spectrum 34 → 35% of a core, log 22 → 23% |
-| The density screen on the Mac (generator, 160×45, 10 s, `smoke.py --keys 1` / `--keys 3`, one sitting) | spectrum 16%, density **16%** of one core (3.1 MB to the terminal against 8.0); at 80×24 9%. Not measured on the CM4 yet |
+| The density screen on the Mac (generator, 160×45, 10 s, `smoke.py --keys 1` / `--keys 3`, one sitting) | spectrum 16%, density **16%** of one core (3.1 MB to the terminal against 8.0); at 80×24 9% |
+| The density on the CM4 (the recording looped, 160×45, 15 s, main's build and PR #22's side by side, twice) | gathering it costs nothing measurable: spectrum (`--keys 1`) 37 and 34% before, 35 and 36% with it. The density screen (`--keys 3`) **33 and 34%** of a core, 0.6 MB/s to the terminal against the spectrum's 0.9 |
 | Static aarch64 binary from CI | 4.8 MB (4.6 when SQLite was compiled in, 2.4 before that) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:
