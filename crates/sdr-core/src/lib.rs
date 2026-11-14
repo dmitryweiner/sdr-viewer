@@ -1,5 +1,6 @@
 //! The shared ground of the workspace: IQ sources and small helpers.
 
+pub mod bands;
 pub mod clip;
 pub mod file;
 pub mod frame;

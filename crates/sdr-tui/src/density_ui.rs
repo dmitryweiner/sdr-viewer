@@ -13,7 +13,7 @@ use sdr_detect::DensityMap;
 
 use crate::density::{brightness, busy, pixels};
 use crate::spectrum::{SpectrumView, cursor_column, heat};
-use crate::spectrum_ui::{GUTTER, draw_axis, draw_input, draw_scale};
+use crate::spectrum_ui::{BAND, GUTTER, draw_axis, draw_band, draw_input, draw_scale, other_band};
 
 /// The band, the zoom, the cursor and the scale are the spectrum
 /// screen's: the two show the same piece of the air.
@@ -51,7 +51,10 @@ pub(crate) fn draw(
 
     match input {
         Some(typed) => draw_input(frame, typed, plot(header)),
-        None => draw_header(frame, view, map, latest, cursor, width, plot(header)),
+        None => {
+            draw_band(frame, view, latest, plot(header));
+            draw_header(frame, view, map, latest, cursor, width, plot(header));
+        }
     }
     draw_scale(frame, range, body);
     draw_map(frame, view, map, range, cursor, plot(body));
@@ -72,6 +75,9 @@ fn draw_header(
         let hz = view.hz(latest, (column as f64 + 0.5) / width as f64);
         spans.push(Span::raw("cursor ").dark_gray());
         spans.push(Span::raw(format_hz(hz)).bold());
+        if let Some(band) = other_band(view, latest, hz) {
+            spans.push(Span::raw(format!("  {band}")).fg(BAND));
+        }
         if let Some(threshold) = view.threshold() {
             // The bins of the cursor's column, as `columns` divides them.
             let bins = view.visible_bins(map.bins);

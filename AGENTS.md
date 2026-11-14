@@ -102,9 +102,9 @@ touching USB.
   keys). The user has run phase 3 on the air there and found it working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-14 `sdr-viewer` there is the build of the `channels`
-  branch with PR #24 merged in (the channel strip, the detector's fix);
-  the one before is `sdr-viewer.before-fixes`. With the
+  Since 2026-11-14 `sdr-viewer` there is the build of the `band-names`
+  branch (PR #26, with PR #25 in it: `X` twice, the band's name in the
+  header); the one before is `sdr-viewer.before-x`. With the
   receiver it makes `~/.config/sdr-viewer/channels.toml`: the user's, like
   the database — our checks use `--channels test.toml` and remove it. The user
   allows replacing `sdr-viewer` there with a newer build without asking.
@@ -147,7 +147,8 @@ a crate is added in the phase that needs it):
 - `sdr-core` — `Source` trait (`read`, `tune`, `set_gain`,
   `lost_samples`) and `Iq` samples; `clip` (samples at full scale); `generator` (seeded tones, gated bursts, noise), `file` (raw IQ
   formats, looping), `pace` (real-time playback, `Clock` trait), `rate`
-  (`RateMeter`), `units` (parse/format Hz), `frame` (`SpectrumFrame`: dBFS
+  (`RateMeter`), `units` (parse/format Hz), `bands` (`band_at`: the name of the band a
+  frequency is in, from a table compiled in), `frame` (`SpectrumFrame`: dBFS
   per bin, lowest frequency first), `ring` (`IqRing`: the newest samples
   as `cu8` pairs, numbered from the start of the stream).
 - `sdr-dsp` — `analyzer`: Hann window, FFT, power averaged over a number

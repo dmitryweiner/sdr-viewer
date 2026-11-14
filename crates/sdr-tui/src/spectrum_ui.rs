@@ -8,6 +8,7 @@ use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use sdr_core::SpectrumFrame;
+use sdr_core::bands::band_at;
 use sdr_core::units::format_hz;
 
 use crate::spectrum::{
@@ -50,7 +51,10 @@ pub(crate) fn draw(frame: &mut Frame, view: &SpectrumView, input: Option<&str>, 
 
     match input {
         Some(typed) => draw_input(frame, typed, plot(header)),
-        None => draw_header(frame, view, latest, cursor, width, plot(header)),
+        None => {
+            draw_band(frame, view, latest, plot(header));
+            draw_header(frame, view, latest, cursor, width, plot(header));
+        }
     }
     draw_scale(frame, range, bars);
     draw_bars(frame, view, latest, range, cursor, plot(bars));
@@ -88,8 +92,11 @@ fn draw_header(
     let mut spans = vec![
         Span::raw(format!("{label} ")).dark_gray(),
         Span::raw(format_hz(hz)).bold(),
-        Span::raw(format!("  {db:.1} dBFS")),
     ];
+    if let Some(band) = cursor.and_then(|_| other_band(view, latest, hz)) {
+        spans.push(Span::raw(format!("  {band}")).fg(BAND));
+    }
+    spans.push(Span::raw(format!("  {db:.1} dBFS")));
     if let Some(floor) = floor {
         spans.push(Span::raw(format!("  {:+.0} dB above floor", db - floor)).dark_gray());
     }
@@ -100,6 +107,35 @@ fn draw_header(
         spans.push(Span::raw("  paused").yellow());
     }
     frame.render_widget(Line::from(spans), area);
+}
+
+/// The name of a band: what the frequencies are for.
+pub(crate) const BAND: Color = Color::Rgb(120, 170, 210);
+
+/// The band the middle of the view is in — where one is — at the right
+/// end of the header. Drawn first: the header's own words go over it on a
+/// narrow screen.
+pub(crate) fn draw_band(
+    frame: &mut Frame,
+    view: &SpectrumView,
+    latest: &SpectrumFrame,
+    area: Rect,
+) {
+    if let Some(band) = band_at(view.hz(latest, 0.5)) {
+        frame.render_widget(Line::from(band.name).fg(BAND).right_aligned(), area);
+    }
+}
+
+/// The band `hz` is in when it is another than the view's: for a cursor
+/// that has crossed into the next one.
+pub(crate) fn other_band(
+    view: &SpectrumView,
+    latest: &SpectrumFrame,
+    hz: f64,
+) -> Option<&'static str> {
+    let here = band_at(view.hz(latest, 0.5));
+    let there = band_at(hz)?;
+    (Some(there) != here).then_some(there.name)
 }
 
 /// The frequency being typed, in place of the header.

@@ -3,7 +3,7 @@ source: crates/sdr-tui/src/ui.rs
 expression: terminal.backend()
 ---
 "1 Spectrum 2 Channels 3 Density 4 Period 5 Log 6 Mesh 7 Panorama 8 Decoders                                                                                     "
-"     cursor 434.217 MHz  busy 49% of the time  half-life 30 s                                                                                                   "
+"     cursor 434.217 MHz  busy 49% of the time  half-life 30 s                                                                                      ISM 433 / LPD"
 " -30                                                ▀                                                                          ▀▀                               "
 "                                                                                                                               │                                "
 "                                                                                                                               │                                "

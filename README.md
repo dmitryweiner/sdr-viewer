@@ -43,6 +43,14 @@ Keys: `1`–`8` switch screens, `Tab` / `Shift+Tab` walk them, `?` help,
 | `Space` | pause |
 | `m` | reset max hold |
 
+At the right end of the header is the name of the band the middle of the
+view is in — `airband`, `amateur 2 m`, `marine VHF`, `PMR446`,
+`ISM 433 / LPD` — and when the cursor has crossed into another band, that
+band's name stands beside the cursor's frequency. The names come from a
+table in the app (ITU Region 1 as commonly used, `crates/sdr-core/src/bands.rs`):
+a hint, not a licence — national plans differ, and between the bands it
+knows the app says nothing.
+
 The dotted line over the noise is the detector's threshold, 8 dB above the
 noise floor it follows: a bar that crosses it becomes an event in the log.
 The header says how far above that floor the peak, or the cursor, is.

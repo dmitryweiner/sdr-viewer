@@ -3,7 +3,7 @@ source: crates/sdr-tui/src/ui.rs
 expression: "render(&app_on_the_density(), 80, 24).backend()"
 ---
 "1 Spectrum 2 Channels 3 Density 4 Period 5 Log 6 Mesh 7 Panorama 8 Decoders     "
-"     half-life 30 s                                                             "
+"     half-life 30 s                                                ISM 433 / LPD"
 " -30                       ▀                                    ▀               "
 "                                                                                "
 "                           ▀                                                    "
