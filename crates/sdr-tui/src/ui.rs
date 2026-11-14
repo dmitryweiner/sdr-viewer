@@ -602,6 +602,61 @@ mod tests {
     }
 
     #[test]
+    fn the_header_names_the_band_one_is_in() {
+        // 433.92 MHz: the 433 MHz ISM band inside the amateurs' 70 cm.
+        let mut app = app_with_signal();
+        let text = render_text(&app, 80, 24);
+        assert!(
+            text.lines().nth(1).unwrap().ends_with("ISM 433 / LPD"),
+            "{text}"
+        );
+        // The density shows the same piece of the air.
+        app.screen = Screen::Density;
+        let text = render_text(&app, 80, 24);
+        assert!(
+            text.lines().nth(1).unwrap().ends_with("ISM 433 / LPD"),
+            "{text}"
+        );
+        // Not while a frequency is typed over the header.
+        app.input = Some("433.5M".into());
+        assert!(!render_text(&app, 80, 24).contains("ISM 433"));
+    }
+
+    #[test]
+    fn a_cursor_in_another_band_names_it() {
+        // 1.024 MHz around 435 MHz: the middle is the amateurs' 70 cm,
+        // the left edge is still ISM 433.
+        let mut app = app_with_signal();
+        let mut frame = app.spectrum.latest().unwrap().clone();
+        frame.center_hz = 435e6;
+        app.on_frame(frame, sdr_detect::Levels::default());
+        app.spectrum.cursor = Some(0.5);
+        let header = |app: &App| {
+            render_text(app, 100, 24)
+                .lines()
+                .nth(1)
+                .unwrap()
+                .to_string()
+        };
+        assert!(header(&app).ends_with("amateur 70 cm"), "{}", header(&app));
+        assert!(header(&app).contains(" MHz  -"), "{}", header(&app));
+        app.spectrum.cursor = Some(0.1);
+        assert!(
+            header(&app).contains(" MHz  ISM 433 / LPD  -"),
+            "{}",
+            header(&app)
+        );
+        app.screen = Screen::Density;
+        assert!(header(&app).ends_with("amateur 70 cm"), "{}", header(&app));
+        // Between the bands there is nothing to say.
+        let mut frame = app.spectrum.latest().unwrap().clone();
+        frame.center_hz = 700e6;
+        app.on_frame(frame, sdr_detect::Levels::default());
+        app.screen = Screen::Spectrum;
+        assert!(header(&app).ends_with("dBFS"), "{}", header(&app));
+    }
+
+    #[test]
     fn a_zoomed_view_names_its_magnification_and_its_own_edges() {
         let mut app = app_with_signal();
         app.spectrum.zoom_in();

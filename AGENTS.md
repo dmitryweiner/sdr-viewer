@@ -147,7 +147,8 @@ a crate is added in the phase that needs it):
 - `sdr-core` — `Source` trait (`read`, `tune`, `set_gain`,
   `lost_samples`) and `Iq` samples; `clip` (samples at full scale); `generator` (seeded tones, gated bursts, noise), `file` (raw IQ
   formats, looping), `pace` (real-time playback, `Clock` trait), `rate`
-  (`RateMeter`), `units` (parse/format Hz), `frame` (`SpectrumFrame`: dBFS
+  (`RateMeter`), `units` (parse/format Hz), `bands` (`band_at`: the name of the band a
+  frequency is in, from a table compiled in), `frame` (`SpectrumFrame`: dBFS
   per bin, lowest frequency first), `ring` (`IqRing`: the newest samples
   as `cu8` pairs, numbered from the start of the stream).
 - `sdr-dsp` — `analyzer`: Hann window, FFT, power averaged over a number
