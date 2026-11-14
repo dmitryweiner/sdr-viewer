@@ -2,6 +2,7 @@
 //! terminal here, so everything is tested with plain numbers.
 
 use std::collections::VecDeque;
+use std::ops::Range;
 
 use ratatui::style::Color;
 use sdr_core::SpectrumFrame;
@@ -137,12 +138,16 @@ impl SpectrumView {
         f64::from(frame.sample_rate) * self.width()
     }
 
-    /// The bins of `power_db` that are in view.
-    pub fn visible<'a>(&self, power_db: &'a [f32]) -> &'a [f32] {
-        let bins = power_db.len();
+    /// Which of `bins` bins are in view.
+    pub fn visible_bins(&self, bins: usize) -> Range<usize> {
         let count = (bins >> self.zoom).max(1).min(bins);
         let first = ((self.start * bins as f64).round() as usize).min(bins - count);
-        &power_db[first..first + count]
+        first..first + count
+    }
+
+    /// The bins of `power_db` that are in view.
+    pub fn visible<'a>(&self, power_db: &'a [f32]) -> &'a [f32] {
+        &power_db[self.visible_bins(power_db.len())]
     }
 
     /// Halves the visible part around the cursor, or around its middle.

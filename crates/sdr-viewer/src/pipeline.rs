@@ -2,7 +2,7 @@
 //! event detector with fast frames and the screen with their averages.
 
 use sdr_core::{Iq, SourceInfo, SpectrumFrame};
-use sdr_detect::{Detector, DetectorConfig, Event, Levels};
+use sdr_detect::{Density, DensityConfig, DensityMap, Detector, DetectorConfig, Event, Levels};
 use sdr_dsp::{Analyzer, AnalyzerConfig, FrameAverager};
 
 /// Bins per spectrum frame: ~1.2 kHz each at 2.4 MS/s, and more than twice
@@ -24,12 +24,19 @@ pub enum Output {
     Frame(SpectrumFrame, Levels),
     /// An event that has ended.
     Event(Event),
+    /// How often each frequency was at each level, as of the frame just
+    /// given; only while it is watched.
+    Density(DensityMap),
 }
 
 pub struct Pipeline {
     analyzer: Analyzer,
     averager: FrameAverager,
     detector: Detector,
+    /// Gathered from every detector frame, watched or not: the screen
+    /// that shows it opens on what happened before.
+    density: Density,
+    density_watched: bool,
 }
 
 impl Pipeline {
@@ -42,7 +49,19 @@ impl Pipeline {
             analyzer: Analyzer::new(fast),
             averager: FrameAverager::new(group),
             detector: Detector::new(DetectorConfig::default()),
+            density: Density::new(DensityConfig::default()),
+            density_watched: false,
         }
+    }
+
+    /// Whether the density goes out with every screen frame.
+    pub fn watch_density(&mut self, watched: bool) {
+        self.density_watched = watched;
+    }
+
+    /// Starts the density afresh.
+    pub fn reset_density(&mut self) {
+        self.density.reset();
     }
 
     pub fn push(&mut self, samples: &[Iq], info: &SourceInfo, mut out: impl FnMut(Output)) {
@@ -50,11 +69,17 @@ impl Pipeline {
             analyzer,
             averager,
             detector,
+            density,
+            density_watched,
         } = self;
         analyzer.push(samples, info, |frame| {
             detector.push(&frame, |event| out(Output::Event(event)));
+            density.push(&frame);
             if let Some(frame) = averager.push(&frame) {
                 out(Output::Frame(frame, detector.levels()));
+                if *density_watched {
+                    out(Output::Density(density.map().clone()));
+                }
             }
         });
     }
@@ -95,6 +120,7 @@ mod tests {
                 floors.push(levels);
             }
             Output::Event(event) => events.push(event),
+            Output::Density(_) => panic!("nobody watches the density"),
         });
         // Every screen frame comes with the detector's floor under it:
         // where the band is quiet, the frame's own level.
@@ -192,6 +218,47 @@ mod tests {
             })
             .collect();
         assert!(off_grid.is_empty(), "{off_grid:#?}");
+    }
+
+    #[test]
+    fn the_density_is_gathered_always_and_given_out_while_watched() {
+        let mut generator = Generator::new(GeneratorConfig::demo());
+        let info = generator.info();
+        let mut pipeline = Pipeline::new(info.sample_rate);
+        let mut buf = vec![Iq::new(0.0, 0.0); 1_200_000];
+        generator.read(&mut buf).unwrap();
+        pipeline.push(&buf, &info, |output| {
+            assert!(!matches!(output, Output::Density(_)));
+        });
+        pipeline.watch_density(true);
+        generator.read(&mut buf).unwrap();
+        let (mut frames, mut maps) = (0, Vec::new());
+        pipeline.push(&buf, &info, |output| match output {
+            Output::Frame(..) => frames += 1,
+            Output::Density(map) => maps.push(map),
+            Output::Event(_) => {}
+        });
+        assert_eq!(maps.len(), frames);
+        let map = maps.last().unwrap();
+        assert_eq!(map.bins, FFT_SIZE);
+        // The carrier at 433.5 MHz, -30 dBFS, was there all of the second;
+        // the burst at 434.2 MHz, -25 dBFS, for 0.3 s of it — and the
+        // first half second, not watched, is remembered too.
+        let bin = |hz: f64| (1024.0 + (hz - 433.92e6) / 2.4e6 * FFT_SIZE as f64).round() as usize;
+        let carrier = map.above(bin(433.5e6), -35.0);
+        assert!(carrier > 0.99, "{carrier}");
+        let burst = map.above(bin(434.2e6), -30.0);
+        assert!((burst - 0.3).abs() < 0.02, "{burst}");
+        assert!(map.above(bin(434.0e6), -60.0) < 0.001);
+        pipeline.reset_density();
+        generator.read(&mut buf[..240_000]).unwrap();
+        pipeline.push(&buf[..240_000], &info, |output| {
+            if let Output::Density(map) = output {
+                maps.push(map);
+            }
+        });
+        // The burst is off now, and what it left is forgotten.
+        assert_eq!(maps.last().unwrap().above(bin(434.2e6), -30.0), 0.0);
     }
 
     #[test]

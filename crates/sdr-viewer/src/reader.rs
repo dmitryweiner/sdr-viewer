@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use sdr_core::rate::RateMeter;
 use sdr_core::{Iq, IqRing, Source, SourceInfo, SpectrumFrame};
-use sdr_detect::{Event, Levels};
+use sdr_detect::{DensityMap, Event, Levels};
 use sdr_tui::fragment::Fragment;
 use sdr_tui::{Command, SourceState, SourceStatus};
 
@@ -42,6 +42,9 @@ pub enum Update {
     Done(String),
     /// The picture of this event, or none: its samples are not held.
     Picture(Event, Option<Fragment>),
+    /// How often each frequency was at each level, with every frame
+    /// while the interface watches it.
+    Density(DensityMap),
 }
 
 /// Work on an event's samples that is not the reader's to do.
@@ -161,6 +164,14 @@ pub fn run(
                     );
                     Ok(handed.err().map(|_| Update::Picture(asked, None)))
                 }
+                Command::WatchDensity(watched) => {
+                    pipeline.watch_density(watched);
+                    Ok(None)
+                }
+                Command::ResetDensity => {
+                    pipeline.reset_density();
+                    Ok(None)
+                }
             };
             // The answer to a key press must not get lost: wait for room.
             let _ = match done {
@@ -194,6 +205,9 @@ pub fn run(
                         let _ = updates.try_send(Update::Frame(frame, levels));
                     }
                     Output::Event(event) => fresh.push(event),
+                    Output::Density(map) => {
+                        let _ = updates.try_send(Update::Density(map));
+                    }
                 });
                 keep(fresh.clone());
                 events.append(&mut fresh);
@@ -356,6 +370,29 @@ mod tests {
             .collect();
         assert!(!centers.is_empty());
         assert!(centers.iter().all(|&center| center == 100e6));
+    }
+
+    #[test]
+    fn the_density_comes_with_every_frame_only_while_it_is_watched() {
+        let frames_and_maps = |commands: &[Command]| {
+            let source = Brief(Generator::new(GeneratorConfig::demo()), 40);
+            let got = updates_after(source, commands);
+            let frames = got
+                .iter()
+                .filter(|update| matches!(update, Update::Frame(..)));
+            let maps = got
+                .iter()
+                .filter(|update| matches!(update, Update::Density(_)));
+            (frames.count(), maps.count())
+        };
+        // 40 reads of 16 384 samples: two screen frames.
+        assert_eq!(frames_and_maps(&[]), (2, 0));
+        assert_eq!(frames_and_maps(&[Command::WatchDensity(true)]), (2, 2));
+        let off = [Command::WatchDensity(true), Command::WatchDensity(false)];
+        assert_eq!(frames_and_maps(&off), (2, 0));
+        // Starting afresh says nothing by itself.
+        let afresh = [Command::WatchDensity(true), Command::ResetDensity];
+        assert_eq!(frames_and_maps(&afresh), (2, 2));
     }
 
     #[test]

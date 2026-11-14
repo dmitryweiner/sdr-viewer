@@ -321,6 +321,8 @@ The first useful version comes after phase 3.
 | Weak one-frame events | The detector's threshold stays at 8 dB and everything it finds goes into the database; the log hides the weak ones with a filter (minimum level above the floor) whose threshold the user changes from the log screen |
 | The floor on the spectrum | Drawn as the detector's threshold (its floor per bin + 8 dB), a dotted Braille line behind the bars: the floor itself runs along the tops of the noise bars, where a character cell cannot show a bar and a line at once. The header gives the dB above the floor. The scale keeps its own, faster estimate (the frame's median): the detector's floor takes 10 s to rise after the gain goes up |
 | The IQ ring buffer and "save IQ" | The last 30 s of samples are held in memory as `cu8` pairs (144 MB at 2.4 MS/s; `--iq-buffer SECS`, 0 for none) — lossless for the 8-bit RTL-SDR, a quarter of what `f32` would take. `r` on a row of the log saves the event with 50 ms on each side, the whole band, as a SigMF pair in `sdr-viewer/iq` beside the database (`--iq-dir`). A retune empties the buffer. Saving is by hand for now; saving by itself is idea 3 of section 6 |
+| The spectral density (5.3) | A histogram of the detector's frames (100 a second, so a 10 ms burst counts at its own level): per bin of the spectrum, 1 dB levels from −120 to 0 dBFS. It forgets exponentially, half-life 30 s, and is gathered all the time, whichever screen is open. Brightness is the logarithm of the share of time, from 10⁻⁴ to 1; a cell of the screen shows the largest share among its bins and levels. The screen shares the spectrum's band, zoom, cursor, scale and keys; `m` starts it afresh. The half-life is fixed for now |
+| Phase 4's order | Density first (it needs only the frames), then the channel strip, then periodicity: each its own pull request |
 | How long events are kept | 7 days: older events are deleted when the app starts. Nothing is filtered on the way in (~93 bytes an event, ~660 MB a day on a band as busy as the LPD recording, so the file settles under ~5 GB there) |
 | Phase order on start | Phase 1 before phase 0: no SSH access to the device yet; phase 0 follows `docs/hardware-check.md` when there is |
 
@@ -362,7 +364,23 @@ As of 2026-11-14.
 | 1 | Skeleton | Done: workspace, CI with a static aarch64 binary, generator and file sources, tabs |
 | 2 | Spectrum and waterfall | Done on the generator, recordings and the RTL-SDR: bars with max hold, waterfall, a scale that follows the noise floor, cursor, tuning (`f`, `[` `]`, Enter), gain, zoom, pause, `--snapshot` |
 | 3 | Detector and log | Done; the user ran it on the air on the device on 2026-11-13 and found it working. Built: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. The spectrum shows the detector's threshold as a line and the dB above the floor in its header. The last 30 s of samples are held in a ring buffer; the log shows the picture of the selected event made of them, and `r` saves them as SigMF. The detector has regression tests on a piece of real air (`testdata/`). The status line tells overload (`clip`) and lost samples. |
-| 4–8 | | Not started |
+| 4 | Accumulators | Begun: the spectral density (screen 5.3) is built — the decision "The spectral density" in section 12. The channel strip (5.2) and periodicity (5.4) are not started |
+| 5–8 | | Not started |
+
+Known limits of the density as built:
+
+- The half-life (30 s) cannot be changed from the keyboard, and nothing
+  of the picture is kept between runs.
+- A change of gain shifts every level: the old picture fades over a
+  couple of half-lives beside the new one (`m` clears it at once).
+- The level is that of a 10 ms detector frame: a burst shorter than that
+  reads lower than it was.
+- "busy" in the header is held against the detector's threshold as it is
+  now, not as it was when the frames were counted.
+- On the device it was measured on the recording (33–34% of a core at
+  160×45, the spectrum's cost; gathering adds nothing measurable) and
+  looked at as a text snapshot: the hopper's channels stand as columns
+  over the noise. Not yet seen by the user, nor on the air.
 
 Nothing is left of phase 3's list. Done from that list:
 

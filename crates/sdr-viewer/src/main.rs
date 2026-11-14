@@ -38,7 +38,7 @@ fn main() -> ExitCode {
         }
     };
     if let Some(size) = args.snapshot {
-        return match snapshot::run(source, size, args.secs) {
+        return match snapshot::run(source, size, args.secs, args.screen) {
             Ok(text) => {
                 print!("{text}");
                 ExitCode::SUCCESS
@@ -123,6 +123,7 @@ fn main() -> ExitCode {
                     Update::Notice(notice) => app.notice = Some(notice),
                     Update::Done(done) => app.done = Some(done),
                     Update::Picture(event, fragment) => app.on_picture(&event, fragment),
+                    Update::Density(map) => app.on_density(map),
                 }
                 dirty = true;
             }

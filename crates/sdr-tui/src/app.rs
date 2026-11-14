@@ -3,7 +3,7 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use sdr_core::units::parse_hz;
 use sdr_core::{GainChange, SourceInfo};
-use sdr_detect::Event;
+use sdr_detect::{DensityMap, Event};
 
 use crate::fragment::{Fragment, Picture};
 use crate::log::LogView;
@@ -136,6 +136,11 @@ pub enum Command {
     SaveIq(Event),
     /// Make the picture of this event from its samples.
     Picture(Event),
+    /// Send the density with every frame, or stop: it is a megabyte, and
+    /// only its screen needs it.
+    WatchDensity(bool),
+    /// Forget the density gathered so far.
+    ResetDensity,
 }
 
 pub struct App {
@@ -146,6 +151,9 @@ pub struct App {
     pub status: SourceStatus,
     pub spectrum: SpectrumView,
     pub log: LogView,
+    /// How often each frequency was at each level; comes only while its
+    /// screen is open.
+    pub density: Option<DensityMap>,
     /// Asked of the source and not yet sent; the main loop drains it.
     pub commands: Vec<Command>,
     /// The frequency being typed after `f`.
@@ -175,6 +183,7 @@ impl App {
             status: SourceStatus::new(SourceState::Running, 0.0),
             spectrum: SpectrumView::default(),
             log: LogView::default(),
+            density: None,
             commands: Vec::new(),
             input: None,
             notice: None,
@@ -187,8 +196,21 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return;
         }
+        let watched = self.screen == Screen::Density;
         self.handle_key(key);
         self.follow_selection();
+        let watch = self.screen == Screen::Density;
+        if watch != watched {
+            self.commands.push(Command::WatchDensity(watch));
+        }
+    }
+
+    /// Takes the density as of the latest frame; like the spectrum, the
+    /// picture stands still while paused.
+    pub fn on_density(&mut self, map: DensityMap) {
+        if !self.spectrum.paused {
+            self.density = (map.bins > 0).then_some(map);
+        }
     }
 
     /// The picture of the event selected in the log, if one is.
@@ -250,6 +272,7 @@ impl App {
                 self.screen = Screen::ALL[usize::from(c as u8 - b'1')];
             }
             _ if self.screen == Screen::Spectrum => self.on_spectrum_key(key),
+            _ if self.screen == Screen::Density => self.on_density_key(key),
             _ if self.screen == Screen::Log => self.on_log_key(key),
             _ => {}
         }
@@ -283,6 +306,18 @@ impl App {
             Some(row) if row.this_run => self.commands.push(Command::SaveIq(row.event.clone())),
             Some(_) => self.notice = Some("an earlier run's samples are gone".into()),
             None => self.notice = Some("select an event first: ↑ ↓".into()),
+        }
+    }
+
+    /// The density shows the band the spectrum shows: the same cursor,
+    /// zoom and tuning. Only `m` is its own.
+    fn on_density_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Char('m') => {
+                self.density = None;
+                self.commands.push(Command::ResetDensity);
+            }
+            _ => self.on_spectrum_key(key),
         }
     }
 
@@ -383,6 +418,68 @@ mod tests {
             event(300, 400, 50.0, 30.0),
         ]);
         app
+    }
+
+    fn density_map(bins: usize) -> DensityMap {
+        use sdr_detect::{Density, DensityConfig};
+        let mut density = Density::new(DensityConfig::default());
+        if bins > 0 {
+            density.push(&sdr_core::SpectrumFrame {
+                time: std::time::Duration::ZERO,
+                center_hz: 433.92e6,
+                sample_rate: 2_400_000,
+                power_db: vec![-70.0; bins],
+            });
+        }
+        density.map().clone()
+    }
+
+    #[test]
+    fn the_density_is_asked_for_while_its_screen_is_open() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('3'));
+        assert_eq!(app.commands, [Command::WatchDensity(true)]);
+        press(&mut app, KeyCode::Char('3'));
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.commands.len(), 1);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.commands[1..], [Command::WatchDensity(false)]);
+        press(&mut app, KeyCode::BackTab);
+        assert_eq!(app.commands[2..], [Command::WatchDensity(true)]);
+    }
+
+    #[test]
+    fn the_density_screen_has_the_spectrums_keys_and_m_starts_it_afresh() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('3'));
+        app.commands.clear();
+        press(&mut app, KeyCode::Right);
+        press(&mut app, KeyCode::Char('+'));
+        assert!(app.spectrum.cursor.is_some());
+        assert_eq!(app.spectrum.magnification(), 2);
+        press(&mut app, KeyCode::Esc);
+        assert!(app.spectrum.cursor.is_none() && !app.quit);
+        app.on_density(density_map(8));
+        assert!(app.density.is_some());
+        press(&mut app, KeyCode::Char('m'));
+        assert_eq!(app.density, None);
+        assert_eq!(app.commands, [Command::ResetDensity]);
+        // A map of nothing, on its way when the reset came, is no map.
+        app.on_density(density_map(0));
+        assert_eq!(app.density, None);
+    }
+
+    #[test]
+    fn a_paused_picture_keeps_its_density() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('3'));
+        app.on_density(density_map(8));
+        press(&mut app, KeyCode::Char(' '));
+        app.on_density(density_map(16));
+        assert_eq!(app.density.as_ref().map(|map| map.bins), Some(8));
+        press(&mut app, KeyCode::Char(' '));
+        app.on_density(density_map(16));
+        assert_eq!(app.density.as_ref().map(|map| map.bins), Some(16));
     }
 
     #[test]
