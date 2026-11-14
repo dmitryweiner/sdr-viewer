@@ -461,12 +461,19 @@ How the detector works (`crates/sdr-detect`), as built:
   signal wider than half a segment (37 kHz) lifts it, slowly.
 - An event: bins more than 8 dB above the floor, joined when closer than
   5 kHz, followed until silent for 100 ms. Its band and peak are those of
-  its strongest frame; the union over all frames is used only to match.
+  its strongest frame. It goes on only in what touches the bins it filled
+  in the last 100 ms and is within 40 dB of its strongest frame. (Until
+  2026-11-14 it was matched against every bin it had ever touched: a
+  transmitter beside the receiver splashed over the whole band, and its
+  event then lived on for minutes in every weak carrier left in that
+  width — found by the user on the air, 111 s and 510 s in their
+  database.)
 - A carrier keyed inside an FFT block splashes over the whole band; what
   is weaker than a signal of the same frame by 10 dB + 20 dB per decade of
   bins is dropped as its splash. This hides weak signals next to a strong
   one while it is on.
-- Known limits: the width is measured down to the threshold, so a strong
+- Known limits: a signal that fades or grows by more than 40 dB without
+  a pause becomes two events; the width is measured down to the threshold, so a strong
   pure tone reads ~10 kHz wide (the window's skirts); a signal that never
   ends is one open event forever.
 
