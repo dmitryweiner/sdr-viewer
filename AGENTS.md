@@ -314,4 +314,10 @@ measure on the device, the Mac's numbers do not scale.
   AIO board's GPIO 7 was high in phase 0 only because the user had set it
   by hand; a boot leaves it undriven. Look at `pinctrl get 7` and at the
   shell history before suspecting the hub (`docs/hardware.md`, section 4).
+- **A test's signals are tidy; the air next to a transmitter is not.**
+  The detector matched an event against every bin it had ever touched.
+  Every test passed, the LPD recording too; the user's handheld radio
+  beside the receiver filled the band for a moment and its event then
+  never ended. The user's own `events.db` (copy it, read it with
+  `sqlite3` here) showed it at once: look there when something "sticks".
 - **zsh**: `"$H:path"` applies a modifier to `$H`; write `"${H}:path"`.

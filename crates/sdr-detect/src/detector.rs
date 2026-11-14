@@ -20,6 +20,11 @@ pub struct DetectorConfig {
     /// weaker than a signal of the same frame by more than this many dB
     /// plus that fall is taken for its splash.
     pub splash_db: f32,
+    /// An event goes on only in what is within this many dB of its
+    /// strongest frame. What is left in the band when a transmitter that
+    /// overloaded the receiver stops — weak carriers, the receiver's own
+    /// spike — is 60 dB below it and is not that transmitter going on.
+    pub same_signal_db: f32,
     pub floor: FloorConfig,
 }
 
@@ -30,6 +35,7 @@ impl Default for DetectorConfig {
             merge_hz: 5_000.0,
             hold: Duration::from_millis(100),
             splash_db: 10.0,
+            same_signal_db: 40.0,
             floor: FloorConfig::default(),
         }
     }
@@ -83,14 +89,16 @@ struct Blob {
 }
 
 /// An event that has not ended yet.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Open {
     start: Duration,
     /// The latest frame it was in.
     seen: Duration,
-    /// Every bin it has touched: what a new blob is matched against.
-    low: usize,
-    high: usize,
+    /// The bins it filled in the frames of the last hold time, with the
+    /// frame's time: what a new blob is matched against. Not every bin it
+    /// ever touched: one wide frame would make it swallow, for as long as
+    /// it lasts, whatever comes up anywhere in that width.
+    recent: Vec<(Duration, usize, usize)>,
     strongest: Blob,
 }
 
@@ -242,26 +250,34 @@ impl Detector {
     /// Adds a blob to the open events it touches — joining them if there
     /// are several — or opens a new one.
     fn take(&mut self, blob: Blob, time: Duration, reach: usize) {
-        let touches =
-            |open: &Open| blob.low <= open.high + reach + 1 && open.low <= blob.high + reach + 1;
+        let DetectorConfig {
+            hold,
+            same_signal_db,
+            ..
+        } = self.config;
+        let fresh = |seen: Duration| time.saturating_sub(seen) <= hold;
+        let touches = |open: &Open| {
+            (blob.peak_db - open.strongest.peak_db).abs() <= same_signal_db
+                && open.recent.iter().any(|&(seen, low, high)| {
+                    fresh(seen) && blob.low <= high + reach + 1 && low <= blob.high + reach + 1
+                })
+        };
         let Some(first) = self.open.iter().position(touches) else {
             self.open.push(Open {
                 start: time,
                 seen: time,
-                low: blob.low,
-                high: blob.high,
+                recent: vec![(time, blob.low, blob.high)],
                 strongest: blob,
             });
             return;
         };
-        let mut joined = self.open[first];
         let mut index = first + 1;
         while index < self.open.len() {
             if touches(&self.open[index]) {
                 let other = self.open.swap_remove(index);
+                let joined = &mut self.open[first];
                 joined.start = joined.start.min(other.start);
-                joined.low = joined.low.min(other.low);
-                joined.high = joined.high.max(other.high);
+                joined.recent.extend(other.recent);
                 if other.strongest.peak_db > joined.strongest.peak_db {
                     joined.strongest = other.strongest;
                 }
@@ -269,13 +285,13 @@ impl Detector {
                 index += 1;
             }
         }
+        let joined = &mut self.open[first];
         joined.seen = time;
-        joined.low = joined.low.min(blob.low);
-        joined.high = joined.high.max(blob.high);
+        joined.recent.retain(|&(seen, ..)| fresh(seen));
+        joined.recent.push((time, blob.low, blob.high));
         if blob.peak_db > joined.strongest.peak_db {
             joined.strongest = blob;
         }
-        self.open[first] = joined;
     }
 
     fn emit_where(&mut self, ended: impl Fn(&Open) -> bool, emit: &mut impl FnMut(Event)) {
@@ -519,6 +535,46 @@ mod tests {
         assert_eq!(events[0].start, ms(100));
         assert_eq!(events[0].duration, ms(120));
         assert_eq!(events[0].peak_dbfs, -45.0);
+    }
+
+    #[test]
+    fn what_is_left_when_a_strong_wide_signal_stops_is_not_that_signal_going_on() {
+        // A weak carrier all along; from 1 s, for half a second, a
+        // transmitter beside the receiver fills 200 kHz around it.
+        let air = Air::new(&[(0, 300, 650, 3, -75.0), (100, 50, 500, 200, -10.0)]);
+        let (events, detector) = watch(&air, 300);
+        assert_eq!(events.len(), 2, "{events:?}");
+        // The carrier until it was drowned.
+        assert_eq!((events[0].start, events[0].duration), (ms(0), ms(1000)));
+        assert_eq!(events[0].peak_dbfs, -75.0);
+        // The transmitter, for as long as it was on and no longer.
+        assert_eq!((events[1].start, events[1].duration), (ms(1000), ms(500)));
+        assert_eq!(events[1].peak_dbfs, -10.0);
+        assert_eq!(events[1].width_hz(), 200_000.0);
+        // The carrier again, a new event.
+        let open = detector.open();
+        assert_eq!(open.len(), 1, "{open:?}");
+        assert_eq!(open[0].start, ms(1500));
+        assert_eq!(open[0].peak_dbfs, -75.0);
+    }
+
+    #[test]
+    fn one_wide_frame_does_not_make_an_event_take_in_its_neighbours_for_good() {
+        // A carrier that splashes 60 kHz wide for one frame; 150 ms later
+        // another signal comes up 50 kHz away, inside that splash.
+        let air = Air::new(&[
+            (0, 100, 500, 3, -40.0),
+            (50, 1, 480, 80, -45.0),
+            (50, 1, 500, 3, -40.0),
+            (65, 35, 550, 3, -45.0),
+        ]);
+        let (mut events, mut detector) = watch(&air, 100);
+        detector.finish(|event| events.push(event));
+        assert_eq!(events.len(), 2, "{events:?}");
+        assert_eq!((events[0].start, events[0].duration), (ms(0), ms(1000)));
+        assert_eq!(events[0].width_hz(), 3_000.0);
+        assert_eq!((events[1].start, events[1].duration), (ms(650), ms(350)));
+        assert_eq!(events[1].peak_hz, CENTER + 50_000.0);
     }
 
     #[test]
