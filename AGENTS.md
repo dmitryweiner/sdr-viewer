@@ -117,7 +117,8 @@ touching USB.
   GPIO 7 is the SDR's power and SPI4's clock, and that is fine.
 - `~/sdr-viewer-check/capture-433.cu8` — 10 s at 433.92 MHz, 2.4 MS/s,
   gain 30 dB, antenna on: LPD433 activity over a −71 dBFS floor. The
-  detector finds 824 events in it: mostly 40–50 ms bursts ~9 kHz wide on
+  detector finds 915 events in it (824 before PR #24, which stopped an
+  event taking in neighbours it had once touched): mostly 40–50 ms bursts ~9 kHz wide on
   the 25 kHz LPD grid (433.075 MHz + n × 25 kHz) over some 66 channels — a
   frequency hopper. `testdata/lpd433.cu8` in the repository is 0.16 s of
   it, from 4.96 s.
