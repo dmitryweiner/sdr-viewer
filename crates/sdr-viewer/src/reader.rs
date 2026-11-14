@@ -47,6 +47,15 @@ pub enum Update {
     Density(DensityMap),
 }
 
+/// What the store is told, in the order it happened.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Kept {
+    /// An event has ended: keep it.
+    Event(Event),
+    /// The user erased the log: delete what is kept.
+    EraseAll,
+}
+
 /// Work on an event's samples that is not the reader's to do.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Job {
@@ -81,7 +90,7 @@ const PICTURE_LIMIT: Duration = Duration::from_secs(3);
 pub struct Sinks {
     /// Gets every ended event, and when reading stops — however it
     /// stops — the events still on, ended there.
-    pub events: Option<Sender<Vec<Event>>>,
+    pub events: Option<Sender<Vec<Kept>>>,
     /// Holds the latest samples, for an event's picture and for saving.
     pub ring: IqRing,
     /// Gets the samples cut out for an event, with what to do with them.
@@ -126,7 +135,7 @@ pub fn run(
     let share = |clipped: u64, seen: u64| clipped as f64 / seen.max(1) as f64;
     let keep = |events: Vec<Event>| {
         if let (Some(store), false) = (&store, events.is_empty()) {
-            let _ = store.send(events);
+            let _ = store.send(events.into_iter().map(Kept::Event).collect());
         }
     };
     while !stop.load(Ordering::Relaxed) {
@@ -170,6 +179,15 @@ pub fn run(
                 }
                 Command::ResetDensity => {
                     pipeline.reset_density();
+                    Ok(None)
+                }
+                Command::EraseEvents => {
+                    // Those the interface has not taken are erased too;
+                    // the store has had them already, before this word.
+                    events.clear();
+                    if let Some(store) = &store {
+                        let _ = store.send(vec![Kept::EraseAll]);
+                    }
                     Ok(None)
                 }
             };
@@ -306,7 +324,7 @@ mod tests {
         }
     }
 
-    fn events_to(store: Sender<Vec<Event>>) -> Sinks {
+    fn events_to(store: Sender<Vec<Kept>>) -> Sinks {
         Sinks {
             events: Some(store),
             ..Sinks::default()
@@ -451,12 +469,44 @@ mod tests {
         let (store_tx, store_rx) = channel();
         let stop = Arc::new(AtomicBool::new(false));
         run(demo(), tx, command_rx, stop, events_to(store_tx));
-        let stored: Vec<Event> = store_rx.iter().flatten().collect();
+        let stored: Vec<Event> = store_rx.iter().flatten().map(event_of).collect();
         // The burst, then the carrier, ended where reading stopped.
         assert_eq!(stored.len(), 2, "{stored:?}");
         assert!((stored[0].peak_hz - 434.2e6).abs() < 1_200.0);
         assert!((stored[1].peak_hz - 433.5e6).abs() < 1_200.0);
         assert!((stored[1].duration.as_secs_f64() - 1.36).abs() < 0.02);
+    }
+
+    fn event_of(kept: Kept) -> Event {
+        match kept {
+            Kept::Event(event) => event,
+            Kept::EraseAll => panic!("nothing was erased"),
+        }
+    }
+
+    #[test]
+    fn erasing_reaches_the_store_before_the_events_that_end_after_it() {
+        let (tx, rx) = sync_channel(1024);
+        let (command_tx, command_rx) = channel();
+        let (store_tx, store_rx) = channel();
+        command_tx.send(Command::EraseEvents).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        run(demo(), tx, command_rx, stop, events_to(store_tx));
+        let stored: Vec<Kept> = store_rx.iter().flatten().collect();
+        assert_eq!(stored.len(), 3, "{stored:?}");
+        assert_eq!(stored[0], Kept::EraseAll);
+        assert!(matches!(stored[1], Kept::Event(_)));
+        // Nothing is said to the interface: it has cleared its list.
+        assert!(
+            !rx.try_iter()
+                .any(|update| matches!(update, Update::Notice(_) | Update::Done(_)))
+        );
+        // Without a store it is no trouble either.
+        let (tx, _rx) = sync_channel(1024);
+        let (command_tx, command_rx) = channel();
+        command_tx.send(Command::EraseEvents).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        run(demo(), tx, command_rx, stop, Sinks::default());
     }
 
     #[test]

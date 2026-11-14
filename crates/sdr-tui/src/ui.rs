@@ -38,15 +38,16 @@ const CHANNEL_KEYS: [(&str, &str); 4] = [
     ("↑, ↓", "select a channel (PgUp, PgDn, Home, End)"),
     ("+, -", "fewer, more seconds to a column"),
     ("Enter", "tune to the selected channel"),
-    ("X, X", "let go of the channels the app made"),
+    ("X, X", "let go of the silent channels the app made"),
 ];
 
-const LOG_KEYS: [(&str, &str); 5] = [
+const LOG_KEYS: [(&str, &str); 6] = [
     ("↑, ↓", "select an event (PgUp, PgDn, Home, End)"),
     ("+, -", "raise, lower the level that hides weak events"),
     ("s", "sort by time, level, duration, frequency"),
     ("Enter", "tune to the selected event"),
     ("r", "save the selected event's IQ samples"),
+    ("X, X", "erase the ended events, in the database too"),
 ];
 
 /// The keys of the open screen, then those of every screen: all of them

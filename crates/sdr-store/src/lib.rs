@@ -191,6 +191,16 @@ impl Store {
         Ok(removed as u64)
     }
 
+    /// Deletes every event, and every session but `current`, which goes
+    /// on; returns how many events went. The file does not shrink.
+    pub fn erase(&mut self, current: SessionId) -> Result<u64, StoreError> {
+        let transaction = self.connection.transaction()?;
+        let removed = transaction.execute("DELETE FROM events", [])?;
+        transaction.execute("DELETE FROM sessions WHERE id != ?1", [current.0])?;
+        transaction.commit()?;
+        Ok(removed as u64)
+    }
+
     /// The latest `limit` events of all sessions that began at `since` or
     /// later, the newest first.
     pub fn recent(&self, since: SystemTime, limit: usize) -> Result<Vec<StoredEvent>, StoreError> {
@@ -380,6 +390,31 @@ mod tests {
         assert_eq!(store.prune(noon()).unwrap(), 0);
         store.add_events(fresh, &[event(0, 14.0)]).unwrap();
         assert_eq!(store.count().unwrap(), 2);
+    }
+
+    #[test]
+    fn erasing_deletes_every_event_and_leaves_the_session_that_goes_on() {
+        let mut store = Store::in_memory().unwrap();
+        let hour = Duration::from_secs(3600);
+        let old = store.begin_session(noon() - hour, &source()).unwrap();
+        let current = store.begin_session(noon(), &source()).unwrap();
+        store.add_events(old, &[event(0, 10.0)]).unwrap();
+        store
+            .add_events(current, &[event(0, 11.0), event(1_000, 12.0)])
+            .unwrap();
+        assert_eq!(store.erase(current).unwrap(), 3);
+        assert_eq!(store.count().unwrap(), 0);
+        let sessions: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(sessions, 1);
+        // What ends after that is kept as before.
+        store.add_events(current, &[event(2_000, 13.0)]).unwrap();
+        let got = store.recent(UNIX_EPOCH, 10).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].session, current);
+        assert_eq!(store.erase(current).unwrap(), 1);
     }
 
     #[test]

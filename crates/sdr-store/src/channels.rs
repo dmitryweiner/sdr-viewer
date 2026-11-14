@@ -24,7 +24,8 @@ pub const HEADER: &str = "\
 #
 # Removing a channel only lets it be made again; hide it instead.
 # X pressed twice on the channel strip removes from this file the channels
-# that have neither a name nor `hide`: give a name to what is to stay.
+# that have neither a name nor `hide` and no signal on at that moment:
+# give a name to what is to stay.
 ";
 
 /// The channels of a file's text, in its order.
@@ -99,11 +100,11 @@ pub fn append(text: &str, new: &[Channel]) -> Result<(String, usize), String> {
 }
 
 /// `text` without its channels that have neither a name nor `hide` —
-/// those the app made and the user did not take for their own — and how
-/// many that was. Everything else stays byte for byte; the comment lines
+/// those the app made and the user did not take for their own — but for
+/// those at the centres of `keep`; and how many went. Everything else stays byte for byte; the comment lines
 /// that end a removed channel stay too, as they are most likely about
 /// the next one.
-pub fn forget_made(text: &str) -> Result<(String, usize), String> {
+pub fn forget_made(text: &str, keep: &[Channel]) -> Result<(String, usize), String> {
     parse(text)?;
     let is_header = |line: &str| line.trim_start().starts_with('[');
     let is_channel = |line: &str| {
@@ -125,9 +126,11 @@ pub fn forget_made(text: &str) -> Result<(String, usize), String> {
                 .unwrap_or(rest.len());
         let table = &lines[start..end];
         let made = is_channel(table[0])
-            && parse(&table.concat())?
-                .first()
-                .is_some_and(|channel| channel.name.is_none() && !channel.hidden);
+            && parse(&table.concat())?.first().is_some_and(|channel| {
+                // A centre comes back from the file a hair off.
+                let stays = |kept: &Channel| (kept.center_hz - channel.center_hz).abs() < 1.0;
+                channel.name.is_none() && !channel.hidden && !keep.iter().any(stays)
+            });
         if made {
             removed += 1;
             let blank_or_comment = |line: &str| {
@@ -169,13 +172,13 @@ fn replace(path: &Path, text: &str) -> Result<(), String> {
 
 /// Removes from the file at `path` the channels the app made (see
 /// [`forget_made`]); no file is nothing to do.
-pub fn forget(path: &Path) -> Result<usize, String> {
+pub fn forget(path: &Path, keep: &[Channel]) -> Result<usize, String> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         Err(err) => return Err(err.to_string()),
     };
-    let (text, removed) = forget_made(&text)?;
+    let (text, removed) = forget_made(&text, keep)?;
     if removed > 0 {
         replace(path, &text)?;
     }
@@ -422,7 +425,7 @@ key = 1
 freq_mhz = 434.0
 width_khz = 10.0
 ";
-        let (left, removed) = forget_made(text).unwrap();
+        let (left, removed) = forget_made(text, &[]).unwrap();
         assert_eq!(removed, 3);
         assert_eq!(
             left,
@@ -445,28 +448,32 @@ key = 1
 "
         );
         // Nothing made: not a byte changes.
-        assert_eq!(forget_made(&left).unwrap(), (left.clone(), 0));
-        assert_eq!(forget_made(MINE).unwrap(), (MINE.to_string(), 0));
-        assert_eq!(forget_made("").unwrap(), (String::new(), 0));
+        assert_eq!(forget_made(&left, &[]).unwrap(), (left.clone(), 0));
+        assert_eq!(forget_made(MINE, &[]).unwrap(), (MINE.to_string(), 0));
+        assert_eq!(forget_made("", &[]).unwrap(), (String::new(), 0));
         // Only made ones: the explanation stays.
         let (made, _) = append(HEADER, &[made(433.5e6, 1e4), made(434.5e6, 1e4)]).unwrap();
-        assert_eq!(forget_made(&made).unwrap(), (HEADER.to_string(), 2));
-        assert!(forget_made("[[channel]\n").is_err());
+        assert_eq!(forget_made(&made, &[]).unwrap(), (HEADER.to_string(), 2));
+        // One of them has a signal on: it stays.
+        let (left, removed) = forget_made(&made, &[self::made(434.5e6, 1e4)]).unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(parse(&left).unwrap(), [self::made(434.5e6, 1e4)]);
+        assert!(forget_made("[[channel]\n", &[]).is_err());
     }
 
     #[test]
     fn the_file_forgets_what_was_made_and_can_be_added_to_again() {
         let dir = TempDir::new("forget");
         let path = dir.0.join("channels.toml");
-        assert_eq!(forget(&path).unwrap(), 0);
+        assert_eq!(forget(&path, &[]).unwrap(), 0);
         assert!(!path.exists());
         add(&path, &[made(433.5e6, 1e4), made(434.0e6, 1e4)]).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         let named = text.replacen("\n[[channel]]", "\n[[channel]]\nname = \"gate\"", 1);
         std::fs::write(&path, named).unwrap();
-        assert_eq!(forget(&path).unwrap(), 1);
+        assert_eq!(forget(&path, &[]).unwrap(), 1);
         assert_eq!(load(&path).unwrap().len(), 1);
-        assert_eq!(forget(&path).unwrap(), 0);
+        assert_eq!(forget(&path, &[]).unwrap(), 0);
         assert_eq!(add(&path, &[made(434.0e6, 1e4)]).unwrap(), 1);
         assert_eq!(load(&path).unwrap().len(), 2);
         assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 1);

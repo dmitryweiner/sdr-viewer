@@ -373,8 +373,15 @@ Known limits of the channel strip as built:
 - Channels are edited only in the file, and the file is read only at the
   start: nothing on the screen renames, hides or merges a channel. The
   one thing the screen does to the list is `X` twice: the channels
-  without a name or `hide` go, from the file too (asked for by the user
-  after a radio beside the receiver had left 98 of them).
+  without a name or `hide` and without a signal on at that moment go,
+  from the file too (asked for by the user after a radio beside the
+  receiver had left 98 of them; "on at that moment" rather than
+  "recently" — the rubbish of an overload is recent too).
+- `X` twice on the log (the user's wish, 2026-11-14) erases every ended
+  event, in the database too, and every session but the one going on.
+  An event that ended in the half second around the key press may stay
+  in the database and not on the screen, or the other way round. The
+  file does not shrink; SQLite reuses the pages.
 - The receiver's spike is told by its place and width alone (peak within
   rate/1000 of the centre, no wider than rate/400 — 2.4 and 6 kHz at
   2.4 MS/s; on the user's device it is 3.5 kHz wide, 15 dB over the

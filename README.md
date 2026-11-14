@@ -72,7 +72,7 @@ LPD 17       ····▂····▂····▂····▂····▂····▂�
 | `↑` `↓` `PgUp` `PgDn` `Home` `End` | select a channel (`Esc` lets go) |
 | `+` `-` | fewer, more seconds to a column: 1, 10, 60, 300 |
 | `Enter` | tune to the selected channel and show the spectrum |
-| `X` `X` | let go of the channels the app made (it asks once): from the strip and from the file; those with a name or `hide` stay |
+| `X` `X` | let go of the channels the app made (it asks once): from the strip and from the file; those with a name or `hide` stay, and so do those with a signal on at that moment |
 
 The last 4 hours of this run are remembered.
 
@@ -106,8 +106,8 @@ the app is not running, or your changes show only at the next start. To
 get rid of a row — the receiver's own spike at the centre frequency, say —
 hide the channel instead of removing it, or it is made again. `X` pressed
 twice on the strip removes the channels that have neither a name nor
-`hide` — after a transmitter beside the receiver has left dozens of them;
-give a name to what is to stay. A file that
+`hide` and no signal on at that moment — after a transmitter beside the
+receiver has left dozens of them; give a name to what is to stay. A file that
 does not read as TOML stops the app at the start with the line that is
 wrong; it is never overwritten.
 
@@ -136,6 +136,7 @@ began, how long it lasted, where, how wide, how strong:
 | `s` | sort by time, level, duration, frequency |
 | `Enter` | tune to the selected event and show the spectrum |
 | `r` | save the selected event's IQ samples |
+| `X` `X` | erase the log (it asks once): every ended event, those of earlier runs too, and with a database from the database as well; the events on now stay |
 
 The picture of the selected event is a small spectrogram made of its
 samples: time runs across, from 50 ms before the event to 50 ms after it

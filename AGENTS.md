@@ -216,7 +216,9 @@ a crate is added in the phase that needs it):
   Ended events are never dropped by `try_send`: the reader keeps them
   until the interface has room. The end of the stream waits for room too.
 - Only the writer thread touches the database after start-up; the reader
-  hands events over an unbounded channel and never waits for the disk. A
+  hands events over an unbounded channel and never waits for the disk.
+  Erasing goes the same way (`Kept::EraseAll` among the events), so the
+  store sees it in its place among them. A
   change of the tables raises `SCHEMA_VERSION` and migrates older files;
   a file from a newer build is refused, never rewritten.
 - The reader never waits for the disk when samples are saved, nor for
@@ -261,7 +263,11 @@ a crate is added in the phase that needs it):
   by the order updates arrive in: after a retune the old band's last
   events come after the new band's first frame.
 - The app removes text from the channels file in one case only: `X`
-  twice, and then only `[[channel]]` tables without `name` and `hide`.
+  twice, and then only `[[channel]]` tables without `name` and `hide`
+  whose channel has no signal on.
+- `X` twice is the only thing that destroys what is kept (channels of
+  the file, events of the database); it always asks once, and the answer
+  counts only on the screen that asked (`App::armed`).
 - The help shows the open screen's keys and the global ones: all keys at
   once do not fit 80×24 (a test renders every screen's help there).
 - `unsafe_code = "forbid"` across the workspace.

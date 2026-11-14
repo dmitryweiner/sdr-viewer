@@ -142,6 +142,9 @@ pub enum Command {
     WatchDensity(bool),
     /// Forget the density gathered so far.
     ResetDensity,
+    /// Forget the events that have ended: those not yet shown, and those
+    /// in the database.
+    EraseEvents,
 }
 
 pub struct App {
@@ -166,9 +169,9 @@ pub struct App {
     pub done: Option<String>,
     /// The event selected in the log and what there is of its picture.
     picture: Option<(Event, Picture)>,
-    /// `X` on the channel strip was pressed once: the next one lets the
-    /// made channels go.
-    forgetting: bool,
+    /// `X` was pressed once on this screen: the next one there does what
+    /// was asked about.
+    armed: Option<Screen>,
 }
 
 /// Cursor steps as shares of the width: fine, and coarse with Shift.
@@ -195,7 +198,7 @@ impl App {
             notice: None,
             done: None,
             picture: None,
-            forgetting: false,
+            armed: None,
         }
     }
 
@@ -275,13 +278,9 @@ impl App {
     fn handle_key(&mut self, key: KeyEvent) {
         self.notice = None;
         self.done = None;
-        let forgetting = std::mem::take(&mut self.forgetting);
-        if forgetting && self.screen == Screen::Channels && key.code == KeyCode::Char('X') {
-            let gone = self.channels.forget_made();
-            self.done = Some(format!(
-                "{} let go; new signals make new ones",
-                count_channels(gone)
-            ));
+        let armed = self.armed.take();
+        if armed == Some(self.screen) && key.code == KeyCode::Char('X') {
+            self.clean_slate();
             return;
         }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -331,11 +330,11 @@ impl App {
             KeyCode::Char('-') => self.channels.zoom_out(),
             // Not to be undone: asked twice.
             KeyCode::Char('X') => match self.channels.made() {
-                0 => self.notice = Some("no channels were made here: nothing to let go".into()),
+                0 => self.notice = Some("no silent channel made by the app: nothing to go".into()),
                 made => {
-                    self.forgetting = true;
+                    self.armed = Some(Screen::Channels);
                     self.notice = Some(format!(
-                        "X again lets go of the {} the app made; named and hidden stay",
+                        "X again lets go of the {} the app made; named, hidden and those on now stay",
                         count_channels(made)
                     ));
                 }
@@ -362,6 +361,20 @@ impl App {
             KeyCode::Char('-') => self.log.lower_filter(),
             KeyCode::Char('s') => self.log.next_sort(),
             KeyCode::Char('r') => self.save_selected(),
+            // Not to be undone: asked twice.
+            KeyCode::Char('X') => match self.log.ended() {
+                0 => self.notice = Some("the log has no ended events: nothing to erase".into()),
+                ended => {
+                    self.armed = Some(Screen::Log);
+                    let kept = match self.log.clock() {
+                        Some(_) => ", in the database too",
+                        None => "",
+                    };
+                    self.notice = Some(format!(
+                        "X again erases the {ended} ended events of the log{kept}; those on now stay"
+                    ));
+                }
+            },
             KeyCode::Enter => {
                 if let Some(center_hz) = self.log.selected_event().map(|event| event.center_hz()) {
                     self.tune(center_hz);
@@ -378,6 +391,25 @@ impl App {
             Some(row) if row.this_run => self.commands.push(Command::SaveIq(row.event.clone())),
             Some(_) => self.notice = Some("an earlier run's samples are gone".into()),
             None => self.notice = Some("select an event first: ↑ ↓".into()),
+        }
+    }
+
+    /// What the second `X` on a screen does.
+    fn clean_slate(&mut self) {
+        match self.screen {
+            Screen::Channels => {
+                let gone = self.channels.forget_made();
+                self.done = Some(format!(
+                    "{} let go; new signals make new ones",
+                    count_channels(gone)
+                ));
+            }
+            Screen::Log => {
+                let gone = self.log.clear();
+                self.commands.push(Command::EraseEvents);
+                self.done = Some(format!("{gone} events erased"));
+            }
+            _ => {}
         }
     }
 
@@ -602,7 +634,7 @@ mod tests {
             app.notice
                 .as_deref()
                 .unwrap()
-                .starts_with("no channels were made")
+                .starts_with("no silent channel made")
         );
         app.on_events(vec![
             event(100, 50, 100.0, 20.0),
@@ -623,7 +655,10 @@ mod tests {
         assert_eq!(app.channels.rows().len(), 2);
         press(&mut app, KeyCode::Char('X'));
         assert!(app.channels.rows().is_empty());
-        assert_eq!(app.channels.take_changes(), [Change::ForgetMade]);
+        assert_eq!(
+            app.channels.take_changes(),
+            [Change::ForgetMade { keep: Vec::new() }]
+        );
         assert_eq!(
             app.done.as_deref(),
             Some("2 channels let go; new signals make new ones")
@@ -639,6 +674,49 @@ mod tests {
         press(&mut app, KeyCode::Char('5'));
         press(&mut app, KeyCode::Char('X'));
         assert_eq!(app.channels.rows().len(), 1);
+    }
+
+    #[test]
+    fn x_twice_on_the_log_erases_what_has_ended() {
+        let mut app = app_on_the_log();
+        app.on_open_events(vec![crate::log::tests::event(900, 400, 50.0, 30.0)]);
+        press(&mut app, KeyCode::Down);
+        app.commands.clear();
+        press(&mut app, KeyCode::Char('X'));
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("X again erases the 3 ended events of the log; those on now stay")
+        );
+        assert!(app.commands.is_empty());
+        // The question asked on one screen is not answered on another.
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('5'));
+        press(&mut app, KeyCode::Char('X'));
+        assert_eq!(app.log.ended(), 3);
+        press(&mut app, KeyCode::Char('X'));
+        assert_eq!(app.log.ended(), 0);
+        assert_eq!(app.log.rows().len(), 1);
+        assert_eq!(app.commands, [Command::EraseEvents]);
+        assert_eq!(app.done.as_deref(), Some("3 events erased"));
+        // The picture of the row that was selected went with it.
+        assert!(app.picture().is_none());
+        press(&mut app, KeyCode::Char('X'));
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("the log has no ended events: nothing to erase")
+        );
+        // With a database it says so.
+        app.log.set_clock(crate::log::WallClock {
+            stream_start: crate::log::tests::noon(),
+            utc_offset_s: 0,
+        });
+        app.on_events(vec![crate::log::tests::event(100, 50, 100.0, 20.0)]);
+        press(&mut app, KeyCode::Char('X'));
+        let asked = app.notice.clone().unwrap();
+        assert!(
+            asked.contains("1 ended events of the log, in the database too;"),
+            "{asked}"
+        );
     }
 
     #[test]
