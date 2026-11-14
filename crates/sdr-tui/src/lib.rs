@@ -1,6 +1,8 @@
 //! Screens, keys and widgets of the console interface.
 
 pub mod app;
+pub mod channels;
+mod channels_ui;
 pub mod density;
 mod density_ui;
 pub mod fragment;

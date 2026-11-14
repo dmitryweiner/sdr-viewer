@@ -1,5 +1,6 @@
 //! SDR Viewer: watches the air and shows what a person would miss.
 
+mod channels;
 mod cli;
 mod fragment;
 mod jobs;
@@ -19,6 +20,7 @@ use std::time::{Duration, SystemTime};
 use clap::Parser;
 use ratatui::crossterm::event::{self, Event};
 use sdr_core::IqRing;
+use sdr_tui::channels::ChannelsView;
 use sdr_tui::log::WallClock;
 use sdr_tui::{App, ui};
 
@@ -37,8 +39,19 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // The user's channels, before anything is shown: a file that does
+    // not read is theirs to mend.
+    let channels_path = cli::channels_path(&args, |name| std::env::var(name).ok());
+    let listed = match channels_path.as_deref().map(channels::load) {
+        Some(Ok(listed)) => listed,
+        Some(Err(message)) => {
+            eprintln!("sdr-viewer: {message}");
+            return ExitCode::FAILURE;
+        }
+        None => Vec::new(),
+    };
     if let Some(size) = args.snapshot {
-        return match snapshot::run(source, size, args.secs, args.screen) {
+        return match snapshot::run(source, size, args.secs, args.screen, listed) {
             Ok(text) => {
                 print!("{text}");
                 ExitCode::SUCCESS
@@ -50,6 +63,7 @@ fn main() -> ExitCode {
         };
     }
     let mut app = App::new(source.info());
+    app.channels = ChannelsView::new(listed);
 
     let (updates_tx, updates_rx) = sync_channel(64);
     let (commands_tx, commands_rx) = channel();
@@ -76,6 +90,11 @@ fn main() -> ExitCode {
         }
         None => (None, None),
     };
+    // The channels made for new signals go to the file by a thread of
+    // their own.
+    let (new_channels, saver) = channels_path
+        .map(|path| channels::save(path, updates_tx.clone()))
+        .unzip();
     // Samples are saved and pictured by a thread of their own; only a
     // receiver's stream runs by the wall clock.
     let (jobs_tx, jobs_rx) = channel();
@@ -108,15 +127,15 @@ fn main() -> ExitCode {
             for update in updates_rx.try_iter() {
                 match update {
                     Update::Status(status) => app.status = status,
-                    Update::Frame(frame, levels) => app.spectrum.on_frame(frame, levels),
+                    Update::Frame(frame, levels) => app.on_frame(frame, levels),
                     // Events come many times a second; they are drawn
                     // with the next frame or status, soon enough.
                     Update::Events(events) => {
-                        app.log.on_events(events);
+                        app.on_events(events);
                         continue;
                     }
                     Update::OpenEvents(open) => {
-                        app.log.set_open(open);
+                        app.on_open_events(open);
                         continue;
                     }
                     Update::Source(info) => app.source = info,
@@ -126,6 +145,10 @@ fn main() -> ExitCode {
                     Update::Density(map) => app.on_density(map),
                 }
                 dirty = true;
+            }
+            let made = app.channels.take_unsaved();
+            if let (Some(new_channels), false) = (&new_channels, made.is_empty()) {
+                let _ = new_channels.send(made);
             }
             if dirty {
                 terminal.draw(|frame| ui::draw(frame, &app))?;
@@ -159,6 +182,11 @@ fn main() -> ExitCode {
     }
     // And a recording asked for a moment ago be written to its end.
     let _ = worker.join();
+    // And the channels made a moment ago be added to their file.
+    drop(new_channels);
+    if let Some(saver) = saver {
+        let _ = saver.join();
+    }
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {

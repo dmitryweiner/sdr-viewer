@@ -18,12 +18,12 @@ Phases of the plan (its section 14 has the detail):
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
 | 3 Detector and log | done, and found working on the air on the device by the user (2026-11-13): the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples |
-| 4 Accumulators | begun: the spectral density (screen 3) is built; on the device it was measured and looked at as a snapshot of the recording, not yet seen by the user or on the air. The channel strip and periodicity are not started |
+| 4 Accumulators | begun: the spectral density (screen 3) and the channel strip (screen 2) are built. Periodicity is not started |
 | 5–8 | not started |
 
-Phase 4's order (the plan's section 12): density, then the channel strip
-(5.2), then periodicity (5.4), each its own pull request. Nothing of the
-last two is agreed in detail.
+Phase 4's order (the plan's section 12): density, the channel strip, then
+periodicity (5.4), each its own pull request. Nothing of periodicity is
+agreed in detail.
 
 ## Commands
 
@@ -43,7 +43,7 @@ last two is agreed in detail.
   — no terminal: analyses the start of the stream (unpaced for files and
   the generator), prints the spectrum screen as text, the max-hold
   peaks and the detector's events. The way to look at a recording, at the air, or at the picture from
-  a script. Below 80x24 it prints only "too small". `--screen 3` prints
+  a script. Below 80x24 it prints only "too small". `--screen 2` prints the channel strip, `--screen 3` prints
   the density screen instead.
 - `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
   of the generator and of the IQ ring per sample.
@@ -155,11 +155,14 @@ a crate is added in the phase that needs it):
   strong signal masked; `Levels`: its floor per bin and its threshold,
   for the screen), `density` (`Density`: how often each bin was at each
   level, forgetting with a half-life; `DensityMap`: that as plain numbers,
-  for the screen).
+  for the screen), `channel` (`Channel`; `Channels`: which channel an
+  event is in, and making one where it is in none).
 - `sdr-store` — `Store`: the SQLite event database (`rusqlite`, SQLite
   compiled in), `sessions` and `events`, the layout's version in
   `user_version`; `sigmf`: a recording as a `.sigmf-data` + `.sigmf-meta`
-  pair (the JSON is written by hand).
+  pair (the JSON is written by hand); `channels`: the channels file
+  (TOML read with the `toml` crate, additions written by hand to the end
+  of the text as it is).
 - `sdr-rtl` — `RtlSource`: the RTL-SDR through `rtl-sdr-rs` (pure Rust on
   `nusb`), queued transfers, gain along the tuner's own steps, retuning.
 - `sdr-tui` — `app` (state, keys and the `Command`s they ask of the
@@ -170,7 +173,9 @@ a crate is added in the phase that needs it):
   list while a row is selected), `log_ui`, `fragment` (`Fragment`: the
   spectra around one event, and their reduction to pixels; `Picture`:
   waiting, gone or ready), `density` (a `DensityMap` reduced to the
-  pixels of a plot, a share of time as a brightness), `density_ui`.
+  pixels of a plot, a share of time as a brightness), `density_ui`, `channels` (`ChannelsView`: the channels, each one's
+  busy milliseconds per second of the last 4 h, the selection, the time
+  scale), `channels_ui`.
   Snapshot tests in
   `src/snapshots/`.
 - `sdr-viewer` — the binary: `cli` (arguments → source), `pipeline`
@@ -184,7 +189,8 @@ a crate is added in the phase that needs it):
   only the last), `save` (a `Cut` to a SigMF pair), `fragment` (a `Cut`
   to a `Fragment`), `keep` (open the database, read the
   week's history, start the writer thread, which first deletes what is
-  older), `writer` (that thread's loop: one write a second),
+  older), `writer` (the loop of a thread that writes: one write a second),
+  `channels` (read the channels file; the thread that adds to it),
   `snapshot` (`--snapshot`), `main` (terminal loop, redraws only when
   something changed).
 
@@ -237,6 +243,16 @@ a crate is added in the phase that needs it):
   like them.
 - The density screen has no view of its own: band, zoom, cursor, scale
   and pause are the spectrum's (`SpectrumView`).
+- The channels file is the user's: the app reads it at the start and
+  only appends (`sdr_store::channels::add` re-reads the disk, keeps the
+  text byte for byte, skips what is already covered). A file that does
+  not parse is refused at the start and never written.
+- Channels and their occupancy live in the interface (`ChannelsView`),
+  fed by the same events as the log; the main loop hands newly made
+  channels to the saver thread. Channel numbers never change in a run
+  (the list only grows), so the selection is a number.
+- The help shows the open screen's keys and the global ones: all keys at
+  once do not fit 80×24 (a test renders every screen's help there).
 - `unsafe_code = "forbid"` across the workspace.
 - The numbers of the reference recording's tests (`pipeline.rs`) change
   only on purpose too: look at what the detector now finds in

@@ -14,30 +14,56 @@ use crate::app::{App, Screen, SourceState};
 pub const MIN_WIDTH: u16 = 80;
 pub const MIN_HEIGHT: u16 = 24;
 
-const KEYS: [(&str, &str); 19] = [
+/// Keys that work on every screen.
+const KEYS: [(&str, &str); 5] = [
     ("?", "this help"),
     ("1–8", "switch screens"),
     ("Tab, Shift+Tab", "next, previous screen"),
-    ("←, →", "spectrum: move the cursor (Shift: faster)"),
-    ("Enter", "spectrum: tune to the cursor"),
-    ("f", "spectrum: type a frequency"),
-    ("[, ]", "spectrum: tune down, up by half the view"),
-    ("+, -", "spectrum: zoom in, out"),
-    ("g, G, a", "spectrum: gain up, down, automatic"),
-    ("Space", "spectrum: pause"),
-    ("m", "spectrum: reset max hold"),
-    (
-        "m",
-        "density: start afresh (the other keys as on the spectrum)",
-    ),
-    ("↑, ↓", "log: select an event (PgUp, PgDn, Home, End)"),
-    ("+, -", "log: raise, lower the level that hides weak events"),
-    ("s", "log: sort by time, level, duration, frequency"),
-    ("Enter", "log: tune to the selected event"),
-    ("r", "log: save the selected event's IQ samples"),
     ("Esc", "close help, put the cursor or selection away, quit"),
     ("q", "quit"),
 ];
+
+/// The spectrum's keys but the last; the density has them too.
+const BAND_KEYS: [(&str, &str); 7] = [
+    ("←, →", "move the cursor (Shift: faster)"),
+    ("Enter", "tune to the cursor"),
+    ("f", "type a frequency"),
+    ("[, ]", "tune down, up by half the view"),
+    ("+, -", "zoom in, out"),
+    ("g, G, a", "gain up, down, automatic"),
+    ("Space", "pause"),
+];
+
+const CHANNEL_KEYS: [(&str, &str); 3] = [
+    ("↑, ↓", "select a channel (PgUp, PgDn, Home, End)"),
+    ("+, -", "fewer, more seconds to a column"),
+    ("Enter", "tune to the selected channel"),
+];
+
+const LOG_KEYS: [(&str, &str); 5] = [
+    ("↑, ↓", "select an event (PgUp, PgDn, Home, End)"),
+    ("+, -", "raise, lower the level that hides weak events"),
+    ("s", "sort by time, level, duration, frequency"),
+    ("Enter", "tune to the selected event"),
+    ("r", "save the selected event's IQ samples"),
+];
+
+/// The keys of the open screen, then those of every screen: all of them
+/// at once no longer fit the smallest terminal.
+fn keys(screen: Screen) -> Vec<(&'static str, &'static str)> {
+    let own: &[(&str, &str)] = match screen {
+        Screen::Spectrum | Screen::Density => &BAND_KEYS,
+        Screen::Channels => &CHANNEL_KEYS,
+        Screen::Log => &LOG_KEYS,
+        _ => &[],
+    };
+    let m = match screen {
+        Screen::Spectrum => Some(("m", "reset max hold")),
+        Screen::Density => Some(("m", "start the picture afresh")),
+        _ => None,
+    };
+    own.iter().copied().chain(m).chain(KEYS).collect()
+}
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
@@ -56,6 +82,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::Spectrum => {
             crate::spectrum_ui::draw(frame, &app.spectrum, app.input.as_deref(), body);
         }
+        Screen::Channels => crate::channels_ui::draw(frame, &app.channels, &app.source, body),
         Screen::Density => {
             let (view, map) = (&app.spectrum, app.density.as_ref());
             crate::density_ui::draw(frame, view, map, app.input.as_deref(), body);
@@ -65,7 +92,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     draw_status(frame, app, status);
     if app.help {
-        draw_help(frame, body);
+        draw_help(frame, app.screen, body);
     }
 }
 
@@ -173,13 +200,14 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(right, right_area);
 }
 
-fn draw_help(frame: &mut Frame, body: Rect) {
-    let key_width = KEYS
+fn draw_help(frame: &mut Frame, screen: Screen, body: Rect) {
+    let keys = keys(screen);
+    let key_width = keys
         .iter()
         .map(|(key, _)| key.chars().count())
         .max()
         .unwrap_or(0);
-    let lines: Vec<Line> = KEYS
+    let lines: Vec<Line> = keys
         .iter()
         .map(|(key, what)| {
             Line::from(vec![
@@ -198,7 +226,7 @@ fn draw_help(frame: &mut Frame, body: Rect) {
         .areas(area);
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(lines).block(Block::bordered().title(" Keys ")),
+        Paragraph::new(lines).block(Block::bordered().title(format!(" Keys: {} ", screen.title()))),
         area,
     );
 }
@@ -332,6 +360,166 @@ mod tests {
         app.spectrum.zoom_in();
         app.input = Some("433.5M".into());
         insta::assert_snapshot!(render(&app, 80, 24).backend());
+    }
+
+    /// A minute of a band: a named channel with a burst every 5 s, one
+    /// made for a carrier that is still on, one made for a signal that
+    /// stopped half a minute ago, and one of the user's far from here.
+    fn app_on_the_channels() -> App {
+        use crate::channels::ChannelsView;
+        use crate::log::tests::event;
+        use sdr_detect::Channel;
+        use std::time::Duration;
+
+        let mut app = app();
+        app.screen = Screen::Channels;
+        let mine = |name: &str, center_hz: f64| Channel {
+            name: Some(name.into()),
+            center_hz,
+            width_hz: 25e3,
+            hidden: false,
+        };
+        app.channels = ChannelsView::new(vec![
+            mine("LPD 17", 433.475e6),
+            mine("a name too long for its column", 144.8e6),
+            Channel {
+                hidden: true,
+                ..mine("spike", 433.92e6)
+            },
+        ]);
+        let mut events: Vec<_> = (0..12)
+            .map(|i| event(i * 5000 + 200, 300, 475.0, 20.0))
+            .collect();
+        events.push(event(10_000, 20_000, 700.0, 30.0));
+        events.push(event(0, 60_000, 920.0, 12.0));
+        app.on_events(events);
+        app.on_frame(
+            sdr_core::SpectrumFrame {
+                time: Duration::from_secs(60),
+                center_hz: 433.92e6,
+                sample_rate: 2_400_000,
+                power_db: vec![-70.0; 16],
+            },
+            sdr_detect::Levels::default(),
+        );
+        app.on_open_events(vec![event(48_500, 11_500, 1100.0, 25.0)]);
+        app
+    }
+
+    #[test]
+    fn the_help_of_every_screen_fits_the_smallest_terminal() {
+        for screen in Screen::ALL {
+            let mut app = app();
+            app.screen = screen;
+            app.help = true;
+            let text = render_text(&app, MIN_WIDTH, MIN_HEIGHT);
+            assert!(
+                text.contains(&format!("┌ Keys: {} ", screen.title())),
+                "{text}"
+            );
+            assert!(text.contains("│ q ") && text.contains("┘"), "{text}");
+            let has = |what: &str| text.contains(what);
+            assert_eq!(
+                has("zoom in, out"),
+                screen == Screen::Spectrum || screen == Screen::Density
+            );
+            assert_eq!(has("reset max hold"), screen == Screen::Spectrum);
+            assert_eq!(has("start the picture afresh"), screen == Screen::Density);
+            assert_eq!(has("seconds to a column"), screen == Screen::Channels);
+            assert_eq!(has("sort by time"), screen == Screen::Log);
+        }
+    }
+
+    #[test]
+    fn the_channel_strip_before_any_signal() {
+        let mut app = app();
+        app.screen = Screen::Channels;
+        let text = render_text(&app, 80, 24);
+        assert!(text.contains(" 0 channels · 1 s a column"), "{text}");
+        assert!(
+            text.contains("No channels yet: one is made where a signal is found."),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_channel_strip_at_the_minimum_size() {
+        insta::assert_snapshot!(render(&app_on_the_channels(), 80, 24).backend());
+    }
+
+    #[test]
+    fn the_channel_strip_with_a_selection_and_ten_seconds_to_a_column() {
+        let mut app = app_on_the_channels();
+        app.channels.zoom_out();
+        app.channels.move_selection(2);
+        app.channels.move_selection(1);
+        let terminal = render(&app, 160, 45);
+        insta::assert_snapshot!(terminal.backend());
+        let buffer = terminal.backend().buffer();
+        // The second row is selected; the fourth is on now; the first is
+        // not in the received band.
+        let style = |y: u16| buffer[(0, y)].style();
+        assert!(style(3).add_modifier.contains(Modifier::REVERSED));
+        assert!(!style(4).add_modifier.contains(Modifier::REVERSED));
+        assert!(style(5).add_modifier.contains(Modifier::BOLD));
+        assert_eq!(style(2).fg, Some(Color::DarkGray));
+    }
+
+    #[test]
+    fn rows_are_aligned_in_time_and_tell_share_and_silence() {
+        let text = render_text(&app_on_the_channels(), 80, 24);
+        let rows: Vec<&str> = text.lines().collect();
+        assert_eq!(rows[1], " 4 channels · 1 s a column · the last 55 s");
+        // 55 columns: seconds 5 to 59.
+        // A 0.3 s burst every 5 s, the last at 55.2 s.
+        assert!(
+            rows[3].starts_with("LPD 17       ▂····▂····▂····"),
+            "{text}"
+        );
+        assert!(rows[3].ends_with("▂····  6.0%   4 s"), "{text}");
+        // On from 10 s to 30 s.
+        assert!(
+            rows[4].starts_with("433.700 MHz  ·····████████████████████····"),
+            "{text}"
+        );
+        assert!(rows[4].ends_with("  36%  30 s"), "{text}");
+        // On since 48.5 s and still.
+        assert!(rows[5].ends_with("·▄███████████   21%   now"), "{text}");
+        // Never heard here.
+        assert!(rows[2].starts_with("a name too l ·····"), "{text}");
+        assert!(rows[2].ends_with("····    0%     —"), "{text}");
+        assert!(
+            rows[22].contains("−55 s") && rows[22].ends_with("now"),
+            "{text}"
+        );
+        // The hidden channel took its event and has no row.
+        assert!(
+            !text.contains("spike") && !text.contains("433.920 MHz  "),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_long_list_scrolls_to_keep_the_selection_in_view() {
+        use crate::log::tests::event;
+        let mut app = app();
+        app.screen = Screen::Channels;
+        app.on_events(
+            (0..40)
+                .map(|i| event(0, 40, f64::from(i) * 25.0, 20.0))
+                .collect(),
+        );
+        let shown = |app: &App, khz: u32| {
+            let label = format!("{:.3} MHz  ", 433.0 + f64::from(khz) / 1000.0);
+            render_text(app, 80, 24).contains(&label)
+        };
+        // 20 rows of the 40.
+        assert!(shown(&app, 0) && shown(&app, 475) && !shown(&app, 500));
+        app.channels.move_selection(1);
+        app.channels.move_selection(30);
+        assert!(!shown(&app, 475) && shown(&app, 500) && shown(&app, 750));
+        app.channels.move_selection(isize::MAX);
+        assert!(shown(&app, 975) && shown(&app, 500) && !shown(&app, 475));
     }
 
     fn app_on_the_density() -> App {

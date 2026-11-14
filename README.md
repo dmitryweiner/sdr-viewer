@@ -6,7 +6,7 @@ RTL-SDR and shows what a person would otherwise miss: when, where and how
 often something was transmitted.
 
 **Status: phase 3 of 8 done, phase 4 begun** — the spectrum and waterfall
-screen, the signal log and the spectral density work on the built-in
+screen, the channel strip, the spectral density and the signal log work on the built-in
 signal generator, on IQ recordings and on an RTL-SDR: tuning, gain and
 zoom from the keyboard, detected events kept in a database, their pictures
 and their samples. The other screens are still to come. See
@@ -52,6 +52,54 @@ arrive at. Beside it, only when there is something to tell: `clip 2.4%` —
 the share of samples at full scale, the receiver is overloaded (yellow
 from 0.1%, red from 1%: lower the gain with `G`); `lost 0.05 s` — samples
 the receiver delivered and the app did not take in time, since the start.
+
+The channel strip (`2`) answers "what happened while I wasn't looking?":
+one row per channel, the lowest frequency at the top, and all rows on one
+time axis with now at the right. A column is a second; the bar in it is
+the share of that second the channel was busy, and the shortest burst
+still leaves the lowest bar. On the right: the share of the shown time the
+channel was busy, and how long it has been quiet (`now` while a signal is
+on). A channel outside the band being received is dimmed.
+
+```
+LPD 17       ····▂····▂····▂····▂····▂····▂····▂····  6.0%   4 s
+433.700 MHz  ·····████████████████████··············   36%  30 s
+434.100 MHz  ···························▄███████████   21%   now
+```
+
+| Key | What |
+|---|---|
+| `↑` `↓` `PgUp` `PgDn` `Home` `End` | select a channel (`Esc` lets go) |
+| `+` `-` | fewer, more seconds to a column: 1, 10, 60, 300 |
+| `Enter` | tune to the selected channel and show the spectrum |
+
+The last 4 hours of this run are remembered.
+
+### The channels file
+
+A channel is made by itself where a signal is found that is in none: for
+an event at least 10 dB above the noise, as wide as the event and at least
+10 kHz (at most 500 are made in a run). With `--rtlsdr` the channels are
+kept in `sdr-viewer/channels.toml` under `$XDG_CONFIG_HOME` or `~/.config`
+(`--channels FILE` elsewhere — and for a recording or the generator, which
+keep none otherwise; `--no-channels` reads and writes no file). The file
+is yours to edit:
+
+```toml
+[[channel]]
+name = "LPD 17"      # optional; without it the row shows the frequency
+freq_mhz = 433.475   # the centre
+width_khz = 12.5
+hide = true          # optional: no row, and no new channel made there
+```
+
+The app reads the file when it starts and only ever adds new channels to
+its end: your names, order and comments stay as they are. Edit it while
+the app is not running, or your changes show only at the next start. To
+get rid of a row — the receiver's own spike at the centre frequency, say —
+hide the channel instead of removing it, or it is made again. A file that
+does not read as TOML stops the app at the start with the line that is
+wrong; it is never overwritten.
 
 The spectral density (`3`) answers "which frequencies are busy at all?":
 frequency runs across and level up, as on the spectrum, and a point is the
@@ -143,7 +191,9 @@ detected events of the first seconds of a recording:
 cargo run --release -- capture.cu8 --rate 2.4M --center 433.92M --snapshot 160x45 --secs 10
 ```
 
-`--screen 3` prints the density screen instead of the spectrum.
+`--screen 2` prints the channel strip instead of the spectrum, `--screen 3`
+the density; `--channels FILE` gives a snapshot its channels (it adds
+none to the file).
 
 On the uConsole: take the static `aarch64` binary from the CI artifact
 `sdr-viewer-aarch64`. The first run on a device is the

@@ -1,21 +1,20 @@
-//! The thread that puts events into the database, so that neither
-//! reception nor the interface waits for the disk.
+//! The loop of a thread that writes to the disk — events into the
+//! database, new channels into their file — so that neither reception
+//! nor the interface waits for it.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use sdr_detect::Event;
-
-/// Events are gathered for this long and written together: one flush to
-/// the SD card a second instead of one per event.
+/// What comes is gathered for this long and written together: one flush
+/// to the SD card a second instead of one per event.
 pub const WRITE_EVERY: Duration = Duration::from_secs(1);
 
 /// Writes what comes over `events` with `write`, a batch at most every
 /// `WRITE_EVERY`, until the sender is gone; what is waiting then is still
 /// written. Stops at the first failure and returns its message.
-pub fn run(
-    events: Receiver<Vec<Event>>,
-    mut write: impl FnMut(&[Event]) -> Result<(), String>,
+pub fn run<T>(
+    events: Receiver<Vec<T>>,
+    mut write: impl FnMut(&[T]) -> Result<(), String>,
 ) -> Result<(), String> {
     while let Ok(mut batch) = events.recv() {
         let deadline = Instant::now() + WRITE_EVERY;
@@ -39,6 +38,7 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sdr_detect::Event;
     use std::sync::mpsc::channel;
 
     fn event(start_ms: u64) -> Event {
@@ -75,7 +75,7 @@ mod tests {
         tx.send(Vec::new()).unwrap();
         drop(tx);
         let mut writes = 0;
-        let result = run(rx, |_| {
+        let result = run(rx, |_: &[Event]| {
             writes += 1;
             Ok(())
         });
