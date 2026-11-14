@@ -102,8 +102,9 @@ touching USB.
   keys). The user has run phase 3 on the air there and found it working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-14 `sdr-viewer` there is PR #23's build (the channel
-  strip); the one before, PR #22's, is `sdr-viewer.before-pr23`. With the
+  Since 2026-11-14 `sdr-viewer` there is the build of the `channels`
+  branch with PR #24 merged in (the channel strip, the detector's fix);
+  the one before is `sdr-viewer.before-fixes`. With the
   receiver it makes `~/.config/sdr-viewer/channels.toml`: the user's, like
   the database — our checks use `--channels test.toml` and remove it. The user
   allows replacing `sdr-viewer` there with a newer build without asking.
@@ -291,6 +292,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | Counting clipped samples on the CM4 (the recording, 15 s, before and after) | within a point: spectrum 34 → 35% of a core, log 22 → 23% |
 | The density screen on the Mac (generator, 160×45, 10 s, `smoke.py --keys 1` / `--keys 3`, one sitting) | spectrum 16%, density **16%** of one core (3.1 MB to the terminal against 8.0); at 80×24 9% |
 | The channel strip on the CM4 (the recording looped, 160×45, 15 s, PR #22's build and PR #23's side by side; 81 channels) | the strip (`--keys 2`) **22–23%** of a core, 16 kB/s to the terminal; counting channels adds nothing to the other screens: spectrum 37 → 35%, log 24 → 24% |
+| The detector's fix of PR #24 on the CM4 (the recording looped, 160×45, 15 s, before and after) | nothing measurable: spectrum 38 → 36 and 35%, channel strip 22 → 19% |
 | The density on the CM4 (the recording looped, 160×45, 15 s, main's build and PR #22's side by side, twice) | gathering it costs nothing measurable: spectrum (`--keys 1`) 37 and 34% before, 35 and 36% with it. The density screen (`--keys 3`) **33 and 34%** of a core, 0.6 MB/s to the terminal against the spectrum's 0.9 |
 | Static aarch64 binary from CI | 5.1 MB (4.8 before the `toml` crate, 2.4 before SQLite) |
 
