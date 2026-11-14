@@ -1,5 +1,5 @@
-//! Drawing the interface. Phase 1 has the frame of it: tabs, a placeholder
-//! per screen, the status line and the help.
+//! Drawing the interface: the tabs, the screen that is open (a placeholder
+//! for those not built yet), the status line and the help.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};

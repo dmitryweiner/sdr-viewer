@@ -96,20 +96,19 @@ touching USB.
   no data and reset the hub.
 - A new binary: download the PR's `sdr-viewer-aarch64` artifact
   (`gh run download RUN -n sdr-viewer-aarch64`) and `scp` it to
-  `~/sdr-viewer-check/sdr-viewer`. What lies there now is PR #18's build
-  (the threshold line on the spectrum, the IQ ring, the picture and `r` in
-  the log, overload and lost samples in the status line), with PR #15's
-  `smoke.py` (arrow keys). The user has run it on
-  the air there and found it working. Saving IQ was tried there on the recording with
+  `~/sdr-viewer-check/sdr-viewer`. What lies there now is the build of
+  `main` after PR #20 (all of phase 3), with PR #15's `smoke.py` (arrow
+  keys). The user has run phase 3 on the air there and found it working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-- The user has received from the RTL-SDR there since the database was
-  added, so `~/.local/share/sdr-viewer/events.db` should hold real
-  events now (not looked at: the device was off). Our own checks with a
-  database used `--db test.db` in `~/sdr-viewer-check/` and removed it.
-- Whether the installed `/usr/local/sbin/sdr-hub-speed` is the one that
-  powers the SDR (PR #19) is not known: compare it with
-  `scripts/hub-speed.sh` before relying on it, and ask before installing.
+- `~/.local/share/sdr-viewer/events.db` exists there (1.1 MB on
+  2026-11-14): the user's own receptions. It is theirs — read it, do not
+  remove it; the device has no `sqlite3`. Our own checks with a database
+  use `--db test.db` in `~/sdr-viewer-check/` and remove it.
+- `/usr/local/sbin/sdr-hub-speed` is `scripts/hub-speed.sh` as of PR #19
+  (installed 2026-11-14 at the user's word; the one before is
+  `~/sdr-viewer-check/sdr-hub-speed.before-pr19`). Tried from a cold
+  start: pin low, no receiver on the bus → 3 s received, hub back at 12M.
 - **SDR and LoRa are never used at the same time** (the user's decision):
   GPIO 7 is the SDR's power and SPI4's clock, and that is fine.
 - `~/sdr-viewer-check/capture-433.cu8` — 10 s at 433.92 MHz, 2.4 MS/s,
@@ -250,7 +249,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | The IQ ring buffer (30 s; with and without `--iq-buffer 0`) | `bench_ring` on the Mac: 0.3 ns/sample; 153 MB resident after 40 s, as computed (144 MB + the app). **On the CM4**, the recording, 15 s: spectrum (`--keys 1`) 32 → 34% of a core, log (`--keys 5`) 21 → 22%. With a bounds check and a wrap test per sample it was 4 points, not 1–2 |
 | The picture of the selected event on the CM4 (the recording, 15 s, `smoke.py --keys 5` plus down arrows) | the log alone **22%** of a core; a row held with its picture **19%** (the list stands still); a new picture every 0.36 s (40 downs) **26%** |
 | Counting clipped samples on the CM4 (the recording, 15 s, before and after) | within a point: spectrum 34 → 35% of a core, log 22 → 23% |
-| Static aarch64 binary from CI | 4.6 MB with SQLite compiled in (2.4 before) |
+| Static aarch64 binary from CI | 4.8 MB (4.6 when SQLite was compiled in, 2.4 before that) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:
 measure on the device, the Mac's numbers do not scale.

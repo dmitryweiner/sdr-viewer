@@ -1,5 +1,6 @@
-//! The event database: a SQLite file with the sessions of reception and
-//! the events the detector found in them.
+//! What is kept on disk. Here the event database: a SQLite file with the
+//! sessions of reception and the events the detector found in them.
+//! Recordings of samples are in [`sigmf`].
 
 pub mod sigmf;
 

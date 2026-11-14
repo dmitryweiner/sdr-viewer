@@ -24,8 +24,10 @@ Main principle: every screen answers one specific question.
 
 ## 2. Hardware and its limits
 
-The facts below were collected from the ClockworkPi forum and must be
-checked on the real device (phase 0).
+The facts below were collected from the ClockworkPi forum before the
+device was at hand. Phase 0 checked them: `docs/hardware.md` says what is
+really there, and holds where the two differ (the tuner is an R820T; the
+SPI device is `spidev4.0`).
 
 | Module | What it is | How it is connected | Note |
 |---|---|---|---|
@@ -40,6 +42,9 @@ Three consequences that shape the architecture:
    through GPIO (GPS — 27, LoRa — 16, SDR — 7, internal USB — 23; the stock
    tool is `hackergadgets/aiov2_ctl`). The app must check this at start-up
    and explain clearly what to do, and ideally switch them on itself.
+   *As built:* on the user's device `sdr-hub-speed high` switches the SDR
+   on before reception; the app itself only hints at power when it finds
+   no receiver.
 2. **The RTL-SDR sees only ~2.4 MHz at once.** "I was looking at the wrong
    frequency" is solved not by a wide view but by a sweep — retuning across
    a range. The price: during a sweep, short bursts elsewhere are lost.
@@ -57,14 +62,14 @@ cells; the interface is designed for that size, with 80×24 as the minimum.
 |---|---|---|
 | TUI | `ratatui` + `crossterm` | — |
 | RTL-SDR access | `rtl-sdr-rs` (pure Rust, no C dependencies) — confirmed on the device with the R820T | FFI to `librtlsdr`; an `rtl_tcp` client |
-| FFT | `rustfft` / `realfft` | — |
-| Threads and channels | `std::thread` + `crossbeam-channel` | — |
+| FFT | `rustfft` | — |
+| Threads and channels | `std::thread` + `std::sync::mpsc` (as built; `crossbeam-channel` if a `select` is ever needed) | — |
 | Meshtastic | `meshtasticd` TCP API (port 4403) + `prost` | Driving the SX1262 directly (see 7.2) |
 | GPS | `gpsd` (JSON over TCP) | Reading NMEA from the UART directly |
 | Storage | SQLite (`rusqlite`, bundled) | — |
-| Configuration | TOML (`serde`) | — |
+| Configuration | TOML (`serde`) — not needed yet, nothing is configured outside the command line | — |
 | IQ recording | SigMF (`.sigmf-data` + `.sigmf-meta`) | — |
-| Logs | `tracing` to a file (stdout belongs to the UI) | — |
+| Logs | `tracing` to a file (stdout belongs to the UI) — not built yet | — |
 
 No async runtime (tokio): there are few threads, and DSP is computation,
 not I/O.
@@ -349,7 +354,7 @@ They do not block the start; until answered, the default holds.
 
 ## 14. Progress
 
-As of 2026-11-12.
+As of 2026-11-14.
 
 | # | Phase | State |
 |---|---|---|
@@ -405,8 +410,9 @@ Known limits of what phase 3 has built so far:
 - On the air the phase was checked by the user's eye (2026-11-13, "works
   well"); nothing was measured there. The numbers of this phase — CPU,
   what the ring and the pictures cost — are from the recording played on
-  the device, and whether `lost` ever leaves zero with the receiver is
-  not known.
+  the device. Whether `lost` ever leaves zero with the receiver is not
+  known: the one counted reception (3 s at 433.92 MHz, 2026-11-14) lost
+  nothing.
 - `lost` counts what the driver dropped on its way to the app. Transfers
   the kernel or the USB bus lost before the driver are not counted by
   anyone; the measured rate (`rx`) falling below the nominal one is the

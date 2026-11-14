@@ -72,7 +72,12 @@ Nothing sets them at boot: after the reboot of 2026-11-13 GPIO 16, 23 and
 27 were inputs pulled low, GPIO 7 was back at its boot function
 (`SPI4_SCLK`, low), `0bda:2838` was not in `lsusb`, and the app said
 "No device found at index 0". `sdr-hub-speed high` now drives GPIO 7 high
-itself and waits for the receiver to appear. Why GPIO 23 is an input while
+itself and waits for the receiver to appear — installed and tried on
+2026-11-14: with the pin low and no receiver in `lsusb`,
+`sdr-viewer-rx.sh --snapshot 100x30 --secs 3` received its 3 s (29 frames,
+nothing lost) and the hub was back at 12M; the pin stays high afterwards,
+and the receiver stays in `lsusb` at 12M. (In `dmesg` the receiver shows
+up once at every boot, 3.6 s in, and is gone by the time anyone looks.) Why GPIO 23 is an input while
 USB works is still not known.
 
 GPIO 7 doubles as the clock of SPI4, the bus of `/dev/spidev4.0`: if LoRa
@@ -138,7 +143,9 @@ and harmless: the data flows and the tuning is right (above). Our app plays that
 
 What is installed on the device for this (2026-11-12):
 
-- `/usr/local/sbin/sdr-hub-speed` — `scripts/hub-speed.sh`.
+- `/usr/local/sbin/sdr-hub-speed` — `scripts/hub-speed.sh`; since
+  2026-11-14 the version that powers the SDR. The one before it is kept
+  as `~/sdr-viewer-check/sdr-hub-speed.before-pr19`.
 - One condition added to the user's rule
   `/etc/udev/rules.d/99-dwc2-force-fs.rules`:
   `TEST!="/run/sdr-viewer-high-speed"`. While that flag file exists the
