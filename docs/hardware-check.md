@@ -82,13 +82,17 @@ rtl_sdr -f 433.92M -s 2.4M -n 24000000 capture-433.cu8
 ## 6. LoRa and Meshtastic
 
 ```sh
-ls /dev/spidev*
+ls /dev/spidev*                  # the HackerGadgets board's radio is spidev1.0
+pinctrl get 16                   # its power
 systemctl status meshtasticd --no-pager
 ss -ltn | grep 4403              # the TCP API the app will use
 ```
 
-Note the LoRa region and frequency `meshtasticd` is set to (open question 1
-in the plan).
+Note the LoRa region and frequency `meshtasticd` is set to. Without
+`spidev1.0` or `meshtasticd`, set them up as `hardware.md` section 6
+says (the radio's file for `/etc/meshtasticd/config.d/`, and
+`scripts/lora.sh on`, which powers the radio, loads SPI1 and starts the
+daemon after the power).
 
 ## 7. GPS and clock
 

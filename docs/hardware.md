@@ -7,11 +7,13 @@ was installed or changed on the device apart from `~/sdr-viewer-check/`
 
 Status: done. The RTL-SDR works only while the hub runs at 480M, which
 kills the built-in keyboard (section 5); the app receives through
-`sdr-viewer-rx.sh`, which switches the hub for the time it runs. Meshtastic and
-GPS (6, 7) are not set up yet.
+`sdr-viewer-rx.sh`, which switches the hub for the time it runs.
+`meshtasticd` runs on the LoRa radio since 2026-11-15 (section 6); GPS
+(7) is not set up yet.
 
 Installed on the device since, with the user's permission: `rtl-sdr`
-2.0.2, `gpsd` 3.25, `gpsd-clients` (Debian packages). `sudo` works without
+2.0.2, `gpsd` 3.25, `gpsd-clients` (Debian packages); `meshtasticd`
+2.7.26 from the Meshtastic repository (section 6). `sudo` works without
 a password there.
 
 ## 1. System
@@ -80,12 +82,11 @@ and the receiver stays in `lsusb` at 12M. (In `dmesg` the receiver shows
 up once at every boot, 3.6 s in, and is gone by the time anyone looks.) Why GPIO 23 is an input while
 USB works is still not known.
 
-GPIO 7 doubles as the clock of SPI4, the bus of `/dev/spidev4.0`: if LoRa
-really is on that bus, powering the SDR this way and talking to the LoRa
-radio cannot both work. Decided (the plan's section 12): they are never
-used together, so nothing has to be done about it — but whoever sets up
-`meshtasticd` in phase 5 gives the pin back to SPI4 first, and the SDR is
-off meanwhile.
+GPIO 7 doubles as the clock of SPI4, the bus of `/dev/spidev4.0`. Phase 0
+took that for the LoRa radio's bus; it is not: the radio is on SPI1
+(section 6), so the SDR's power and the LoRa radio do not share a pin.
+They are still never used together — the user's decision (the plan's
+section 12), not a constraint of the board.
 
 ## 5. RTL-SDR
 
@@ -163,9 +164,51 @@ Bluetooth keyboard meanwhile.
 
 ## 6. LoRa
 
-`/dev/spidev4.0` exists, **not** `spidev1.0` as the plan says
-(`dtparam=spi=on`, `dtoverlay=spi0-0cs` in `config.txt`). `meshtasticd` is
-not installed, nothing listens on 4403.
+Set up on 2026-11-15 (phase 5). The SX1262 is on **SPI1** —
+`/dev/spidev1.0`, GPIO 18–21 — as the HackerGadgets packages configure it
+(`meshtastic-mui` in `ak-rex/ClockworkPi-apt`, which `aiov2_ctl
+--add-apps` installs, for the V1 and the V2 board alike). Phase 0 found
+only `/dev/spidev4.0` (the uConsole's overlay), because `config.txt` has
+no `dtoverlay=spi1-1cs`; it still has none: `scripts/lora.sh on` loads
+the overlay at run time.
+
+`meshtasticd` 2.7.26 comes from the Meshtastic repository on OBS, as the
+HackerGadgets package adds it: `/etc/apt/sources.list.d/network:Meshtastic:beta.list`
+(`Debian_13`) and its key in `/etc/apt/trusted.gpg.d/network_Meshtastic_beta.gpg`.
+The package enables its service; it is disabled again (`systemctl disable
+meshtasticd`), so nothing starts at boot. The radio's file is
+`/etc/meshtasticd/config.d/hackergadgets-aio.yaml`:
+
+```yaml
+Lora:
+  Module: sx1262
+  DIO2_AS_RF_SWITCH: true
+  DIO3_TCXO_VOLTAGE: true
+  IRQ: 26
+  Busy: 24
+  Reset: 25
+  spidev: spidev1.0
+```
+
+- **Power first.** The radio's power is GPIO 16, low after a boot;
+  `meshtasticd` looks for the radio once, at its start, so it starts
+  after the power (`sudo ~/sdr-viewer-check/lora.sh on`; `off` stops it
+  and cuts the power). With the power on, Reset (GPIO 25) reads high.
+- Its log then says `SX126x init result 0`, `sx1262 init success`, `API
+  server listen on TCP port 4403`.
+- The node (`!015b8900`, "Meshtastic 8900", firmware 2.7.26, hardware
+  `PORTDUINO`) is set as the plan's section 12 says: region US, preset
+  MediumFast, slot 70 = 919.375 MHz, hop limit 7, role `CLIENT_MUTE`
+  (it relays nothing; it sends its own node info, every 3 h by default).
+  Set with the Meshtastic CLI from the dev Mac over the network
+  (`meshtastic --host 192.168.1.246 --set …`): nothing else is installed
+  on the device for it. Until the region was set the node did not
+  transmit.
+- **The API is open to the local network**: `meshtasticd` listens on
+  `0.0.0.0:4403`, without a password; anyone on the LAN can read and
+  change the node. That is also how the app is developed on the Mac.
+- The Python CLI's connection sometimes broke (`Broken pipe`) and
+  reconnected by itself.
 
 ## 7. GPS and clock
 
