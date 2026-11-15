@@ -125,11 +125,10 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-15 `sdr-viewer` there is the build of PR #29's branch
-  (periodicity on `3`, density on `4`); PR #28's (periodicity on `4`)
-  was replaced by it; the one before that (PR #26's, `main` before
-  periodicity) is `sdr-viewer.before-period`, and `sdr-viewer.before-x`
-  is older still. With the
+  Since 2026-11-15 `sdr-viewer` there is the build of PR #31's branch
+  (the pulse, `--mesh`); PR #29's (periodicity on `3`, no mesh) is
+  `sdr-viewer.before-mesh`; PR #26's (`main` before periodicity) is
+  `sdr-viewer.before-period`, and `sdr-viewer.before-x` is older still. With the
   receiver it makes `~/.config/sdr-viewer/channels.toml`: the user's, like
   the database — our checks use `--channels test.toml` and remove it. The user
   allows replacing `sdr-viewer` there with a newer build without asking.
@@ -374,7 +373,8 @@ Measured on the dev Mac (Apple Silicon), release build:
 | Periodicity on the CM4 (the recording looped, 160×45, 15 s, PR #26's build and PR #28's side by side; 80 channels) | keeping bursts and working out one channel's period a frame costs nothing measurable: strip (`--keys 2`) 24 → 25% of a core, spectrum (`--keys 1`) 36 → 37%. The periodicity screen with a channel selected (`--keys $'4\x1b[B\x1b[B\x1b[B'`) **20%**, 11 kB/s to the terminal. On the Mac (generator, 12 s): spectrum 16%, strip 12%, periodicity 12% |
 | `sdr-mesh`'s protobuf types (`build.rs`: `protox` + `prost-build`, ~10 500 lines of Rust) | ~10 s on a clean debug build of the crate; nothing on later builds unless `proto/` changes |
 | The Meshtastic pulse on the Mac (`smoke.py --keys $'6\x1b[B\x1b[B-+?1' --secs 8 -- --mesh=192.168.1.246`, the device's node over the LAN) | 0% of one core, 23 KiB to the terminal in 8 s |
-| Static aarch64 binary from CI | 5.3 MB with periodicity; 5.1 MB before (4.8 before the `toml` crate, 2.4 before SQLite) |
+| The Meshtastic pulse on the CM4 (`smoke.py --keys 6`, and with two downs, 160×45, 15 s, `-- --mesh=127.0.0.1`; 17 nodes) | **0%** of a core (0.05 s in 15 s), 16–17 KiB to the terminal |
+| Static aarch64 binary from CI | 5.7 MB with the mesh client; 5.3 MB with periodicity; 5.1 MB before (4.8 before the `toml` crate, 2.4 before SQLite) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:
 measure on the device, the Mac's numbers do not scale.
