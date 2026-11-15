@@ -410,4 +410,8 @@ measure on the device, the Mac's numbers do not scale.
   beside the receiver filled the band for a moment and its event then
   never ended. The user's own `events.db` (copy it, read it with
   `sqlite3` here) showed it at once: look there when something "sticks".
+- **A check from the Mac is not a check on the device.** The pulse
+  worked against `--mesh=192.168.1.246` and failed on the device itself:
+  there "localhost" is ::1 first and `meshtasticd` listens on IPv4 only
+  (`client::tcp` now tries every address). Run the device's own case.
 - **zsh**: `"$H:path"` applies a modifier to `$H`; write `"${H}:path"`.

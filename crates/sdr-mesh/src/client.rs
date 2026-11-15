@@ -42,14 +42,22 @@ pub fn with_port(addr: &str) -> String {
 }
 
 /// A TCP connection to `addr` that gives up on a read now and then, so
-/// that the loop can look at the clock and the stop flag.
+/// that the loop can look at the clock and the stop flag. Every address
+/// of the name is tried: "localhost" is often ::1 first, and meshtasticd
+/// listens on IPv4 only.
 pub fn tcp(addr: &str) -> io::Result<TcpStream> {
-    let target = addr.to_socket_addrs()?.next();
-    let target = target.ok_or_else(|| io::Error::new(ErrorKind::NotFound, "no such host"))?;
-    let stream = TcpStream::connect_timeout(&target, Duration::from_secs(3))?;
-    stream.set_read_timeout(Some(Duration::from_millis(200)))?;
-    stream.set_nodelay(true)?;
-    Ok(stream)
+    let mut failed = io::Error::new(ErrorKind::NotFound, "no such host");
+    for target in addr.to_socket_addrs()? {
+        match TcpStream::connect_timeout(&target, Duration::from_secs(3)) {
+            Ok(stream) => {
+                stream.set_read_timeout(Some(Duration::from_millis(200)))?;
+                stream.set_nodelay(true)?;
+                return Ok(stream);
+            }
+            Err(err) => failed = err,
+        }
+    }
+    Err(failed)
 }
 
 /// Talks to the node at `addr` until `stop` is set or `sink` says no one
@@ -333,6 +341,15 @@ mod tests {
             };
             run(&addr, tcp, print, &stop, clock, &Timing::default());
         });
+    }
+
+    #[test]
+    fn localhost_reaches_a_daemon_that_listens_on_ipv4_only() {
+        // meshtasticd listens on 0.0.0.0; "localhost" may be ::1 first.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let stream = tcp(&format!("localhost:{port}")).unwrap();
+        assert!(stream.peer_addr().unwrap().is_ipv4());
     }
 
     #[test]
