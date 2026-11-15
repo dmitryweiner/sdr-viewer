@@ -5,8 +5,8 @@ with the HackerGadgets AIO V2 board. It watches the air through the board's
 RTL-SDR and shows what a person would otherwise miss: when, where and how
 often something was transmitted.
 
-**Status: phase 3 of 8 done, phase 4 begun** — the spectrum and waterfall
-screen, the channel strip, the spectral density and the signal log work on the built-in
+**Status: phase 4 of 8 built** — the spectrum and waterfall
+screen, the channel strip, the spectral density, the periodicity screen and the signal log work on the built-in
 signal generator, on IQ recordings and on an RTL-SDR: tuning, gain and
 zoom from the keyboard, detected events kept in a database, their pictures
 and their samples. The other screens are still to come. See
@@ -65,14 +65,16 @@ The channel strip (`2`) answers "what happened while I wasn't looking?":
 one row per channel, the lowest frequency at the top, and all rows on one
 time axis with now at the right. A column is a second; the bar in it is
 the share of that second the channel was busy, and the shortest burst
-still leaves the lowest bar. On the right: the share of the shown time the
-channel was busy, and how long it has been quiet (`now` while a signal is
-on). A channel outside the band being received is dimmed.
+still leaves the lowest bar. On the right: the channel's period when it
+repeats for sure (see the periodicity screen below), the share of the
+shown time the channel was busy, and how long it has been quiet (`now`
+while a signal is on). A channel outside the band being received is
+dimmed.
 
 ```
-LPD 17       ····▂····▂····▂····▂····▂····▂····▂····  6.0%   4 s
-433.700 MHz  ·····████████████████████··············   36%  30 s
-434.100 MHz  ···························▄███████████   21%   now
+LPD 17       ····▂····▂····▂····▂····▂····▂····▂····  5.00 s  6.0%   4 s
+433.700 MHz  ·····████████████████████··············           36%  30 s
+434.100 MHz  ···························▄███████████           21%   now
 ```
 
 | Key | What |
@@ -133,6 +135,34 @@ The band, the zoom, the cursor and the scale are the spectrum's, and so
 are its keys. With the cursor on, the header tells how much of the time
 the frequency under it was above the detector's threshold (`busy 4.1%`).
 `m` starts the picture afresh; `Space` holds it still.
+
+The periodicity screen (`4`) answers "does this signal repeat, and with
+what period?" for the channel selected on the strip (the selection is one
+for both screens). At the top is the channel's envelope — when it was on,
+now at the right, like its row of the strip. Under it is how like itself
+that envelope is after a delay (its autocorrelation): delay runs across,
+and a peak at 2.04 s says that what was on is on again 2.04 s later. The
+cursor stands on the main peak — the shortest of the strongest — and
+names it; the line above lists it with its strength, the share of the
+signal that came again after that time, and then the other periods found
+(a rhythm inside the rhythm), without their multiples.
+
+| Key | What |
+|---|---|
+| `↑` `↓` `PgUp` `PgDn` `Home` `End` | select a channel (`Esc` lets go) |
+| `+` `-` | shorter, longer delays: up to 1 s, 10 s, 60 s, 10 min |
+| `Enter` | tune to the selected channel and show the spectrum |
+
+The envelope is made of the detector's events, so it is on or off in
+10 ms steps, and is six times as long as the longest delay shown: delays
+up to 10 s are looked for in the last minute, delays up to 10 min in the
+last hour, in steps of half a second. A range shows the period the
+channel has in it until `+` or `-` chooses another. Periods are read only
+out of an envelope long enough (6 s for the two short ranges, 30 s and
+5 min for the long ones), and the strip tells a period only from 60%
+strength: two bursts are not yet a rhythm. A carrier that never goes off
+has no period here — its level is not looked at — and a channel that was
+not being received reads as silent.
 
 On the signal log (`5`) — one row per signal the detector found: when it
 began, how long it lasted, where, how wide, how strong:
@@ -211,7 +241,8 @@ cargo run --release -- capture.cu8 --rate 2.4M --center 433.92M --snapshot 160x4
 ```
 
 `--screen 2` prints the channel strip instead of the spectrum, `--screen 3`
-the density; `--channels FILE` gives a snapshot its channels (it adds
+the density, `--screen 4` the periodicity of the channel that repeats most
+surely; `--channels FILE` gives a snapshot its channels (it adds
 none to the file).
 
 On the uConsole: take the static `aarch64` binary from the CI artifact

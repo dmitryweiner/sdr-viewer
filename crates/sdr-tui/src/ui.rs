@@ -41,6 +41,12 @@ const CHANNEL_KEYS: [(&str, &str); 4] = [
     ("X, X", "let go of the silent channels the app made"),
 ];
 
+const PERIOD_KEYS: [(&str, &str); 3] = [
+    ("↑, ↓", "select a channel (PgUp, PgDn, Home, End)"),
+    ("+, -", "shorter, longer delays"),
+    ("Enter", "tune to the selected channel"),
+];
+
 const LOG_KEYS: [(&str, &str); 6] = [
     ("↑, ↓", "select an event (PgUp, PgDn, Home, End)"),
     ("+, -", "raise, lower the level that hides weak events"),
@@ -56,6 +62,7 @@ fn keys(screen: Screen) -> Vec<(&'static str, &'static str)> {
     let own: &[(&str, &str)] = match screen {
         Screen::Spectrum | Screen::Density => &BAND_KEYS,
         Screen::Channels => &CHANNEL_KEYS,
+        Screen::Periodicity => &PERIOD_KEYS,
         Screen::Log => &LOG_KEYS,
         _ => &[],
     };
@@ -88,6 +95,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::Density => {
             let (view, map) = (&app.spectrum, app.density.as_ref());
             crate::density_ui::draw(frame, view, map, app.input.as_deref(), body);
+        }
+        Screen::Periodicity => {
+            crate::period_ui::draw(frame, &app.channels, app.delay_scale(), body);
         }
         Screen::Log => crate::log_ui::draw(frame, &app.log, app.picture(), body),
         screen => frame.render_widget(placeholder(screen), body),
@@ -408,6 +418,91 @@ mod tests {
         app
     }
 
+    /// The channels' minute with the named channel — a burst every 5 s
+    /// — on the periodicity screen.
+    fn app_on_the_periodicity() -> App {
+        let mut app = app_on_the_channels();
+        app.screen = Screen::Periodicity;
+        app.channels.move_selection(1);
+        app.channels.move_selection(1);
+        app.channels.refresh_periods();
+        app
+    }
+
+    #[test]
+    fn periodicity_at_the_minimum_size() {
+        insta::assert_snapshot!(render(&app_on_the_periodicity(), 80, 24).backend());
+    }
+
+    #[test]
+    fn periodicity_on_the_uconsole_screen() {
+        insta::assert_snapshot!(render(&app_on_the_periodicity(), 160, 45).backend());
+    }
+
+    #[test]
+    fn the_cursor_stands_on_the_main_period_and_names_it() {
+        let app = app_on_the_periodicity();
+        let terminal = render(&app, 80, 24);
+        let buffer = terminal.backend().buffer();
+        let text = render_text(&app, 80, 24);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines[1],
+            " LPD 17 · 433.475 MHz · delays to 10 s in 10 ms steps"
+        );
+        assert_eq!(lines[2], " Repeats every 5.00 s 92%");
+        assert!(lines[4].starts_with("−60 s") && lines[4].ends_with("now"));
+        assert!(lines[22].starts_with('0') && lines[22].ends_with("10 s"));
+        // 5 s of 10 is the middle of the 80 columns; the plot is rows
+        // 5 to 21.
+        for y in 5..22 {
+            assert_eq!(buffer[(40, y)].style().fg, Some(Color::Yellow), "row {y}");
+            assert_ne!(buffer[(30, y)].style().fg, Some(Color::Yellow), "row {y}");
+        }
+        assert!(lines[5].contains(" 5.00 s"), "{text}");
+        // The envelope: the minute in 80 columns, 0.3 s of signal in
+        // the first 0.75 s.
+        assert_eq!(lines[3].chars().count(), 80);
+        assert!(lines[3].starts_with("▃·····"), "{text}");
+    }
+
+    #[test]
+    fn the_periodicity_screen_says_what_it_waits_for() {
+        let mut app = app();
+        app.screen = Screen::Periodicity;
+        let text = render_text(&app, 80, 24);
+        assert!(text.contains("No channels yet"), "{text}");
+        let mut app = app_on_the_channels();
+        app.screen = Screen::Periodicity;
+        let text = render_text(&app, 80, 24);
+        assert!(text.contains("Select a channel: ↑ ↓"), "{text}");
+        // A minute is too little for delays up to ten: 120 steps.
+        let mut app = app_on_the_periodicity();
+        app.delays = Some(3);
+        let text = render_text(&app, 80, 24);
+        assert!(
+            text.contains("Too little yet for these delays: 60.0 s of the 300 s it takes"),
+            "{text}"
+        );
+        // The carrier repeats nothing.
+        let mut app = app_on_the_periodicity();
+        app.channels.move_selection(2);
+        let text = render_text(&app, 80, 24);
+        assert!(text.contains("No period within 10 s: + and -"), "{text}");
+    }
+
+    #[test]
+    fn the_strip_tells_the_period_of_a_channel_that_has_one() {
+        let mut app = app_on_the_channels();
+        app.channels.refresh_periods();
+        let text = render_text(&app, 80, 24);
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines[3].starts_with("LPD 17"), "{text}");
+        assert!(lines[3].ends_with("▂····  5.00 s  5.7%   4 s"), "{text}");
+        // What is on without a rhythm has none.
+        assert!(lines[5].ends_with("█           24%   now"), "{text}");
+    }
+
     #[test]
     fn the_help_of_every_screen_fits_the_smallest_terminal() {
         for screen in Screen::ALL {
@@ -428,6 +523,7 @@ mod tests {
             assert_eq!(has("reset max hold"), screen == Screen::Spectrum);
             assert_eq!(has("start the picture afresh"), screen == Screen::Density);
             assert_eq!(has("seconds to a column"), screen == Screen::Channels);
+            assert_eq!(has("shorter, longer delays"), screen == Screen::Periodicity);
             assert_eq!(has("sort by time"), screen == Screen::Log);
         }
     }
@@ -471,27 +567,31 @@ mod tests {
     fn rows_are_aligned_in_time_and_tell_share_and_silence() {
         let text = render_text(&app_on_the_channels(), 80, 24);
         let rows: Vec<&str> = text.lines().collect();
-        assert_eq!(rows[1], " 4 channels · 1 s a column · the last 55 s");
-        // 55 columns: seconds 5 to 59.
+        assert_eq!(rows[1], " 4 channels · 1 s a column · the last 47 s");
+        // 47 columns: seconds 13 to 59.
         // A 0.3 s burst every 5 s, the last at 55.2 s.
         assert!(
-            rows[3].starts_with("LPD 17       ▂····▂····▂····"),
+            rows[3].starts_with("LPD 17       ··▂····▂····▂····"),
             "{text}"
         );
-        assert!(rows[3].ends_with("▂····  6.0%   4 s"), "{text}");
+        // No period is told before one is worked out.
+        assert!(rows[3].ends_with("▂····          5.7%   4 s"), "{text}");
         // On from 10 s to 30 s.
         assert!(
-            rows[4].starts_with("433.700 MHz  ·····████████████████████····"),
+            rows[4].starts_with("433.700 MHz  █████████████████····"),
             "{text}"
         );
         assert!(rows[4].ends_with("  36%  30 s"), "{text}");
         // On since 48.5 s and still.
-        assert!(rows[5].ends_with("·▄███████████   21%   now"), "{text}");
+        assert!(
+            rows[5].ends_with("·▄███████████           24%   now"),
+            "{text}"
+        );
         // Never heard here.
         assert!(rows[2].starts_with("a name too l ·····"), "{text}");
-        assert!(rows[2].ends_with("····    0%     —"), "{text}");
+        assert!(rows[2].ends_with("····            0%     —"), "{text}");
         assert!(
-            rows[22].contains("−55 s") && rows[22].ends_with("now"),
+            rows[22].contains("−47 s") && rows[22].ends_with("now"),
             "{text}"
         );
         // The hidden channel took its event and has no row.

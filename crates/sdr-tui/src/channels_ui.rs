@@ -13,13 +13,14 @@ use sdr_core::units::format_hz;
 
 use crate::channels::{ChannelsView, Row, format_ago};
 use crate::density_ui::percent;
+use crate::period::format_period;
 use crate::spectrum::BARS;
 
 /// Columns for the channel's name: "1090.000 MHz" and a space.
 const LABEL: u16 = 13;
 
-/// Columns right of the strip: " 12.3%  now".
-const FIGURES: u16 = 12;
+/// Columns right of the strip: "  2.04 s 12.3%  now".
+const FIGURES: u16 = 20;
 
 const BUSY: Color = Color::Rgb(90, 200, 120);
 
@@ -107,7 +108,10 @@ fn draw_row(
         (false, None) => "—".to_string(),
     };
     let share = percent(view.share(row.index, columns));
-    let figures = format!(" {share:>5} {quiet:>5}");
+    // Its period, when it has one for sure.
+    let period = view.period(row.index);
+    let period = period.map_or(String::new(), |period| format_period(period.seconds));
+    let figures = format!(" {period:>7} {share:>5} {quiet:>5}");
     frame.render_widget(Span::styled(format!("{label:<width$}"), style), area);
     frame.render_widget(
         Line::from(figures).right_aligned(),
@@ -117,19 +121,25 @@ fn draw_row(
             ..area
         },
     );
-    let buffer = frame.buffer_mut();
     for (column, cell) in view.cells(row.index, columns).into_iter().enumerate() {
-        let Some(share) = cell else { continue };
-        let at = &mut buffer[(area.x + LABEL + column as u16, area.y)];
-        if share > 0.0 {
-            // The shortest burst still shows as the lowest bar.
-            let eighths = ((share * 8.0).round() as usize).clamp(1, 8);
-            at.set_symbol(BARS[eighths])
-                .set_style(Style::new().fg(BUSY));
-        } else {
-            at.set_symbol("·")
-                .set_style(Style::new().fg(Color::DarkGray));
+        if let Some(share) = cell {
+            draw_bar(frame, share, area.x + LABEL + column as u16, area.y);
         }
+    }
+}
+
+/// One column of a channel's time: a bar for the share of it the channel
+/// was on, a dot for none.
+pub(crate) fn draw_bar(frame: &mut Frame, share: f32, x: u16, y: u16) {
+    let at = &mut frame.buffer_mut()[(x, y)];
+    if share > 0.0 {
+        // The shortest burst still shows as the lowest bar.
+        let eighths = ((share * 8.0).round() as usize).clamp(1, 8);
+        at.set_symbol(BARS[eighths])
+            .set_style(Style::new().fg(BUSY));
+    } else {
+        at.set_symbol("·")
+            .set_style(Style::new().fg(Color::DarkGray));
     }
 }
 

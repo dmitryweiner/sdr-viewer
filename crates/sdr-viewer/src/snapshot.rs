@@ -61,6 +61,10 @@ pub fn run(
         seen as f64 / f64::from(info.sample_rate),
     ));
     app.channels.set_open(&pipeline.open_events());
+    app.channels.refresh_periods();
+    if screen == Screen::Periodicity {
+        select_most_periodic(&mut app.channels);
+    }
     app.status.state = SourceState::Ended;
     app.status.clipped = clipped as f64 / seen.max(1) as f64;
     app.status.lost = source.lost_samples();
@@ -103,6 +107,21 @@ pub fn run(
     }
     write_events(&mut text, &events, &pipeline.open_events());
     Ok(text)
+}
+
+/// Selects the channel that repeats most surely, or the first row when
+/// none does: what the periodicity screen is printed for.
+fn select_most_periodic(channels: &mut ChannelsView) {
+    let strength = |index: usize| channels.period(index).map_or(0.0, |period| period.strength);
+    let rows = channels.rows();
+    let indices = rows.iter().map(|row| row.index);
+    // Of equals the first row, not the last.
+    let best = indices
+        .rev()
+        .max_by(|&a, &b| strength(a).total_cmp(&strength(b)));
+    if let Some(index) = best {
+        channels.select(index);
+    }
 }
 
 /// The detector's events in the order they began; those still going on at
@@ -249,6 +268,27 @@ mod tests {
         // 0.3 s of every 2.04: at 0, 2.04 and 4.08 s.
         assert!(screen[3].starts_with("434.200 MHz"), "{text}");
         assert!(screen[3].contains("▂·▂·▂"), "{text}");
+    }
+
+    #[test]
+    fn a_snapshot_of_the_periodicity_screen_is_of_the_channel_that_repeats() {
+        let generator = Generator::new(GeneratorConfig::demo());
+        let text = run(generator, (100, 30), 20.0, Screen::Periodicity, Vec::new()).unwrap();
+        let screen: Vec<&str> = text.lines().take(30).collect();
+        // The carrier is the first row; the bursts are what repeats.
+        assert_eq!(
+            screen[1], " 434.200 MHz · delays to 10 s in 10 ms steps",
+            "{text}"
+        );
+        assert!(screen[2].starts_with(" Repeats every 2.04 s "), "{text}");
+        // 2.04 s of 10 across 100 columns.
+        assert!(screen[5].contains("│ 2.04 s"), "{text}");
+        assert_eq!(screen[5].chars().position(|c| c == '│'), Some(20), "{text}");
+        // And the strip says so in the row.
+        let generator = Generator::new(GeneratorConfig::demo());
+        let text = run(generator, (100, 30), 20.0, Screen::Channels, Vec::new()).unwrap();
+        assert!(text.lines().nth(3).unwrap().contains("  2.04 s "), "{text}");
+        assert!(!text.lines().nth(2).unwrap().contains(" s "), "{text}");
     }
 
     #[test]
