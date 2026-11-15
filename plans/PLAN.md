@@ -118,9 +118,13 @@ crates/
 ## 5. Screens
 
 Screens are switched with digits (F-keys are awkward on the uConsole
-keyboard). Common keys: arrows / trackball — frequency cursor, `+`/`-` —
-zoom, `g` — gain, `f` — enter a frequency, `b` — bookmarks, `r` — record,
-`?` — help. The keys as built are listed in the README.
+keyboard): 1 spectrum, 2 channel strip, 3 periodicity, 4 density, 5 log,
+6 Meshtastic, 7 panorama, 8 decoders — the periodicity right after the
+strip whose channel it reads (section 12); the subsections below keep the
+plan's first numbering. Common keys: arrows / trackball — frequency
+cursor, `+`/`-` — zoom, `g` — gain, `f` — enter a frequency, `b` —
+bookmarks, `r` — record, `?` — help. The keys as built are listed in the
+README.
 
 ### 5.1. Spectrum and waterfall (main)
 - Spectrum: bars of `▁▂▃▄▅▆▇█`, with max-hold and average traces on top.
@@ -326,6 +330,7 @@ The first useful version comes after phase 3.
 | Periodicity (5.4) | The user's decisions (2026-11-14): the channel is the one selected on the channel strip, the envelope is made of the detector's events, and beside the plot the screen lists the periods, shows the envelope itself, and the strip tells each channel's period. As built: every channel keeps its bursts (start and end, the last hour, 8192 at most), so a channel has its history the moment it is selected. The envelope is the share of each step the channel was on; four ranges of delays — to 1 s and 10 s in 10 ms steps, to 60 s in 50 ms, to 10 min in 500 ms — each over an envelope six times its longest delay. The autocorrelation has the mean taken off and is not made up for the shorter overlap (N pulses give (N − 1)/N: two bursts are half a rhythm). A peak's strength is what its hump holds beside the hump at delay 0, so a period between two steps is not weakened; the main period is the shortest peak within 85% of the strongest; multiples are not listed. No period is read from fewer than 600 steps. The strip tells a period from strength 0.6, worked out for one channel a frame; the screen opens on the range the period is in, `+`/`-` choose another |
 | Band names on the spectrum | Asked for by the user (2026-11-14), ahead of phase 8's frequency plan: the header of the spectrum and of the density names the band the middle of the view is in, and the cursor's when it differs. The names are a table compiled into the app (`sdr-core::bands`, ITU Region 1 as commonly used, written from memory and not checked against Israel's national plan); bands may nest, the narrowest names a frequency. The user's own plan and bookmarks from a config stay with phase 8 |
 | Looking a frequency up on the internet | Proposed by the user (a key that searches what transmitter a frequency may be) and withdrawn by them the same day, 2026-11-14, before anything was built: not to be done. The reasons it was not simple: no source with an API for "what transmits here in Israel"; a browser opened on the device is not seen over SSH; an HTTP client with TLS and the parsing of other people's pages in a static binary |
+| The order of the screens | The user's wish (2026-11-15): the periodicity's tab comes right after the channel strip's, since it shows the strip's selected channel — `3` periodicity, `4` density (they were the other way round until PR #29) |
 | Phase 4's order | Density first (it needs only the frames), then the channel strip, then periodicity: each its own pull request |
 | How long events are kept | 7 days: older events are deleted when the app starts. Nothing is filtered on the way in (~93 bytes an event, ~660 MB a day on a band as busy as the LPD recording, so the file settles under ~5 GB there) |
 | Phase order on start | Phase 1 before phase 0: no SSH access to the device yet; phase 0 follows `docs/hardware-check.md` when there is |
@@ -360,7 +365,7 @@ They do not block the start; until answered, the default holds.
 
 ## 14. Progress
 
-As of 2026-11-14.
+As of 2026-11-15.
 
 | # | Phase | State |
 |---|---|---|
@@ -368,7 +373,7 @@ As of 2026-11-14.
 | 1 | Skeleton | Done: workspace, CI with a static aarch64 binary, generator and file sources, tabs |
 | 2 | Spectrum and waterfall | Done on the generator, recordings and the RTL-SDR: bars with max hold, waterfall, a scale that follows the noise floor, cursor, tuning (`f`, `[` `]`, Enter), gain, zoom, pause, `--snapshot` |
 | 3 | Detector and log | Done; the user ran it on the air on the device on 2026-11-13 and found it working. Built: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. The spectrum shows the detector's threshold as a line and the dB above the floor in its header. The last 30 s of samples are held in a ring buffer; the log shows the picture of the selected event made of them, and `r` saves them as SigMF. The detector has regression tests on a piece of real air (`testdata/`). The status line tells overload (`clip`) and lost samples. |
-| 4 | Accumulators | Built: the spectral density (screen 5.3) and the channel strip (5.2) — their decisions are in section 12 — were tried on the air and approved by the user on 2026-11-14, together with `X` twice on the strip and the log and the band's name in the header. Periodicity (5.4) is built the same day (its decision is in section 12) and tried on the generator and on the device's LPD433 recording — where it finds that the hopper comes back to each channel every 2.92 s — but not yet on the air |
+| 4 | Accumulators | Done: the spectral density (screen 5.3) and the channel strip (5.2) — their decisions are in section 12 — were tried on the air and approved by the user on 2026-11-14, together with `X` twice on the strip and the log and the band's name in the header. Periodicity (5.4), built the same day (its decision is in section 12), finds on the device's LPD433 recording that the hopper comes back to each channel every 2.92 s; the user tried it on the air on 2026-11-15 ("works well") and asked for its tab to come right after the strip's |
 | 5–8 | | Not started |
 
 Known limits of the channel strip as built:

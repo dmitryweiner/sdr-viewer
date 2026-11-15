@@ -18,11 +18,10 @@ Phases of the plan (its section 14 has the detail):
 | 1 Skeleton | done |
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
 | 3 Detector and log | done, and found working on the air on the device by the user (2026-11-13): the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples |
-| 4 Accumulators | built: the spectral density (screen 3) and the channel strip (screen 2) were tried by the user on the air on the device and approved (2026-11-14) — with what that trial asked for: the detector's stuck events fixed, the receiver's spike kept off the strip, `X` twice on the strip and on the log, the band's name in the spectrum's header. Periodicity (screen 4, and the period in the strip's rows) is built as the user decided (the plan's section 12) and tried on the generator and on the device's recording only: the user has not yet tried it on the air |
+| 4 Accumulators | done: the spectral density (screen 4) and the channel strip (screen 2) were tried by the user on the air on the device and approved (2026-11-14) — with what that trial asked for: the detector's stuck events fixed, the receiver's spike kept off the strip, `X` twice on the strip and on the log, the band's name in the spectrum's header. Periodicity (screen 3, and the period in the strip's rows), built as the user decided (the plan's section 12), was tried by them on the air and "works well" (2026-11-15); its tab was then moved right after the channels', which it reads (it was screen 4, the density 3) |
 | 5–8 | not started |
 
-Next: the user's trial of periodicity on the air, and what it asks for;
-then phase 5 (Meshtastic), of which nothing is agreed in detail and
+Next: phase 5 (Meshtastic), of which nothing is agreed in detail and
 `meshtasticd` is not set up on the device — ask the user before building.
 
 ## Commands
@@ -46,9 +45,9 @@ then phase 5 (Meshtastic), of which nothing is agreed in detail and
   — no terminal: analyses the start of the stream (unpaced for files and
   the generator), prints the spectrum screen as text, the max-hold
   peaks and the detector's events. The way to look at a recording, at the air, or at the picture from
-  a script. Below 80x24 it prints only "too small". `--screen 2` prints the channel strip, `--screen 3` prints
-  the density screen instead, `--screen 4` the periodicity of the channel
-  that repeats most surely (or of the first row).
+  a script. Below 80x24 it prints only "too small". `--screen 2` prints the channel strip, `--screen 3` the
+  periodicity of the channel that repeats most surely (or of the first
+  row), `--screen 4` the density screen instead.
 - `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
   of the generator and of the IQ ring per sample.
 
@@ -70,9 +69,11 @@ request gets no run: open a draft one to get a binary.
   escape sequence in `--keys` is one key (`$'5\x1b[Br'`: log, down, save
   IQ). The default keys walk all eight screens and end on the
   spectrum under the help: to measure a screen pass its digit alone
-  (`--keys 1` spectrum, `2` channels, `3` density, `5` log;
-  `--keys $'4\x1b[B'` periodicity with the first channel selected), and compare
-  builds side by side in one sitting.
+  (`--keys 1` spectrum, `2` channels, `4` density, `5` log;
+  `--keys $'3\x1b[B'` periodicity with the first channel selected), and compare
+  builds side by side in one sitting. Builds before PR #29 have the
+  density on `3` and the periodicity on `4`, as the table below was
+  measured.
 - `scripts/term-check.sh` — can this terminal show truecolor, bars, half
   blocks, Braille.
 - `scripts/hub-speed.sh` — for the user's device, installed there as
@@ -109,9 +110,11 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-14 `sdr-viewer` there is the build of PR #28's branch
-  (periodicity); the one before (PR #26's, `main` before periodicity) is
-  `sdr-viewer.before-period`, and `sdr-viewer.before-x` is older still. With the
+  Since 2026-11-15 `sdr-viewer` there is the build of PR #29's branch
+  (periodicity on `3`, density on `4`); PR #28's (periodicity on `4`)
+  was replaced by it; the one before that (PR #26's, `main` before
+  periodicity) is `sdr-viewer.before-period`, and `sdr-viewer.before-x`
+  is older still. With the
   receiver it makes `~/.config/sdr-viewer/channels.toml`: the user's, like
   the database — our checks use `--channels test.toml` and remove it. The user
   allows replacing `sdr-viewer` there with a newer build without asking.

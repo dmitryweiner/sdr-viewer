@@ -51,8 +51,8 @@ pub struct Args {
     pub snapshot: Option<(u16, u16)>,
 
     /// The screen a snapshot prints, by its digit: 1 the spectrum, 2 the
-    /// channel strip, 3 the density, 4 the periodicity of the channel
-    /// that repeats most surely.
+    /// channel strip, 3 the periodicity of the channel that repeats most
+    /// surely, 4 the density.
     #[arg(long, value_name = "DIGIT", default_value = "1", requires = "snapshot", value_parser = parse_screen_arg)]
     pub screen: Screen,
 
@@ -165,10 +165,10 @@ fn parse_screen_arg(text: &str) -> Result<Screen, String> {
     match text {
         "1" => Ok(Screen::Spectrum),
         "2" => Ok(Screen::Channels),
-        "3" => Ok(Screen::Density),
-        "4" => Ok(Screen::Periodicity),
+        "3" => Ok(Screen::Periodicity),
+        "4" => Ok(Screen::Density),
         _ => Err(format!(
-            "no snapshot of screen {text:?}: 1 (spectrum), 2 (channels), 3 (density) or 4 (periodicity)"
+            "no snapshot of screen {text:?}: 1 (spectrum), 2 (channels), 3 (periodicity) or 4 (density)"
         )),
     }
 }
@@ -427,11 +427,11 @@ mod tests {
         assert!(parse(&["--snapshot", "big"]).is_err());
         assert!(parse(&["--screen", "3"]).is_err());
         assert!(parse(&["--snapshot", "80x24", "--screen", "5"]).is_err());
-        let period = args(&["--snapshot", "80x24", "--screen", "4"]);
+        let period = args(&["--snapshot", "80x24", "--screen", "3"]);
         assert_eq!(period.screen, Screen::Periodicity);
         assert!(parse(&["--channels", "x.toml", "--no-channels"]).is_err());
         assert_eq!(args(&[]).screen, Screen::Spectrum);
-        let density = args(&["--snapshot", "80x24", "--screen", "3"]);
+        let density = args(&["--snapshot", "80x24", "--screen", "4"]);
         assert_eq!(density.screen, Screen::Density);
         assert!(parse(&["--rtlsdr", "x.cu8"]).is_err());
         assert!(parse(&["--gain", "30"]).is_err());

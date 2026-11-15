@@ -121,22 +121,7 @@ receiver has left dozens of them; give a name to what is to stay. A file that
 does not read as TOML stops the app at the start with the line that is
 wrong; it is never overwritten.
 
-The spectral density (`3`) answers "which frequencies are busy at all?":
-frequency runs across and level up, as on the spectrum, and a point is the
-brighter, the more of the time the signal was at that level. The noise is
-a bright band at the bottom, a carrier a bright spot above it, and a short
-burst that an eye on the waterfall misses stays as a faint mark over its
-frequency. Brightness grows with the logarithm of the share of time: from
-one hundredth of a second in a hundred seconds to "always". The picture
-forgets: what happened 30 s ago weighs half of what happens now. It is
-gathered from the start, whichever screen is open.
-
-The band, the zoom, the cursor and the scale are the spectrum's, and so
-are its keys. With the cursor on, the header tells how much of the time
-the frequency under it was above the detector's threshold (`busy 4.1%`).
-`m` starts the picture afresh; `Space` holds it still.
-
-The periodicity screen (`4`) answers "does this signal repeat, and with
+The periodicity screen (`3`) answers "does this signal repeat, and with
 what period?" for the channel selected on the strip (the selection is one
 for both screens). At the top is the channel's envelope — when it was on,
 now at the right, like its row of the strip. Under it is how like itself
@@ -163,6 +148,21 @@ out of an envelope long enough (6 s for the two short ranges, 30 s and
 strength: two bursts are not yet a rhythm. A carrier that never goes off
 has no period here — its level is not looked at — and a channel that was
 not being received reads as silent.
+
+The spectral density (`4`) answers "which frequencies are busy at all?":
+frequency runs across and level up, as on the spectrum, and a point is the
+brighter, the more of the time the signal was at that level. The noise is
+a bright band at the bottom, a carrier a bright spot above it, and a short
+burst that an eye on the waterfall misses stays as a faint mark over its
+frequency. Brightness grows with the logarithm of the share of time: from
+one hundredth of a second in a hundred seconds to "always". The picture
+forgets: what happened 30 s ago weighs half of what happens now. It is
+gathered from the start, whichever screen is open.
+
+The band, the zoom, the cursor and the scale are the spectrum's, and so
+are its keys. With the cursor on, the header tells how much of the time
+the frequency under it was above the detector's threshold (`busy 4.1%`).
+`m` starts the picture afresh; `Space` holds it still.
 
 On the signal log (`5`) — one row per signal the detector found: when it
 began, how long it lasted, where, how wide, how strong:
@@ -241,9 +241,9 @@ cargo run --release -- capture.cu8 --rate 2.4M --center 433.92M --snapshot 160x4
 ```
 
 `--screen 2` prints the channel strip instead of the spectrum, `--screen 3`
-the density, `--screen 4` the periodicity of the channel that repeats most
-surely; `--channels FILE` gives a snapshot its channels (it adds
-none to the file).
+the periodicity of the channel that repeats most surely, `--screen 4` the
+density; `--channels FILE` gives a snapshot its channels (it adds none to
+the file).
 
 On the uConsole: take the static `aarch64` binary from the CI artifact
 `sdr-viewer-aarch64`. The first run on a device is the

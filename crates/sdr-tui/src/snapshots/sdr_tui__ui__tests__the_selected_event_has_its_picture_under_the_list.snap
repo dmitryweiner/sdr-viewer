@@ -2,7 +2,7 @@
 source: crates/sdr-tui/src/ui.rs
 expression: "render(&app_with_a_picture(), 80, 24).backend()"
 ---
-"1 Spectrum 2 Channels 3 Density 4 Period 5 Log 6 Mesh 7 Panorama 8 Decoders     "
+"1 Spectrum 2 Channels 3 Period 4 Density 5 Log 6 Mesh 7 Panorama 8 Decoders     "
 " 2 events · 0 hidden below +10 dB · 0 on now · by time · held, 0 new — Esc follo"
 "       start  duration         centre      width        peak  above floor       "
 "     0:01.02     40 ms    433.102 MHz    5.0 kHz  -23.0 dBFS  +48.0 dB          "

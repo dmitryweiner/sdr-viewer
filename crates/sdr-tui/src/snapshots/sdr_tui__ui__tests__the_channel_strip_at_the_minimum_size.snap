@@ -2,7 +2,7 @@
 source: crates/sdr-tui/src/ui.rs
 expression: "render(&app_on_the_channels(), 80, 24).backend()"
 ---
-"1 Spectrum 2 Channels 3 Density 4 Period 5 Log 6 Mesh 7 Panorama 8 Decoders     "
+"1 Spectrum 2 Channels 3 Period 4 Density 5 Log 6 Mesh 7 Panorama 8 Decoders     "
 " 4 channels · 1 s a column · the last 47 s                                      "
 "a name too l ···············································            0%     —"
 "LPD 17       ··▂····▂····▂····▂····▂····▂····▂····▂····▂····          5.7%   4 s"

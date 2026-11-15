@@ -16,8 +16,8 @@ use crate::spectrum::SpectrumView;
 pub enum Screen {
     Spectrum,
     Channels,
-    Density,
     Periodicity,
+    Density,
     Log,
     Mesh,
     Panorama,
@@ -28,8 +28,8 @@ impl Screen {
     pub const ALL: [Screen; 8] = [
         Screen::Spectrum,
         Screen::Channels,
-        Screen::Density,
         Screen::Periodicity,
+        Screen::Density,
         Screen::Log,
         Screen::Mesh,
         Screen::Panorama,
@@ -49,8 +49,8 @@ impl Screen {
         match self {
             Screen::Spectrum => "Spectrum",
             Screen::Channels => "Channels",
-            Screen::Density => "Density",
             Screen::Periodicity => "Period",
+            Screen::Density => "Density",
             Screen::Log => "Log",
             Screen::Mesh => "Mesh",
             Screen::Panorama => "Panorama",
@@ -62,8 +62,8 @@ impl Screen {
         match self {
             Screen::Spectrum => "Spectrum and waterfall",
             Screen::Channels => "Channel strip",
-            Screen::Density => "Spectral density",
             Screen::Periodicity => "Periodicity",
+            Screen::Density => "Spectral density",
             Screen::Log => "Signal log",
             Screen::Mesh => "Meshtastic pulse",
             Screen::Panorama => "Panorama",
@@ -322,8 +322,8 @@ impl App {
             }
             _ if self.screen == Screen::Spectrum => self.on_spectrum_key(key),
             _ if self.screen == Screen::Channels => self.on_channels_key(key),
-            _ if self.screen == Screen::Density => self.on_density_key(key),
             _ if self.screen == Screen::Periodicity => self.on_period_key(key),
+            _ if self.screen == Screen::Density => self.on_density_key(key),
             _ if self.screen == Screen::Log => self.on_log_key(key),
             _ => {}
         }
@@ -597,9 +597,9 @@ mod tests {
     #[test]
     fn the_density_is_asked_for_while_its_screen_is_open() {
         let mut app = app();
-        press(&mut app, KeyCode::Char('3'));
+        press(&mut app, KeyCode::Char('4'));
         assert_eq!(app.commands, [Command::WatchDensity(true)]);
-        press(&mut app, KeyCode::Char('3'));
+        press(&mut app, KeyCode::Char('4'));
         press(&mut app, KeyCode::Right);
         assert_eq!(app.commands.len(), 1);
         press(&mut app, KeyCode::Tab);
@@ -611,7 +611,7 @@ mod tests {
     #[test]
     fn the_density_screen_has_the_spectrums_keys_and_m_starts_it_afresh() {
         let mut app = app();
-        press(&mut app, KeyCode::Char('3'));
+        press(&mut app, KeyCode::Char('4'));
         app.commands.clear();
         press(&mut app, KeyCode::Right);
         press(&mut app, KeyCode::Char('+'));
@@ -632,7 +632,7 @@ mod tests {
     #[test]
     fn a_paused_picture_keeps_its_density() {
         let mut app = app();
-        press(&mut app, KeyCode::Char('3'));
+        press(&mut app, KeyCode::Char('4'));
         app.on_density(density_map(8));
         press(&mut app, KeyCode::Char(' '));
         app.on_density(density_map(16));
@@ -690,7 +690,7 @@ mod tests {
     #[test]
     fn the_periodicity_screen_shares_the_strips_selection_and_follows_the_period() {
         let mut app = app_with_rhythms();
-        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('3'));
         assert_eq!(app.delay_scale(), USUAL);
         press(&mut app, KeyCode::Enter);
         assert!(app.commands.is_empty());
@@ -705,7 +705,7 @@ mod tests {
         press(&mut app, KeyCode::Char('2'));
         assert_eq!(app.channels.selected_row(), Some(1));
         press(&mut app, KeyCode::Up);
-        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('3'));
         assert_eq!(app.channels.selected_row(), Some(0));
         assert_eq!(app.delay_scale(), 1);
     }
@@ -713,7 +713,7 @@ mod tests {
     #[test]
     fn plus_and_minus_choose_the_delays_until_another_channel_is_selected() {
         let mut app = app_with_rhythms();
-        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('3'));
         press(&mut app, KeyCode::Down);
         press(&mut app, KeyCode::Char('-'));
         assert_eq!(app.delay_scale(), 2);
@@ -731,7 +731,7 @@ mod tests {
         press(&mut app, KeyCode::Down);
         assert_eq!(app.delay_scale(), 2);
         // Enter tunes to the channel; Esc lets it go before it quits.
-        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('3'));
         press(&mut app, KeyCode::Esc);
         assert!(app.channels.selected().is_none() && !app.quit);
         press(&mut app, KeyCode::Home);
@@ -1178,5 +1178,11 @@ mod tests {
     fn every_screen_has_a_distinct_key_from_one_to_eight() {
         let keys: Vec<u8> = Screen::ALL.iter().map(|s| s.key()).collect();
         assert_eq!(keys, [1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn the_periodicity_comes_right_after_the_channels_it_reads() {
+        assert_eq!(Screen::Periodicity.key(), Screen::Channels.key() + 1);
+        assert_eq!(Screen::Density.key(), Screen::Periodicity.key() + 1);
     }
 }
