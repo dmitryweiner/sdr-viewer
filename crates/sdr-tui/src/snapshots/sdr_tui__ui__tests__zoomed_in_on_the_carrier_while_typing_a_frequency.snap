@@ -2,7 +2,7 @@
 source: crates/sdr-tui/src/ui.rs
 expression: "render(&app, 80, 24).backend()"
 ---
-"1 Spectrum 2 Channels 3 Density 4 Period 5 Log 6 Mesh 7 Panorama 8 Decoders     "
+"1 Spectrum 2 Channels 3 Period 4 Density 5 Log 6 Mesh 7 Panorama 8 Decoders     "
 "     frequency 433.5M▏  e.g. 433.92M · Enter tunes · Esc cancels                "
 " -30                                      █▁                                    "
 "                                          ██                                    "

@@ -2,7 +2,7 @@
 source: crates/sdr-tui/src/ui.rs
 expression: "render(&app_on_the_periodicity(), 160, 45).backend()"
 ---
-"1 Spectrum 2 Channels 3 Density 4 Period 5 Log 6 Mesh 7 Panorama 8 Decoders                                                                                     "
+"1 Spectrum 2 Channels 3 Period 4 Density 5 Log 6 Mesh 7 Panorama 8 Decoders                                                                                     "
 " LPD 17 · 433.475 MHz · delays to 10 s in 10 ms steps                                                                                                           "
 " Repeats every 5.00 s 92%                                                                                                                                       "
 "▄▃···········▁▅············▆············▄▃···········▁▅············▆············▄▃···········▁▅············▆············▄▃···········▁▅············▆············"
