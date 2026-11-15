@@ -430,6 +430,9 @@ impl App {
             KeyCode::End => self.mesh.move_selection(isize::MAX),
             KeyCode::Char('+' | '=') => self.mesh.zoom_in(),
             KeyCode::Char('-') => self.mesh.zoom_out(),
+            KeyCode::Char('s') => self.mesh.next_order(),
+            KeyCode::Char('a') => self.mesh.toggle_active(),
+            KeyCode::Char('m') => self.mesh.start_afresh(),
             _ => {}
         }
     }
@@ -797,6 +800,14 @@ mod tests {
         assert_eq!(app.spectrum.magnification(), 1);
         press(&mut app, KeyCode::Esc);
         assert!(app.mesh.selected().is_none() && !app.quit);
+        press(&mut app, KeyCode::Char('s'));
+        assert_eq!(app.mesh.order(), crate::mesh::Order::Hops);
+        press(&mut app, KeyCode::Char('a'));
+        assert!(app.mesh.active_only());
+        press(&mut app, KeyCode::Char('m'));
+        assert_eq!(app.mesh.since(), Some(app.mesh.now()));
+        // None of them asked anything of the receiver: no gain, no tuning.
+        assert!(app.commands.is_empty());
         // The wall clock moves the pulse along.
         app.set_wall_clock(40_000);
         assert_eq!(app.mesh.now(), 40_000);

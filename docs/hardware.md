@@ -194,6 +194,13 @@ Lora:
   `meshtasticd` looks for the radio once, at its start, so it starts
   after the power (`sudo ~/sdr-viewer-check/lora.sh on`; `off` stops it
   and cuts the power). With the power on, Reset (GPIO 25) reads high.
+  After a reboot nothing of it is up — no power, no `spidev1.0`, no
+  daemon (so it was on 2026-11-15 after a reboot at 15:45) — until
+  `lora.sh on`.
+- For an API client that is away `meshtasticd` keeps at most 100
+  packets (`MaxMessageQueue` of its config); then it drops what it hears
+  and logs `ToPhone queue is full, drop packet`, once a packet (on
+  2026-11-15 from 14:29 until a client connected at 14:44).
 - Its log then says `SX126x init result 0`, `sx1262 init success`, `API
   server listen on TCP port 4403`.
 - The node (`!015b8900`, "Meshtastic 8900", firmware 2.7.26, hardware
