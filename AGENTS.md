@@ -110,9 +110,11 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-14 `sdr-viewer` there is the build of PR #28's branch
-  (periodicity); the one before (PR #26's, `main` before periodicity) is
-  `sdr-viewer.before-period`, and `sdr-viewer.before-x` is older still. With the
+  Since 2026-11-15 `sdr-viewer` there is the build of PR #29's branch
+  (periodicity on `3`, density on `4`); PR #28's (periodicity on `4`)
+  was replaced by it; the one before that (PR #26's, `main` before
+  periodicity) is `sdr-viewer.before-period`, and `sdr-viewer.before-x`
+  is older still. With the
   receiver it makes `~/.config/sdr-viewer/channels.toml`: the user's, like
   the database — our checks use `--channels test.toml` and remove it. The user
   allows replacing `sdr-viewer` there with a newer build without asking.
