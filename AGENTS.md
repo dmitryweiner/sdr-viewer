@@ -19,10 +19,11 @@ Phases of the plan (its section 14 has the detail):
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
 | 3 Detector and log | done, and found working on the air on the device by the user (2026-11-13): the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples |
 | 4 Accumulators | done: the spectral density (screen 4) and the channel strip (screen 2) were tried by the user on the air on the device and approved (2026-11-14) — with what that trial asked for: the detector's stuck events fixed, the receiver's spike kept off the strip, `X` twice on the strip and on the log, the band's name in the spectrum's header. Periodicity (screen 3, and the period in the strip's rows), built as the user decided (the plan's section 12), was tried by them on the air and "works well" (2026-11-15); its tab was then moved right after the channels', which it reads (it was screen 4, the density 3) |
-| 5–8 | not started |
+| 5 Meshtastic | started (2026-11-15): `meshtasticd` runs on the device's LoRa radio and the node is set up (`docs/hardware.md`, section 6); the user's decisions for the app are in the plan's section 12 |
+| 6–8 | not started |
 
-Next: phase 5 (Meshtastic), of which nothing is agreed in detail and
-`meshtasticd` is not set up on the device — ask the user before building.
+Next: phase 5's first app pull request — the `meshtasticd` client and
+the pulse (`--mesh`, screen 6), in the order of the plan's section 14.
 
 ## Commands
 
@@ -82,7 +83,12 @@ request gets no run: open a draft one to get a binary.
   bus and unbinds the kernel's DVB driver, `full`
   returns to 12M, `status`.
 - `scripts/sdr-viewer-rx.sh ARGS` — on the device: `high` for as long as
-  `sdr-viewer --rtlsdr ARGS` runs, then back, however the app exits.
+  `sdr-viewer --rtlsdr ARGS` runs, then back, however the app exits; a
+  running `meshtasticd` is stopped meanwhile and started again after.
+- `scripts/lora.sh on|off|status` — on the device (root for on and off):
+  LoRa power (GPIO 16), the SPI1 overlay if missing, `meshtasticd`
+  (re)started after the power, waits for port 4403; `off` stops it and
+  cuts the power.
 - `scripts/hs-probe.sh` — the first 480M probe with `rtl_sdr`/`rtl_test`;
   kept as a cross-check against librtlsdr.
 
@@ -126,8 +132,8 @@ touching USB.
   (installed 2026-11-14 at the user's word; the one before is
   `~/sdr-viewer-check/sdr-hub-speed.before-pr19`). Tried from a cold
   start: pin low, no receiver on the bus → 3 s received, hub back at 12M.
-- **SDR and LoRa are never used at the same time** (the user's decision):
-  GPIO 7 is the SDR's power and SPI4's clock, and that is fine.
+- **SDR and LoRa are never used at the same time** (the user's decision,
+  not the board's: the radio is on SPI1, GPIO 7 is only the SDR's power).
 - `~/sdr-viewer-check/capture-433.cu8` — 10 s at 433.92 MHz, 2.4 MS/s,
   gain 30 dB, antenna on: LPD433 activity over a −71 dBFS floor. The
   detector finds 915 events in it (824 before PR #24, which stopped an
@@ -137,8 +143,14 @@ touching USB.
   channel every 2.92 s (18 of the 80 channels have a period for sure
   after 10 s). `testdata/lpd433.cu8` in the repository is 0.16 s of
   it, from 4.96 s.
-- Not set up yet: `meshtasticd` (LoRa is on `/dev/spidev4.0`), `gpsd`
-  (installed, not configured), `aiov2_ctl`.
+- `meshtasticd` 2.7.26 is installed (the Meshtastic OBS repository) and
+  set up there since 2026-11-15, as `docs/hardware.md` section 6 says:
+  not started at boot — `sudo ~/sdr-viewer-check/lora.sh on` starts it,
+  `off` stops it; the node is the user's (US, MediumFast, slot 70,
+  `CLIENT_MUTE`), do not change its settings without asking. Its API is
+  `192.168.1.246:4403`, open to the LAN: the Mac reaches it, and the
+  Meshtastic CLI in a venv on the Mac is how the node was set up.
+- Not set up yet: `gpsd` (installed, not configured), `aiov2_ctl`.
 - The terminal there: lxterminal, truecolor; the user sets the font size.
 
 ## Plans and docs

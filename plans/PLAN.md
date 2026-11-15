@@ -26,8 +26,9 @@ Main principle: every screen answers one specific question.
 
 The facts below were collected from the ClockworkPi forum before the
 device was at hand. Phase 0 checked them: `docs/hardware.md` says what is
-really there, and holds where the two differ (the tuner is an R820T; the
-SPI device is `spidev4.0`).
+really there, and holds where the two differ (the tuner is an R820T).
+The LoRa row below was right after all: phase 0 saw only `spidev4.0`,
+phase 5 found the radio on `spidev1.0` (`docs/hardware.md`, section 6).
 
 | Module | What it is | How it is connected | Note |
 |---|---|---|---|
@@ -318,8 +319,10 @@ The first useful version comes after phase 3.
 | Phase order | As in section 8: the signal log (phase 3) before Meshtastic (phase 5) |
 | Meshtastic | Through `meshtasticd` (the default, no objections) |
 | Defective USB hub | The user's device needs its hub at 12 Mbit/s for the keyboard and at 480 for the RTL-SDR (`docs/hardware.md`). Until the mainboard is replaced: a "reception without the keyboard" mode that switches the hub for the time of reception; control over SSH or Bluetooth |
-| SDR and LoRa together | Never: the user listens to one or the other. So the AIO board's GPIO 7 may be both the SDR's power and SPI4's clock (`docs/hardware.md`, section 4), and the app need not receive from the RTL-SDR while it talks to `meshtasticd` over a radio of its own |
+| SDR and LoRa together | Never: the user listens to one or the other, so the app need not receive from the RTL-SDR while it talks to `meshtasticd` over a radio of its own. (It was first thought that the board leaves no choice — GPIO 7, the SDR's power, is SPI4's clock — but the LoRa radio is on SPI1: `docs/hardware.md`, sections 4 and 6) |
 | Mesh network | Haifa: region US, preset MediumFast, frequency slot 70 = 919.375 MHz, max hops 7. Goes into the default bookmarks; the app still reads the frequency from `meshtasticd` |
+| `meshtasticd` on the device | The user's decisions (2026-11-15): we set it up (done: `docs/hardware.md`, section 6), it is not started at boot, and the node's role is `CLIENT_MUTE` — it relays nothing and sends only its own node info. The channel keys are the node's: what `meshtasticd` can decrypt is what the app reads, nothing is configured in the app |
+| The Meshtastic pulse (5.6) | The user's decisions (2026-11-15): the app talks to `meshtasticd` with `--mesh` and no SDR — no IQ source at all, not even the generator; the hub stays at 12M, so the keyboard works. `sdr-viewer-rx.sh` stops a running `meshtasticd` for the time of reception and starts it again after. Besides the pulse of 5.6 the screen shows the text of messages on the channels the node can read, telemetry (battery, channel utilisation, airtime), positions and the distance to them (ours from GPS, once there is one); packets are kept in the database, like events, for 7 days |
 | Language | UI in English; docs, README and code comments in English (the shared conventions in `~/projects/CLAUDE.md`) |
 | aarch64 build | Static musl binary built on GitHub's native arm64 runner instead of `cross` |
 | Weak one-frame events | The detector's threshold stays at 8 dB and everything it finds goes into the database; the log hides the weak ones with a filter (minimum level above the floor) whose threshold the user changes from the log screen |
@@ -374,7 +377,8 @@ As of 2026-11-15.
 | 2 | Spectrum and waterfall | Done on the generator, recordings and the RTL-SDR: bars with max hold, waterfall, a scale that follows the noise floor, cursor, tuning (`f`, `[` `]`, Enter), gain, zoom, pause, `--snapshot` |
 | 3 | Detector and log | Done; the user ran it on the air on the device on 2026-11-13 and found it working. Built: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. The spectrum shows the detector's threshold as a line and the dB above the floor in its header. The last 30 s of samples are held in a ring buffer; the log shows the picture of the selected event made of them, and `r` saves them as SigMF. The detector has regression tests on a piece of real air (`testdata/`). The status line tells overload (`clip`) and lost samples. |
 | 4 | Accumulators | Done: the spectral density (screen 5.3) and the channel strip (5.2) — their decisions are in section 12 — were tried on the air and approved by the user on 2026-11-14, together with `X` twice on the strip and the log and the band's name in the header. Periodicity (5.4), built the same day (its decision is in section 12), finds on the device's LPD433 recording that the hopper comes back to each channel every 2.92 s; the user tried it on the air on 2026-11-15 ("works well") and asked for its tab to come right after the strip's |
-| 5–8 | | Not started |
+| 5 | Meshtastic | Started 2026-11-15: `meshtasticd` runs on the device's LoRa radio and the node is set up (section 12). Planned order, each its own pull request: the client and the pulse (`--mesh`, screen 5.6 with the nodes, their packets, SNR and hops); then the packets in the database; then texts, telemetry and positions |
+| 6–8 | | Not started |
 
 Known limits of the channel strip as built:
 
