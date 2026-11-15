@@ -96,10 +96,11 @@ request gets no run: open a draft one to get a binary.
 - `scripts/sdr-viewer-rx.sh ARGS` — on the device: `high` for as long as
   `sdr-viewer --rtlsdr ARGS` runs, then back, however the app exits; a
   running `meshtasticd` is stopped meanwhile and started again after.
-- `scripts/lora.sh on|off|status` — on the device (root for on and off):
-  LoRa power (GPIO 16), the SPI1 overlay if missing, `meshtasticd`
-  (re)started after the power, waits for port 4403; `off` stops it and
-  cuts the power.
+- `scripts/lora.sh on|off|status` — on the device (root for on and off;
+  without it the script refuses): LoRa power (GPIO 16), the SPI1 overlay
+  if missing (fails if `spidev1.0` does not come), systemd's give-up of
+  an earlier crash cleared, `meshtasticd` (re)started after the power,
+  waits for port 4403; `off` stops it and cuts the power.
 - `scripts/hs-probe.sh` — the first 480M probe with `rtl_sdr`/`rtl_test`;
   kept as a cross-check against librtlsdr.
 
