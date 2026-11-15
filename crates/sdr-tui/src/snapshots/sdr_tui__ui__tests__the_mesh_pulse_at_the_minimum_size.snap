@@ -1,0 +1,28 @@
+---
+source: crates/sdr-tui/src/ui.rs
+expression: "render_text(&mesh_app(), MIN_WIDTH, MIN_HEIGHT)"
+---
+1 Spectrum 2 Channels 3 Period 4 Density 5 Log 6 Mesh 7 Panorama 8 Decoders
+ Meshtastic 8900 · 919.375 MHz US MediumFast slot 70 · 3 nodes, 2 heard
+8900 Meshtastic 8900  ·································    0 s      —     —    —
+HG1  Haifa Gate       ················▄···············▄   50 s   -9.5  -115    2
+     !43396f6c        ·································   50 m   -9.5  -115    2
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 1 m a column         −33 m         −16 m           now  heard    SNR  RSSI hops
+generator │ 433.920 MHz │ 2.400 MS/s │ rx 2.398 MS/s              ? help  q quit

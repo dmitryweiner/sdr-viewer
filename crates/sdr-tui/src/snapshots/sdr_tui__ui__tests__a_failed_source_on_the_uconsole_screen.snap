@@ -3,10 +3,10 @@ source: crates/sdr-tui/src/ui.rs
 expression: "render(&app, 160, 45).backend()"
 ---
 "1 Spectrum 2 Channels 3 Period 4 Density 5 Log 6 Mesh 7 Panorama 8 Decoders                                                                                     "
-"┌ Meshtastic pulse ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
-"│                                                                   Is my mesh network alive?                                                                  │"
+"┌ Panorama ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐"
+"│                                                              Which frequencies are busy at all?                                                              │"
 "│                                                                                                                                                              │"
-"│                                                          This screen arrives in phase 5 of the plan.                                                         │"
+"│                                                          This screen arrives in phase 6 of the plan.                                                         │"
 "│                                                                                                                                                              │"
 "│                                                                                                                                                              │"
 "│                                                                                                                                                              │"

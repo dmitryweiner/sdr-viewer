@@ -19,11 +19,12 @@ Phases of the plan (its section 14 has the detail):
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
 | 3 Detector and log | done, and found working on the air on the device by the user (2026-11-13): the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples |
 | 4 Accumulators | done: the spectral density (screen 4) and the channel strip (screen 2) were tried by the user on the air on the device and approved (2026-11-14) — with what that trial asked for: the detector's stuck events fixed, the receiver's spike kept off the strip, `X` twice on the strip and on the log, the band's name in the spectrum's header. Periodicity (screen 3, and the period in the strip's rows), built as the user decided (the plan's section 12), was tried by them on the air and "works well" (2026-11-15); its tab was then moved right after the channels', which it reads (it was screen 4, the density 3) |
-| 5 Meshtastic | started (2026-11-15): `meshtasticd` runs on the device's LoRa radio and the node is set up (`docs/hardware.md`, section 6); the user's decisions for the app are in the plan's section 12 |
+| 5 Meshtastic | started (2026-11-15): `meshtasticd` runs on the device's LoRa radio and the node is set up (`docs/hardware.md`, section 6); the user's decisions for the app are in the plan's section 12. Built: the client (`sdr-mesh`) and the pulse (`--mesh`, screen 6), tried from the Mac against the device's node over the LAN; not yet by the user, nor on the device itself |
 | 6–8 | not started |
 
-Next: phase 5's first app pull request — the `meshtasticd` client and
-the pulse (`--mesh`, screen 6), in the order of the plan's section 14.
+Next: the user's trial of the pulse, and what it asks for; then the
+mesh's packets in the database, then texts, telemetry and positions (the
+plan's section 14).
 
 ## Commands
 
@@ -51,6 +52,14 @@ the pulse (`--mesh`, screen 6), in the order of the plan's section 14.
   row), `--screen 4` the density screen instead.
 - `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
   of the generator and of the IQ ring per sample.
+- `cargo run --release -- --mesh[=HOST[:PORT]]` — the Meshtastic pulse
+  from `meshtasticd`'s API (4403); alone it opens no receiver, beside a
+  file or `--rtlsdr` both run. The device's node answers the Mac too:
+  `--mesh=192.168.1.246`. `--snapshot 160x45 --screen 6 --secs 20`
+  prints the pulse and the packets heard, and fails without an answer.
+- `SDR_MESH_ADDR=192.168.1.246 cargo test -p sdr-mesh -- --ignored
+  --nocapture live_` — what 15 s of a real node bring, as the client's
+  updates.
 
 CI (`.github/workflows/ci.yml`) runs on pull requests and on `main`:
 `check.sh` on Linux x86-64; tests and a static `aarch64-unknown-linux-musl`
@@ -196,6 +205,15 @@ a crate is added in the phase that needs it):
   of the text as it is).
 - `sdr-rtl` — `RtlSource`: the RTL-SDR through `rtl-sdr-rs` (pure Rust on
   `nusb`), queued transfers, gain along the tuner's own steps, retuning.
+- `sdr-mesh` — `meshtasticd`'s TCP API: `proto` (Meshtastic's protobuf
+  files of `proto/`, tag v2.7.26, compiled by `build.rs` with `protox`
+  and `prost-build`, no `protoc`), `frame` (0x94 0xC3 + length;
+  `Deframer`), `lora` (`Radio`: region, preset, slot and its frequency,
+  worked out as the firmware does), `session` (`Session`: the request
+  for the configuration, the heartbeat, `FromRadio` → `MeshUpdate`s),
+  `update` (the plain types the interface gets: `MeshUpdate`, `Ready`,
+  `Node`, `NodeUser`, `Packet`, `Content`), `client` (`run`: connect,
+  read, heartbeat a minute, connect again after 5 s; `tcp`).
 - `sdr-tui` — `app` (state, keys and the `Command`s they ask of the
   source; no drawing), `ui` (frame of the interface, `render_text`),
   `spectrum` (the spectrum screen's state and arithmetic: columns, scale,
@@ -208,7 +226,10 @@ a crate is added in the phase that needs it):
   busy milliseconds per second of the last 4 h, the selection, the time
   scale; each channel's `Bursts` and its period), `channels_ui`, `period`
   (`Bursts`: when a channel was on; the envelope of a range of `DELAYS`,
-  its `Analysis`, the channel's `Period`), `period_ui`.
+  its `Analysis`, the channel's `Period`), `period_ui`, `mesh`
+  (`MeshView`: the link, what the node told, a `NodeRow` per node with
+  the times of its packets of the last day, the selection, the time
+  scale of the wall clock), `mesh_ui`.
   Snapshot tests in
   `src/snapshots/`.
 - `sdr-viewer` — the binary: `cli` (arguments → source), `pipeline`
@@ -225,8 +246,10 @@ a crate is added in the phase that needs it):
   week's history, start the writer thread, which first deletes what is
   older), `writer` (the loop of a thread that writes: one write a second),
   `channels` (read the channels file; the thread that adds to it),
-  `snapshot` (`--snapshot`), `main` (terminal loop, redraws only when
-  something changed).
+  `mesh` (the client's thread, its updates as `Update::Mesh`; the
+  pulse's snapshot), `snapshot` (`--snapshot`), `main` (`Reception`: the
+  threads of a source; the terminal loop, redraws only when something
+  changed, and once a second on the pulse).
 
 ## Invariants
 
@@ -310,6 +333,15 @@ a crate is added in the phase that needs it):
 - The help shows the open screen's keys and the global ones: all keys at
   once do not fit 80×24 (a test renders every screen's help there).
 - `unsafe_code = "forbid"` across the workspace.
+- The app transmits nothing on the mesh: it asks `meshtasticd` for its
+  configuration and sends heartbeats, nothing else. Nothing of the
+  protobuf messages leaves `sdr-mesh`: the interface gets plain types.
+- A packet's time is the node's (`rx_time`): `meshtasticd` keeps packets
+  for a client that is not connected and hands them over at the next
+  connection, all in one second. The pulse is on the wall clock (Unix
+  seconds, given to the interface once a second), not on stream time.
+- The mesh's thread is never waited for: it keeps nothing, and a
+  connection attempt may take 3 s.
 - The numbers of the reference recording's tests (`pipeline.rs`) change
   only on purpose too: look at what the detector now finds in
   `testdata/lpd433.cu8` first.
@@ -340,6 +372,8 @@ Measured on the dev Mac (Apple Silicon), release build:
 | The detector's fix of PR #24 on the CM4 (the recording looped, 160×45, 15 s, before and after) | nothing measurable: spectrum 38 → 36 and 35%, channel strip 22 → 19% |
 | The density on the CM4 (the recording looped, 160×45, 15 s, main's build and PR #22's side by side, twice) | gathering it costs nothing measurable: spectrum (`--keys 1`) 37 and 34% before, 35 and 36% with it. The density screen (`--keys 3`) **33 and 34%** of a core, 0.6 MB/s to the terminal against the spectrum's 0.9 |
 | Periodicity on the CM4 (the recording looped, 160×45, 15 s, PR #26's build and PR #28's side by side; 80 channels) | keeping bursts and working out one channel's period a frame costs nothing measurable: strip (`--keys 2`) 24 → 25% of a core, spectrum (`--keys 1`) 36 → 37%. The periodicity screen with a channel selected (`--keys $'4\x1b[B\x1b[B\x1b[B'`) **20%**, 11 kB/s to the terminal. On the Mac (generator, 12 s): spectrum 16%, strip 12%, periodicity 12% |
+| `sdr-mesh`'s protobuf types (`build.rs`: `protox` + `prost-build`, ~10 500 lines of Rust) | ~10 s on a clean debug build of the crate; nothing on later builds unless `proto/` changes |
+| The Meshtastic pulse on the Mac (`smoke.py --keys $'6\x1b[B\x1b[B-+?1' --secs 8 -- --mesh=192.168.1.246`, the device's node over the LAN) | 0% of one core, 23 KiB to the terminal in 8 s |
 | Static aarch64 binary from CI | 5.3 MB with periodicity; 5.1 MB before (4.8 before the `toml` crate, 2.4 before SQLite) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:

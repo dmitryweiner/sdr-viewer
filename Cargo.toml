@@ -12,6 +12,7 @@ repository = "https://github.com/dmitryweiner/sdr-viewer"
 sdr-core = { path = "crates/sdr-core" }
 sdr-detect = { path = "crates/sdr-detect" }
 sdr-dsp = { path = "crates/sdr-dsp" }
+sdr-mesh = { path = "crates/sdr-mesh" }
 sdr-rtl = { path = "crates/sdr-rtl" }
 sdr-store = { path = "crates/sdr-store" }
 sdr-tui = { path = "crates/sdr-tui" }
@@ -27,6 +28,12 @@ rusqlite = { version = "0.42", features = ["bundled"] }
 # Reads the channels file; what is added to it is written by hand, so the
 # user's own lines and comments stay as they are.
 toml = "1.2"
+# Meshtastic's protobuf messages; their Rust types are generated at build
+# time by prost-build from the files compiled by protox (pure Rust, so
+# neither CI nor the device needs protoc).
+prost = "0.14"
+prost-build = "0.14"
+protox = "0.10"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

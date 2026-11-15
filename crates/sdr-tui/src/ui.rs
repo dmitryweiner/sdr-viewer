@@ -9,6 +9,7 @@ use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use sdr_core::units::{format_hz, format_rate};
 
 use crate::app::{App, Screen, SourceState};
+use crate::mesh::Link;
 
 /// The plan's minimum terminal; the uConsole gives about 160×45.
 pub const MIN_WIDTH: u16 = 80;
@@ -47,6 +48,11 @@ const PERIOD_KEYS: [(&str, &str); 3] = [
     ("Enter", "tune to the selected channel"),
 ];
 
+const MESH_KEYS: [(&str, &str); 2] = [
+    ("↑, ↓", "select a node (PgUp, PgDn, Home, End)"),
+    ("+, -", "fewer, more minutes to a column"),
+];
+
 const LOG_KEYS: [(&str, &str); 6] = [
     ("↑, ↓", "select an event (PgUp, PgDn, Home, End)"),
     ("+, -", "raise, lower the level that hides weak events"),
@@ -64,6 +70,7 @@ fn keys(screen: Screen) -> Vec<(&'static str, &'static str)> {
         Screen::Channels => &CHANNEL_KEYS,
         Screen::Periodicity => &PERIOD_KEYS,
         Screen::Log => &LOG_KEYS,
+        Screen::Mesh => &MESH_KEYS,
         _ => &[],
     };
     let m = match screen {
@@ -87,7 +94,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
     ])
     .areas(area);
     frame.render_widget(tab_bar(app.screen), tabs);
+    let sdr_screen = !matches!(
+        app.screen,
+        Screen::Mesh | Screen::Panorama | Screen::Decoders
+    );
     match app.screen {
+        screen if sdr_screen && app.status.state == SourceState::Off => {
+            frame.render_widget(no_receiver(screen), body);
+        }
         Screen::Spectrum => {
             crate::spectrum_ui::draw(frame, &app.spectrum, app.input.as_deref(), body);
         }
@@ -100,6 +114,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             crate::period_ui::draw(frame, &app.channels, app.delay_scale(), body);
         }
         Screen::Log => crate::log_ui::draw(frame, &app.log, app.picture(), body),
+        Screen::Mesh => crate::mesh_ui::draw(frame, &app.mesh, body),
         screen => frame.render_widget(placeholder(screen), body),
     }
     draw_status(frame, app, status);
@@ -175,8 +190,33 @@ fn placeholder(screen: Screen) -> Paragraph<'static> {
         .block(Block::bordered().title(format!(" {} ", screen.title())))
 }
 
+/// A screen of the receiver in a run that has none.
+fn no_receiver(screen: Screen) -> Paragraph<'static> {
+    let text = Text::from(vec![
+        Line::from(screen.question()).bold(),
+        Line::default(),
+        Line::from("No receiver in this run: it was started with --mesh alone.").dark_gray(),
+        Line::from("A recording or --rtlsdr beside --mesh fills this screen.").dark_gray(),
+    ]);
+    Paragraph::new(text)
+        .centered()
+        .block(Block::bordered().title(format!(" {} ", screen.title())))
+}
+
 fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     let separator = || Span::raw(" │ ").dark_gray();
+    if app.status.state == SourceState::Off && app.notice.is_none() && app.done.is_none() {
+        let link = match &app.mesh.link {
+            Link::Off => Span::raw("no meshtasticd").yellow(),
+            Link::Connecting(addr) => Span::raw(format!("connecting to {addr}")).yellow(),
+            Link::Connected => Span::raw("meshtasticd connected"),
+            Link::Lost(why) => Span::raw(format!("meshtasticd: {why}")).red(),
+        };
+        let left = Line::from(vec![Span::raw("mesh only").bold(), separator(), link]);
+        frame.render_widget(left, area);
+        frame.render_widget(help_and_quit().right_aligned(), area);
+        return;
+    }
     let state = match (&app.notice, &app.done, &app.status.state) {
         (Some(notice), ..) => Span::raw(notice.clone()).red(),
         (None, Some(done), _) => Span::raw(done.clone()).green(),
@@ -184,6 +224,7 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             SourceState::Running => Span::raw(format!("rx {}", format_rate(app.status.rate))),
             SourceState::Ended => Span::raw("ended").yellow(),
             SourceState::Failed(message) => Span::raw(format!("error: {message}")).red(),
+            SourceState::Off => Span::raw("no receiver").yellow(),
         },
     };
     let mut left = vec![
@@ -199,17 +240,21 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         left.extend(health(app));
     }
     let left = Line::from(left);
-    let right = Line::from(vec![
-        Span::raw("?").yellow(),
-        Span::raw(" help  "),
-        Span::raw("q").yellow(),
-        Span::raw(" quit"),
-    ]);
+    let right = help_and_quit();
     let right_width = u16::try_from(right.width()).unwrap_or(u16::MAX);
     let [left_area, right_area] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(right_width)]).areas(area);
     frame.render_widget(left, left_area);
     frame.render_widget(right, right_area);
+}
+
+fn help_and_quit() -> Line<'static> {
+    Line::from(vec![
+        Span::raw("?").yellow(),
+        Span::raw(" help  "),
+        Span::raw("q").yellow(),
+        Span::raw(" quit"),
+    ])
 }
 
 fn draw_help(frame: &mut Frame, screen: Screen, body: Rect) {
@@ -1035,9 +1080,46 @@ mod tests {
     #[test]
     fn a_failed_source_on_the_uconsole_screen() {
         let mut app = app();
-        app.screen = Screen::Mesh;
+        app.screen = Screen::Panorama;
         app.status.state = SourceState::Failed("usb device not found".into());
         insta::assert_snapshot!(render(&app, 160, 45).backend());
+    }
+
+    fn mesh_app() -> App {
+        let mut app = app();
+        app.mesh = crate::mesh::tests::view();
+        app.mesh.link = Link::Connected;
+        app.screen = Screen::Mesh;
+        app
+    }
+
+    #[test]
+    fn the_mesh_pulse_with_a_node_selected_on_the_uconsole_screen() {
+        let mut app = mesh_app();
+        app.mesh.move_selection(1);
+        app.mesh.move_selection(1);
+        insta::assert_snapshot!(render(&app, 160, 45).backend());
+    }
+
+    #[test]
+    fn the_mesh_pulse_at_the_minimum_size() {
+        insta::assert_snapshot!(render_text(&mesh_app(), MIN_WIDTH, MIN_HEIGHT));
+    }
+
+    #[test]
+    fn without_a_receiver_its_screens_say_so_and_the_status_tells_the_mesh() {
+        let mut app = mesh_app();
+        app.status.state = SourceState::Off;
+        app.screen = Screen::Spectrum;
+        let text = render_text(&app, MIN_WIDTH, MIN_HEIGHT);
+        assert!(text.contains("No receiver in this run"), "{text}");
+        assert!(text.contains("mesh only │ meshtasticd connected"), "{text}");
+        app.screen = Screen::Mesh;
+        let text = render_text(&app, MIN_WIDTH, MIN_HEIGHT);
+        assert!(text.contains("Meshtastic 8900"), "{text}");
+        app.mesh.link = Link::Lost("connection refused".into());
+        let text = render_text(&app, MIN_WIDTH, MIN_HEIGHT);
+        assert!(text.contains("meshtasticd: connection refused"), "{text}");
     }
 
     #[test]

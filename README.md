@@ -182,6 +182,34 @@ samples: time runs across, from 50 ms before the event to 50 ms after it
 event and at least 40 kHz; `▲` marks where the event begins and ends. It
 needs the samples to be still held (see below), like saving.
 
+The Meshtastic pulse (`6`) answers "is my mesh network alive?". It
+talks to `meshtasticd` over its API (TCP port 4403) — `--mesh` on the
+same machine, `--mesh=HOST[:PORT]` on another; the app transmits nothing
+itself. One row per node the daemon knows or that was heard in this run
+— the node itself first, then the last heard — with its short and long
+name, a tick for each of its packets on one time axis of the wall clock
+(now at the right), how long ago it was heard, and the SNR, RSSI and hops
+of its last packet. Packets on a channel the node has no key for count
+too: their header is in the clear. The selected node's card names its id,
+hardware and role, and tells its last packet: what it was, to whom, on
+which channel (or the channel's hash, without a key), how it arrived and
+which node relayed it last. When `meshtasticd` has packets kept for a
+client, they arrive at the connection with the times the node heard them.
+
+| Key | What |
+|---|---|
+| `↑` `↓` `PgUp` `PgDn` `Home` `End` | select a node (`Esc` lets go) |
+| `+` `-` | fewer, more minutes to a column: 1, 5, 15, 60 |
+
+`--mesh` alone opens no receiver at all — on the uConsole the SDR and the
+LoRa radio are not used together — and the screens of the receiver say
+so; with a recording or `--rtlsdr` both run.
+
+```sh
+sdr-viewer --mesh                                      # meshtasticd on this machine
+sdr-viewer --mesh=192.168.1.246 --snapshot 160x45 --screen 6 --secs 20
+```
+
 ### Saving an event's samples
 
 The app holds the last 30 s of samples in memory (`--iq-buffer SECS`;
@@ -243,7 +271,9 @@ cargo run --release -- capture.cu8 --rate 2.4M --center 433.92M --snapshot 160x4
 `--screen 2` prints the channel strip instead of the spectrum, `--screen 3`
 the periodicity of the channel that repeats most surely, `--screen 4` the
 density; `--channels FILE` gives a snapshot its channels (it adds none to
-the file).
+the file). `--screen 6` with `--mesh` prints the Meshtastic pulse after
+`--secs` of the node's talk, and the packets heard; it fails when
+`meshtasticd` does not answer.
 
 On the uConsole: take the static `aarch64` binary from the CI artifact
 `sdr-viewer-aarch64`. The first run on a device is the
