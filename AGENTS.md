@@ -127,8 +127,10 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-15 `sdr-viewer` there is the build of PR #31's branch
-  (the pulse, `--mesh`); PR #29's (periodicity on `3`, no mesh) is
+  Since 2026-11-15 `sdr-viewer` there is the build of PR #32's branch
+  (the pulse as its first trial changed it; with `meshtasticd` down it
+  names `sudo /home/dmw/sdr-viewer-check/lora.sh on`); PR #31's (the
+  pulse as first tried) is `sdr-viewer.before-trial`; PR #29's (periodicity on `3`, no mesh) is
   `sdr-viewer.before-mesh`; PR #26's (`main` before periodicity) is
   `sdr-viewer.before-period`, and `sdr-viewer.before-x` is older still. With the
   receiver it makes `~/.config/sdr-viewer/channels.toml`: the user's, like
