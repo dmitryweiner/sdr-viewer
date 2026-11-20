@@ -25,9 +25,12 @@ Phases of the plan (its section 14 has the detail):
 
 Next: alerts, each its own pull request — (1) the rules of
 `alerts.toml`, an alert on the status line and a tone through the
-speaker (PR #38); (2) `!` on the channel strip and the log, which
-appends a rule; (3) recording the event's own band, decimated, with the
-limit.
+speaker (PR #38, merged); (2) `!` on the channel strip and the log,
+which appends a rule (PR #39, merged); (3) recording the event's own
+band, decimated, with the limit (PR #40; its 4 at once approved by the
+user); (4) `!` again on the band of a rule removes it from the file,
+and the strip marks the channels that have one (the user's ask after
+#39).
 Open questions are in the plan's section 13. SDR and LoRa stay apart
 (asked again on 2026-11-20: never together).
 
