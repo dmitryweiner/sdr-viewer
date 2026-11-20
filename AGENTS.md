@@ -141,7 +141,12 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-20 `sdr-viewer` there is PR #40's build (recording on
+  Since 2026-11-20 `sdr-viewer` there is PR #41's build (`!` again and
+  `R`: tried there with the generator, `--alerts test-toggle.toml` and
+  `--iq-dir iq-test` — `!` and `R R` on the burst's channel wrote
+  `record = true` and its next bursts were recorded at 50 kS/s; `R` and
+  `!` again left the file with its header alone; removed after); PR
+  #40's first build is `sdr-viewer.before-toggle` (recording on
   an alert: tried there on `capture-433.cu8` with `--iq-dir iq-test` and
   a rule on 433.475 MHz — a file per return of the hopper, read back
   with `--format cs16 --rate 50k`; removed after); PR #39's is
