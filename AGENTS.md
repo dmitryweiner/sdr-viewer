@@ -25,8 +25,9 @@ Phases of the plan (its section 14 has the detail):
 
 Next: alerts, each its own pull request — (1) the rules of
 `alerts.toml`, an alert on the status line and a tone through the
-speaker; (2) the key on the channel strip and the log that appends a
-rule; (3) recording the event's own band, decimated, with the limit.
+speaker (PR #38); (2) `!` on the channel strip and the log, which
+appends a rule; (3) recording the event's own band, decimated, with the
+limit.
 Open questions are in the plan's section 13. SDR and LoRa stay apart
 (asked again on 2026-11-20: never together).
 
@@ -236,7 +237,8 @@ a crate is added in the phase that needs it):
   pair (the JSON is written by hand); `channels`: the channels file
   (TOML read with the `toml` crate, additions written by hand to the end
   of the text as it is); `alerts`: the alerts file (`HEADER` with the
-  example, `parse`, `load`, `make`).
+  example, `parse`, `load`, `make`, `append` and `add` — every key
+  written).
 - `sdr-rtl` — `RtlSource`: the RTL-SDR through `rtl-sdr-rs` (pure Rust on
   `nusb`), queued transfers, gain along the tuner's own steps, retuning.
 - `sdr-mesh` — `meshtasticd`'s TCP API: `proto` (Meshtastic's protobuf
@@ -255,7 +257,8 @@ a crate is added in the phase that needs it):
   read, heartbeat a minute, connect again after 5 s; `tcp`).
 - `sdr-tui` — `app` (state, keys and the `Command`s they ask of the
   source; no drawing), `ui` (frame of the interface, `render_text`),
-  `alerts` (`AlertsView`: the alerts by rule, the latest, its
+  `alerts` (`AlertsView`: the rules, those made with `!` for the file,
+  a band's second rule refused; the alerts by rule, the latest, its
   brightness and whether a tone is due, in stream time),
   `spectrum` (the spectrum screen's state and arithmetic: columns, scale,
   zoom, palette), `spectrum_ui` (drawing it), `log` (the signal log's
@@ -296,8 +299,9 @@ a crate is added in the phase that needs it):
   week's texts before it, the writer told `MeshKept`: the client's
   updates with their time, and the erasing), `writer` (the loop of a thread that writes: one write a second),
   `channels` (read the channels file; the thread that adds to it),
-  `alerts` (read, or make, the alerts file; the tone's WAV and its
-  thread, which plays it with `aplay`),
+  `alerts` (read, or make, the alerts file; the thread that adds the
+  rules made with `!` to it; the tone's WAV and its thread, which plays
+  it with `aplay`),
   `mesh` (the client's thread, its updates as `Update::Mesh`;
   `for_the_pulse`: the kept history as the view takes it; the pulse's
   snapshot), `snapshot` (`--snapshot`), `main` (`Reception`: the
@@ -330,6 +334,10 @@ a crate is added in the phase that needs it):
   the reader as `Command::AddRule`, the file's sent before it starts.
   The tone's thread is never waited for, and plays nothing that was
   asked while it played.
+- The alerts file is the user's, like the channels file: the app makes
+  it when it is missing, reads it at the start and only appends (the
+  rules made with `!`, by a thread of its own, re-reading the disk
+  first); a file that does not parse is refused and never written.
 - Only the writer threads touch the database after start-up — the
   events' and the mesh's, each with a connection of its own (WAL; SQLite
   makes one wait for the other); the reader hands events over an

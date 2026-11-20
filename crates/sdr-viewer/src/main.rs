@@ -26,6 +26,7 @@ use ratatui::crossterm::event::{self, Event};
 use sdr_core::{IqRing, Source, SourceInfo};
 use sdr_detect::{Channel, Rule};
 use sdr_mesh::update::MeshUpdate;
+use sdr_tui::alerts::AlertsView;
 use sdr_tui::channels::ChannelsView;
 use sdr_tui::log::WallClock;
 use sdr_tui::{App, Command, Screen, SourceState, ui};
@@ -104,12 +105,17 @@ fn run(args: &cli::Args) -> Result<ExitCode, String> {
     };
     let reception = match source {
         Some(source) => {
-            let parts = (listed, channels_path, rules);
+            let files = UserFiles {
+                channels: listed,
+                channels_path,
+                rules,
+                alerts_path,
+            };
             Some(Reception::start(
                 source,
                 args,
                 &mut app,
-                parts,
+                files,
                 (&updates_tx, &stop),
                 utc_offset_s,
             )?)
@@ -215,6 +221,7 @@ fn interface(
             }
             if let Some(reception) = reception {
                 reception.save_channels(app);
+                reception.save_rules(app);
             }
             // The pulse moves with the wall clock, a second at a time.
             let now = mesh::unix_now();
@@ -254,6 +261,15 @@ fn interface(
     result
 }
 
+/// What the user's files gave at the start, and where they are: the
+/// channels and the alerts' rules.
+struct UserFiles {
+    channels: Vec<Channel>,
+    channels_path: Option<PathBuf>,
+    rules: Vec<Rule>,
+    alerts_path: Option<PathBuf>,
+}
+
 /// The threads of a source: the reader, the store's writer, the worker
 /// that saves and pictures samples, the channels' saver, the alerts'
 /// tone (not waited for at the end).
@@ -266,6 +282,9 @@ struct Reception {
     worker: JoinHandle<()>,
     new_channels: Option<Sender<Vec<sdr_tui::channels::Change>>>,
     saver: Option<JoinHandle<()>>,
+    /// The rules made with `!`, to their file, by a thread of their own.
+    new_rules: Option<Sender<Vec<Rule>>>,
+    rules_saver: Option<JoinHandle<()>>,
 }
 
 impl Reception {
@@ -273,11 +292,21 @@ impl Reception {
         source: Box<dyn Source>,
         args: &cli::Args,
         app: &mut App,
-        (listed, channels_path, rules): (Vec<Channel>, Option<PathBuf>, Vec<Rule>),
+        files: UserFiles,
         (updates_tx, stop): (&SyncSender<Update>, &Arc<AtomicBool>),
         utc_offset_s: i32,
     ) -> Result<Self, String> {
+        let UserFiles {
+            channels: listed,
+            channels_path,
+            rules,
+            alerts_path,
+        } = files;
         app.channels = ChannelsView::new(listed);
+        app.alerts = AlertsView::new(rules.clone(), alerts_path.is_some());
+        let (new_rules, rules_saver) = alerts_path
+            .map(|path| alerts::save(path, updates_tx.clone()))
+            .unzip();
         let (commands_tx, commands_rx) = channel();
         // The rules hold from the first samples on.
         for rule in rules {
@@ -339,7 +368,17 @@ impl Reception {
             worker,
             new_channels,
             saver,
+            new_rules,
+            rules_saver,
         })
+    }
+
+    /// Hands the rules made since the last look to their saver.
+    fn save_rules(&self, app: &mut App) {
+        let rules = app.alerts.take_new();
+        if let (Some(new_rules), false) = (&self.new_rules, rules.is_empty()) {
+            let _ = new_rules.send(rules);
+        }
     }
 
     /// Hands the channels made since the last look to their saver.
@@ -362,6 +401,11 @@ impl Reception {
         // And the channels made a moment ago be added to their file.
         drop(self.new_channels);
         if let Some(saver) = self.saver {
+            let _ = saver.join();
+        }
+        // And the rules made with `!`.
+        drop(self.new_rules);
+        if let Some(saver) = self.rules_saver {
             let _ = saver.join();
         }
     }

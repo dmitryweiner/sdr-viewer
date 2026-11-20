@@ -1,8 +1,12 @@
 //! Interface state and what the keys do to it; no drawing here.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use sdr_core::units::parse_hz;
+use std::time::Duration;
+
+use sdr_core::units::{format_hz, parse_hz};
 use sdr_core::{GainChange, SourceInfo, SpectrumFrame};
+use sdr_detect::alert::DEFAULT_MIN_ABOVE_DB;
+use sdr_detect::channel::MIN_WIDTH_HZ;
 use sdr_detect::{Alert, DensityMap, Event, Levels, Rule};
 use sdr_mesh::update::MeshUpdate;
 
@@ -154,7 +158,7 @@ pub enum Command {
     /// Forget what the mesh told, in the database: the nodes were erased.
     EraseMesh,
     /// Hold the events going on against this rule too: one of the
-    /// alerts file's, at the start.
+    /// alerts file's, at the start, or one made with `!`.
     AddRule(Rule),
 }
 
@@ -432,7 +436,35 @@ impl App {
                 }
             },
             KeyCode::Enter => self.tune_to_selected_channel(),
+            KeyCode::Char('!') => match self.channels.selected() {
+                Some(channel) => {
+                    let name =
+                        (channel.name.clone()).unwrap_or_else(|| format_hz(channel.center_hz));
+                    let (center_hz, width_hz) = (channel.center_hz, channel.width_hz);
+                    self.alert_on(name, center_hz, width_hz);
+                }
+                None => self.notice = Some("select a channel first: ↑ ↓".into()),
+            },
             _ => {}
+        }
+    }
+
+    /// Makes a rule for the band: an alert on what comes there from now
+    /// on, kept in the alerts file when there is one.
+    fn alert_on(&mut self, name: String, center_hz: f64, width_hz: f64) {
+        let rule = Rule {
+            name,
+            low_hz: center_hz - width_hz / 2.0,
+            high_hz: center_hz + width_hz / 2.0,
+            min_duration: Duration::ZERO,
+            min_above_db: DEFAULT_MIN_ABOVE_DB,
+        };
+        match self.alerts.add(rule.clone()) {
+            Ok(done) => {
+                self.commands.push(Command::AddRule(rule));
+                self.done = Some(done);
+            }
+            Err(why) => self.notice = Some(why),
         }
     }
 
@@ -481,6 +513,15 @@ impl App {
             KeyCode::Char('-') => self.log.lower_filter(),
             KeyCode::Char('s') => self.log.next_sort(),
             KeyCode::Char('r') => self.save_selected(),
+            // The event's band as a channel made for it would have it.
+            KeyCode::Char('!') => match self.log.selected_event() {
+                Some(event) => {
+                    let center_hz = (event.center_hz() / 1e3).round() * 1e3;
+                    let width_hz = (event.width_hz().max(MIN_WIDTH_HZ) / 100.0).round() * 100.0;
+                    self.alert_on(format_hz(center_hz), center_hz, width_hz);
+                }
+                None => self.notice = Some("select an event first: ↑ ↓".into()),
+            },
             // Not to be undone: asked twice.
             KeyCode::Char('X') => match self.log.ended() {
                 0 => self.notice = Some("the log has no ended events: nothing to erase".into()),
@@ -1069,6 +1110,81 @@ mod tests {
             app.notice.as_deref(),
             Some("an earlier run's samples are gone")
         );
+    }
+
+    #[test]
+    fn exclamation_on_the_strip_alerts_on_the_selected_channel() {
+        use crate::log::tests::event;
+        let mut app = app();
+        app.channels = ChannelsView::new(vec![sdr_detect::Channel {
+            name: Some("LPD 17".into()),
+            center_hz: 433.475e6,
+            width_hz: 12.5e3,
+            hidden: false,
+        }]);
+        app.on_events(vec![event(100, 50, 100.0, 20.0)]);
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('!'));
+        assert!(app.commands.is_empty());
+        assert_eq!(app.notice.as_deref(), Some("select a channel first: ↑ ↓"));
+        // The made channel, 433.100 MHz and 10 kHz: by its frequency.
+        press(&mut app, KeyCode::Home);
+        press(&mut app, KeyCode::Char('!'));
+        let made = Rule {
+            name: "433.100 MHz".into(),
+            low_hz: 433.095e6,
+            high_hz: 433.105e6,
+            min_duration: Duration::ZERO,
+            min_above_db: 10.0,
+        };
+        assert_eq!(app.commands, [Command::AddRule(made)]);
+        assert_eq!(
+            app.done.as_deref(),
+            Some("alert on 433.100 MHz for this run: there is no alerts file")
+        );
+        press(&mut app, KeyCode::Char('!'));
+        assert_eq!(app.commands.len(), 1);
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("an alert watches that band already: 433.100 MHz")
+        );
+        // A named one by its name.
+        press(&mut app, KeyCode::End);
+        press(&mut app, KeyCode::Char('!'));
+        match &app.commands[1] {
+            Command::AddRule(rule) => {
+                assert_eq!(rule.name, "LPD 17");
+                assert_eq!((rule.low_hz, rule.high_hz), (433.46875e6, 433.48125e6));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(app.alerts.rules().len(), 2);
+    }
+
+    #[test]
+    fn exclamation_in_the_log_alerts_on_the_selected_events_band() {
+        let mut app = app_on_the_log();
+        app.alerts = AlertsView::new(Vec::new(), true);
+        press(&mut app, KeyCode::Char('!'));
+        assert_eq!(app.notice.as_deref(), Some("select an event first: ↑ ↓"));
+        // The newest first: 433.050 MHz, 5 kHz wide; a rule is 10 at least.
+        press(&mut app, KeyCode::Down);
+        // Selecting it asked for its picture.
+        app.commands.clear();
+        press(&mut app, KeyCode::Char('!'));
+        let rule = Rule {
+            name: "433.050 MHz".into(),
+            low_hz: 433.045e6,
+            high_hz: 433.055e6,
+            min_duration: Duration::ZERO,
+            min_above_db: 10.0,
+        };
+        assert_eq!(app.commands, [Command::AddRule(rule.clone())]);
+        assert_eq!(
+            app.done.as_deref(),
+            Some("alert on 433.050 MHz added to the alerts file")
+        );
+        assert_eq!(app.alerts.take_new(), [rule]);
     }
 
     #[test]

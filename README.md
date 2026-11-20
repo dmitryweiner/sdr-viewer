@@ -307,9 +307,16 @@ min_ms = 1000          # optional: on for at least this long (0)
 min_db = 20            # optional: its peak this far above the noise (10)
 ```
 
-The app reads the file when it starts and never writes to it. A rule
-that does not read — a key mistyped too — stops the app at the start
-with what is wrong.
+`!` on the channel strip makes a rule for the selected channel (by its
+name, or its frequency); in the log, for the selected event's band (at
+least 10 kHz wide). It holds at once, and goes to the end of the file
+with every key written, ready to be changed: `min_ms = 0`, `min_db = 10`.
+A band that has a rule already gets no second one.
+
+The app reads the file when it starts and only ever adds to its end:
+what you wrote stays as it is. Edit it while the app is not running, or
+your changes hold only from the next start. A rule that does not read —
+a key mistyped too — stops the app at the start with what is wrong.
 
 ### The event database
 
