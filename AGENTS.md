@@ -131,11 +131,12 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-20 `sdr-viewer` there is PR #35's build (the mesh's
+  Since 2026-11-20 `sdr-viewer` there is PR #36's build (texts,
+  telemetry and positions); PR #35's (the mesh's
   database: its first run with `--mesh` or `--rtlsdr` brings the user's
   `events.db` up to layout 2, which the older builds below then refuse —
   they run with `--no-db`; `events.db.before-mesh-db` there is a copy of
-  the user's file before it, 3.9 MB). PR #34's (the node's own
+  the user's file before it, 3.9 MB) is `sdr-viewer.before-texts`. PR #34's (the node's own
   row: its `--snapshot --screen 6 -- --mesh` there showed the node's
   minute telemetry as `•` and `→ this app`, not heard) is
   `sdr-viewer.before-mesh-db`; PR #32's (the
