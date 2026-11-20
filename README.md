@@ -5,12 +5,14 @@ with the HackerGadgets AIO V2 board. It watches the air through the board's
 RTL-SDR and shows what a person would otherwise miss: when, where and how
 often something was transmitted.
 
-**Status: phase 4 of 8 built** — the spectrum and waterfall
+**Status: phase 5 of 8 built** — the spectrum and waterfall
 screen, the channel strip, the spectral density, the periodicity screen and the signal log work on the built-in
 signal generator, on IQ recordings and on an RTL-SDR: tuning, gain and
 zoom from the keyboard, detected events kept in a database, their pictures
-and their samples. The other screens are still to come. See
-[plans/PLAN.md](plans/PLAN.md) for what comes next.
+and their samples. The Meshtastic pulse listens to `meshtasticd`: every
+node's packets on one time axis, their texts, batteries and positions,
+kept in the same database. The panorama and the decoders are still to
+come. See [plans/PLAN.md](plans/PLAN.md) for what comes next.
 
 ## Run
 
