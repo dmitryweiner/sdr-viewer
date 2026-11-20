@@ -131,8 +131,10 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-20 `sdr-viewer` there is PR #36's build (texts,
-  telemetry and positions); PR #35's (the mesh's
+  Since 2026-11-20 `sdr-viewer` there is PR #36's build with `X` twice
+  on the pulse and the selected node's feed (its first run brings
+  `events.db` to layout 3); its first commit's (texts, telemetry and
+  positions) is `sdr-viewer.before-erase`, PR #35's (the mesh's
   database: its first run with `--mesh` or `--rtlsdr` brings the user's
   `events.db` up to layout 2, which the older builds below then refuse —
   they run with `--no-db`; `events.db.before-mesh-db` there is a copy of
