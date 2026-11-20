@@ -77,6 +77,9 @@ fn run(args: &cli::Args) -> Result<ExitCode, String> {
 
     let (updates_tx, updates_rx) = sync_channel(64);
     let stop = Arc::new(AtomicBool::new(false));
+    // The only place the time zone is asked for: the log's time of day
+    // and the pulse's clock.
+    let utc_offset_s = chrono::Local::now().offset().local_minus_utc();
     let mut app = match &source {
         Some(source) => App::new(source.info()),
         None => {
@@ -98,14 +101,14 @@ fn run(args: &cli::Args) -> Result<ExitCode, String> {
                 args,
                 &mut app,
                 parts,
-                &updates_tx,
-                &stop,
+                (&updates_tx, &stop),
+                utc_offset_s,
             )?)
         }
         None => None,
     };
     if let Some(addr) = &args.mesh {
-        app.mesh = mesh::view(addr);
+        app.mesh = mesh::view(addr, utc_offset_s);
         // Nothing of it is kept: it is not waited for at the end.
         mesh::start(addr, updates_tx.clone(), Arc::clone(&stop));
     }
@@ -220,8 +223,8 @@ impl Reception {
         args: &cli::Args,
         app: &mut App,
         (listed, channels_path): (Vec<Channel>, Option<PathBuf>),
-        updates_tx: &SyncSender<Update>,
-        stop: &Arc<AtomicBool>,
+        (updates_tx, stop): (&SyncSender<Update>, &Arc<AtomicBool>),
+        utc_offset_s: i32,
     ) -> Result<Self, String> {
         app.channels = ChannelsView::new(listed);
         let (commands_tx, commands_rx) = channel();
@@ -235,7 +238,7 @@ impl Reception {
                 // starts with what earlier runs found.
                 app.log.set_clock(WallClock {
                     stream_start: started,
-                    utc_offset_s: chrono::Local::now().offset().local_minus_utc(),
+                    utc_offset_s,
                 });
                 let history = kept.history.into_iter();
                 app.log

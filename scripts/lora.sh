@@ -11,8 +11,11 @@
 # the SPI1 overlay at run time when /dev/spidev1.0 is missing (it is not
 # in config.txt, so a reboot drops it), and (re)starts meshtasticd, which
 # must start after the power: it looks for the radio once. The service is
-# not started at boot. Prints the state at the end; exits 1 if the API
-# port did not open.
+# not started at boot. Started without the radio, meshtasticd crashes and
+# systemd gives up after a few tries ("start-limit-hit"); `on` clears
+# that first. Prints the state at the end; exits 1 if SPI1 did not come
+# or the API port did not open. Without root it changes nothing and says
+# so (the power pin alone would switch: the gpio group may).
 set -u
 LORA_POWER_PIN=16
 SPIDEV=/dev/spidev1.0
@@ -27,11 +30,30 @@ status() {
   listening && echo "api: port $PORT" || echo "api: closed"
 }
 
+as_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "$0 $1: needs root — sudo $0 $1" >&2
+    exit 1
+  fi
+}
+
 case "${1:-}" in
 on)
+  as_root on
   pinctrl set $LORA_POWER_PIN op dh
   [ -e $SPIDEV ] || dtoverlay spi1-1cs
+  i=0
+  while [ $i -lt 10 ] && [ ! -e $SPIDEV ]; do
+    sleep 0.2
+    i=$((i + 1))
+  done
+  if [ ! -e $SPIDEV ]; then
+    echo "no $SPIDEV after dtoverlay spi1-1cs; meshtasticd not started" >&2
+    status
+    exit 1
+  fi
   sleep 0.5
+  systemctl reset-failed meshtasticd 2>/dev/null
   systemctl restart meshtasticd
   i=0
   while [ $i -lt 30 ] && ! listening; do
@@ -42,6 +64,7 @@ on)
   listening
   ;;
 off)
+  as_root off
   systemctl stop meshtasticd
   pinctrl set $LORA_POWER_PIN op dl
   status

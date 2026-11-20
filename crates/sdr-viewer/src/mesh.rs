@@ -2,6 +2,7 @@
 //! interface; and the pulse as text, for `--snapshot --screen 6`.
 
 use std::fmt::Write;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::SyncSender;
@@ -24,9 +25,34 @@ pub fn unix_now() -> u64 {
     since.map_or(0, |since| since.as_secs())
 }
 
-/// The interface's view of the node at `addr` before it has answered.
-pub fn view(addr: &str) -> MeshView {
-    MeshView::new(Link::Connecting(client::with_port(addr)))
+/// The interface's view of the node at `addr` before it has answered, its
+/// clock in the local time (`utc_offset_s`).
+pub fn view(addr: &str, utc_offset_s: i32) -> MeshView {
+    let addr = client::with_port(addr);
+    let exe = std::env::current_exe().ok();
+    let mut view = MeshView::new(Link::Connecting(addr.clone()));
+    view.starter = starter(&addr, exe.as_deref(), Path::is_file);
+    view.set_utc_offset(utc_offset_s);
+    view.set_now(unix_now());
+    view
+}
+
+/// The command that starts the `meshtasticd` at `addr` when it is this
+/// machine's: the `lora.sh` beside the app `exe` if there is one (it powers
+/// the LoRa radio first), or systemd's.
+pub fn starter(addr: &str, exe: Option<&Path>, exists: impl Fn(&Path) -> bool) -> Option<String> {
+    let host = addr.rsplit_once(':').map_or(addr, |(host, _)| host);
+    if !matches!(host, "localhost" | "127.0.0.1" | "[::1]") {
+        return None;
+    }
+    let script = exe
+        .and_then(Path::parent)
+        .map(|dir| dir.join("lora.sh"))
+        .filter(|script| exists(script));
+    Some(match script {
+        Some(script) => format!("sudo {} on", script.display()),
+        None => "sudo systemctl start meshtasticd".into(),
+    })
 }
 
 /// Talks to `meshtasticd` at `addr` until `stop`, or until the interface
@@ -51,6 +77,7 @@ pub fn start(addr: &str, updates: SyncSender<Update>, stop: Arc<AtomicBool>) -> 
 pub fn snapshot(addr: &str, (width, height): (u16, u16), secs: f64) -> Result<String, String> {
     let addr = client::with_port(addr);
     let stop = AtomicBool::new(false);
+    let start = unix_now();
     let mut updates = Vec::new();
     std::thread::scope(|scope| {
         scope.spawn(|| {
@@ -75,6 +102,10 @@ pub fn snapshot(addr: &str, (width, height): (u16, u16), secs: f64) -> Result<St
     app.status.state = SourceState::Off;
     app.screen = Screen::Mesh;
     app.mesh = MeshView::new(Link::Connecting(addr.clone()));
+    app.mesh
+        .set_utc_offset(chrono::Local::now().offset().local_minus_utc());
+    // The updates are told as of the start: it listened from then.
+    app.set_wall_clock(start);
     let mut packets = Vec::new();
     for update in updates {
         if let MeshUpdate::Packet(packet) = &update {
@@ -87,8 +118,13 @@ pub fn snapshot(addr: &str, (width, height): (u16, u16), secs: f64) -> Result<St
             Link::Lost(why) => format!(": {why}"),
             _ => String::new(),
         };
+        let exe = std::env::current_exe().ok();
+        let start = starter(&addr, exe.as_deref(), Path::is_file)
+            .map_or(String::new(), |command| {
+                format!("; is it running? Start it: {command}")
+            });
         return Err(format!(
-            "no answer from meshtasticd at {addr} in {secs} s{why}"
+            "no answer from meshtasticd at {addr} in {secs} s{why}{start}"
         ));
     }
     app.set_wall_clock(unix_now());
@@ -130,4 +166,29 @@ fn describe(view: &MeshView, packet: &Packet) -> String {
         packet.rssi,
         if packet.via_mqtt { "  MQTT" } else { "" }
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_command_that_starts_meshtasticd_is_the_lora_script_beside_the_app() {
+        let exe = Path::new("/home/dmw/sdr-viewer-check/sdr-viewer");
+        let beside = |path: &Path| path == Path::new("/home/dmw/sdr-viewer-check/lora.sh");
+        assert_eq!(
+            starter("localhost:4403", Some(exe), beside).as_deref(),
+            Some("sudo /home/dmw/sdr-viewer-check/lora.sh on")
+        );
+        assert_eq!(
+            starter("127.0.0.1:4403", Some(exe), |_| false).as_deref(),
+            Some("sudo systemctl start meshtasticd")
+        );
+        // Another machine's is started there.
+        assert_eq!(starter("192.168.1.246:4403", Some(exe), beside), None);
+        assert_eq!(
+            starter("[::1]:4403", None, beside).as_deref(),
+            Some("sudo systemctl start meshtasticd")
+        );
+    }
 }

@@ -48,9 +48,12 @@ const PERIOD_KEYS: [(&str, &str); 3] = [
     ("Enter", "tune to the selected channel"),
 ];
 
-const MESH_KEYS: [(&str, &str); 2] = [
+const MESH_KEYS: [(&str, &str); 5] = [
     ("↑, ↓", "select a node (PgUp, PgDn, Home, End)"),
-    ("+, -", "fewer, more minutes to a column"),
+    ("+, -", "less, more time to a column"),
+    ("s", "sort by the last heard, by the fewest hops"),
+    ("a", "only the nodes heard in the last 15 m, or all"),
+    ("m", "start the list afresh: only what is heard from now"),
 ];
 
 const LOG_KEYS: [(&str, &str); 6] = [
@@ -1120,6 +1123,46 @@ mod tests {
         app.mesh.link = Link::Lost("connection refused".into());
         let text = render_text(&app, MIN_WIDTH, MIN_HEIGHT);
         assert!(text.contains("meshtasticd: connection refused"), "{text}");
+    }
+
+    #[test]
+    fn while_meshtasticd_does_not_answer_the_pulse_tells_how_to_start_it() {
+        let mut app = mesh_app();
+        app.mesh =
+            crate::mesh::MeshView::new(Link::Lost("Connection refused (os error 111)".into()));
+        app.mesh.starter = Some("sudo /home/dmw/sdr-viewer-check/lora.sh on".into());
+        let text = render_text(&app, MIN_WIDTH, MIN_HEIGHT);
+        assert!(
+            text.contains("No answer from meshtasticd: Connection refused"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Start it: sudo /home/dmw/sdr-viewer-check/lora.sh on"),
+            "{text}"
+        );
+        // Another machine's: no command to give.
+        app.mesh.starter = None;
+        let text = render_text(&app, 160, 45);
+        assert!(text.contains("Is meshtasticd running there?"), "{text}");
+        // Once it answers, the hint goes.
+        app.mesh = mesh_app().mesh;
+        assert!(!render_text(&app, 160, 45).contains("Is meshtasticd running"));
+    }
+
+    #[test]
+    fn the_pulse_tells_what_its_list_shows_and_how_it_is_sorted() {
+        let mut app = mesh_app();
+        let text = render_text(&app, 160, 45);
+        assert!(!text.contains("nodes, heard"), "{text}");
+        app.mesh.toggle_active();
+        app.mesh.next_order();
+        insta::assert_snapshot!(render_text(&app, MIN_WIDTH, MIN_HEIGHT));
+        app.mesh.start_afresh();
+        let text = render_text(&app, 160, 45);
+        assert!(
+            text.contains("1 of 3 nodes, heard in the last 15 m (a) and since 10:00 (m)"),
+            "{text}"
+        );
     }
 
     #[test]
