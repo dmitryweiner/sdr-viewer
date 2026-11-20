@@ -48,6 +48,8 @@ pub struct AlertsView {
     total: usize,
     /// The stream's time as of the latest frame.
     now: Duration,
+    /// The alerts' recordings have reached their limit.
+    full: bool,
 }
 
 impl AlertsView {
@@ -86,6 +88,11 @@ impl AlertsView {
         }
         self.rules.push(rule);
         Ok(told)
+    }
+
+    /// The alerts' recordings have reached their limit: told from now on.
+    pub fn set_full(&mut self) {
+        self.full = true;
     }
 
     /// The rules made since the last call: for the file.
@@ -137,6 +144,10 @@ impl AlertsView {
     /// What the status line says, once there has been an alert.
     pub fn told(&self) -> Option<Told> {
         let (index, time) = self.latest?;
+        let full = match self.full {
+            true => " · recordings full",
+            false => "",
+        };
         let given = &self.given[index];
         let name: String = if given.name.chars().count() > NAME_WIDTH {
             let cut: String = given.name.chars().take(NAME_WIDTH - 1).collect();
@@ -148,6 +159,7 @@ impl AlertsView {
         if self.total > given.count {
             text += &format!(" of {}", self.total);
         }
+        text += full;
         Some(Told {
             text,
             bright: self.now.saturating_sub(time) < BRIGHT,
@@ -165,6 +177,8 @@ mod tests {
         let start = Duration::from_secs_f64(secs - 0.5);
         Alert {
             rule: rule.into(),
+            record: false,
+            number: 1,
             event: Event {
                 start,
                 duration: Duration::from_millis(500),
@@ -184,6 +198,7 @@ mod tests {
             high_hz: low_hz + 12.5e3,
             min_duration: Duration::ZERO,
             min_above_db: 10.0,
+            record: false,
         }
     }
 
@@ -266,6 +281,14 @@ mod tests {
         assert!(view.on_alerts(&[alert("gate", 30.1), alert("LPD 17", 30.1)]));
         assert!(!view.on_alerts(&[alert("gate", 30.2), alert("hopper", 30.3)]));
         assert!(!view.on_alerts(&[]));
+    }
+
+    #[test]
+    fn recordings_that_reached_their_limit_are_told_with_the_alert() {
+        let mut view = AlertsView::default();
+        view.on_alerts(&[alert("gate", 1.0)]);
+        view.set_full();
+        assert_eq!(view.told().unwrap().text, "! gate ×1 · recordings full");
     }
 
     #[test]

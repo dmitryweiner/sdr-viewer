@@ -21,6 +21,8 @@ pub struct Rule {
     pub high_hz: f64,
     pub min_duration: Duration,
     pub min_above_db: f32,
+    /// The events that meet it are recorded: their band, narrowed.
+    pub record: bool,
 }
 
 /// Bands whose edges are this close, in hertz, are one: a band read back
@@ -48,6 +50,11 @@ impl Rule {
 pub struct Alert {
     /// The rule's name.
     pub rule: String,
+    /// The rule asks for the event to be recorded.
+    pub record: bool,
+    /// The detector's number for the event: whoever records it follows
+    /// it by this until it ends.
+    pub number: u64,
     pub event: Event,
 }
 
@@ -99,6 +106,8 @@ impl Alerts {
                     self.given.push(key);
                     alert(Alert {
                         rule: rule.name.clone(),
+                        record: rule.record,
+                        number: *number,
                         event: event.clone(),
                     });
                 }
@@ -124,6 +133,7 @@ mod tests {
             high_hz: 434.0e6,
             min_duration: ms(1000),
             min_above_db: 20.0,
+            record: false,
         }
     }
 
@@ -162,6 +172,7 @@ mod tests {
             high_hz: 434.0e6 - 0.5,
             min_duration: Duration::ZERO,
             min_above_db: 0.0,
+            record: false,
         };
         assert!(rule().same_band(&near));
         let wider = Rule {
@@ -184,6 +195,8 @@ mod tests {
             given,
             [Alert {
                 rule: "keyfob".into(),
+                record: false,
+                number: 7,
                 event: event(433.95e6, ms(1000), 25.0),
             }]
         );
@@ -217,6 +230,7 @@ mod tests {
             high_hz: 434.79e6,
             min_duration: Duration::ZERO,
             min_above_db: DEFAULT_MIN_ABOVE_DB,
+            record: false,
         };
         let mut alerts = Alerts::new(vec![wide, rule()]);
         let mut given = Vec::new();

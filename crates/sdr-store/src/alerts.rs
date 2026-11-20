@@ -17,7 +17,13 @@ pub const HEADER: &str = "\
 # SDR Viewer's alerts. A signal that meets a rule here is told on the
 # status line, with a tone, as soon as it does — while it is still on.
 #
-# The app reads this file when it starts. A rule:
+# The app reads this file when it starts. Above the rules, how many
+# megabytes the alerts' recordings may take; after that no new ones are
+# made (nothing is deleted):
+#
+#   record_limit_mb = 2000
+#
+# A rule:
 #
 #   [[alert]]
 #   name = \"gate\"          # optional; without it the alert shows the frequency
@@ -25,14 +31,18 @@ pub const HEADER: &str = "\
 #   to_mhz = 434.0         # or freq_mhz = 433.95 with width_khz = 100
 #   min_ms = 1000          # optional: on for at least this long (0)
 #   min_db = 20            # optional: its peak this far above the noise (10)
+#   record = true          # optional: record the signal (false)
 #
-# A signal sounds the tone once; a rule, at most once in 10 s.
+# A signal sounds the tone once; a rule, at most once in 10 s. A
+# recording is the signal's own band, narrowed (some 50 kS/s for a
+# narrow one), from 1 s before it to 1 s after it, as a SigMF pair in
+# alerts/ beside the samples r saves in the log.
 # ! on the channel strip or the log adds a rule for the selected channel
 # or event to the end of this file.
 ";
 
 /// The keys a rule may have.
-const KEYS: [&str; 7] = [
+const KEYS: [&str; 8] = [
     "name",
     "from_mhz",
     "to_mhz",
@@ -40,16 +50,56 @@ const KEYS: [&str; 7] = [
     "width_khz",
     "min_ms",
     "min_db",
+    "record",
 ];
+
+/// How much the alerts' recordings may take when the file does not say.
+pub const DEFAULT_RECORD_LIMIT_MB: f64 = 2000.0;
+
+/// What the file says.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlertsFile {
+    pub rules: Vec<Rule>,
+    /// Bytes the alerts' recordings may take, all of them together.
+    pub record_limit: u64,
+}
+
+impl Default for AlertsFile {
+    fn default() -> Self {
+        AlertsFile {
+            rules: Vec::new(),
+            record_limit: (DEFAULT_RECORD_LIMIT_MB * 1e6) as u64,
+        }
+    }
+}
 
 /// The rules of a file's text, in its order.
 pub fn parse(text: &str) -> Result<Vec<Rule>, String> {
+    parse_file(text).map(|file| file.rules)
+}
+
+/// Everything a file's text says.
+pub fn parse_file(text: &str) -> Result<AlertsFile, String> {
     let table: Table = toml::from_str(text).map_err(|err| err.to_string())?;
-    if let Some(key) = table.keys().find(|key| *key != "alert") {
-        return Err(format!("unknown key `{key}`: rules are [[alert]] tables"));
+    let top = ["alert", "record_limit_mb"];
+    if let Some(key) = table.keys().find(|key| !top.contains(&key.as_str())) {
+        return Err(format!(
+            "unknown key `{key}`: the file has record_limit_mb and [[alert]] tables"
+        ));
     }
+    let record_limit = match table.get("record_limit_mb") {
+        None => AlertsFile::default().record_limit,
+        Some(Value::Integer(mb)) if *mb >= 0 => (*mb as f64 * 1e6) as u64,
+        Some(Value::Float(mb)) if *mb >= 0.0 && mb.is_finite() => (mb * 1e6) as u64,
+        Some(_) => return Err("record_limit_mb must be a number, 0 or more".into()),
+    };
     let entries = match table.get("alert") {
-        None => return Ok(Vec::new()),
+        None => {
+            return Ok(AlertsFile {
+                rules: Vec::new(),
+                record_limit,
+            });
+        }
         Some(Value::Array(entries)) => entries,
         Some(_) => return Err("`alert` must be written as [[alert]] tables".into()),
     };
@@ -105,15 +155,24 @@ pub fn parse(text: &str) -> Result<Vec<Rule>, String> {
             None => Duration::ZERO,
         };
         let min_above_db = number("min_db")?.map_or(DEFAULT_MIN_ABOVE_DB, |db| db as f32);
+        let record = match entry.get("record") {
+            None => false,
+            Some(Value::Boolean(record)) => *record,
+            Some(_) => return Err(wrap("record must be true or false".into())),
+        };
         Ok(Rule {
             name,
             low_hz,
             high_hz,
             min_duration,
             min_above_db,
+            record,
         })
     });
-    rules.collect()
+    Ok(AlertsFile {
+        rules: rules.collect::<Result<_, _>>()?,
+        record_limit,
+    })
 }
 
 /// `text` with those of `new` added to its end whose band no rule of the
@@ -140,6 +199,7 @@ pub fn append(text: &str, new: &[Rule]) -> Result<(String, usize), String> {
         let _ = writeln!(out, "width_khz = {:?}", width / 1e3);
         let _ = writeln!(out, "min_ms = {}", rule.min_duration.as_millis());
         let _ = writeln!(out, "min_db = {:?}", f64::from(rule.min_above_db));
+        let _ = writeln!(out, "record = {}", rule.record);
         there.push(rule.clone());
         added += 1;
     }
@@ -164,11 +224,11 @@ pub fn add(path: &Path, new: &[Rule]) -> Result<usize, String> {
     Ok(added)
 }
 
-/// The rules of the file at `path`; none when there is no file.
-pub fn load(path: &Path) -> Result<Vec<Rule>, String> {
+/// What the file at `path` says; no rules when there is no file.
+pub fn load(path: &Path) -> Result<AlertsFile, String> {
     match std::fs::read_to_string(path) {
-        Ok(text) => parse(&text),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Ok(text) => parse_file(&text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(AlertsFile::default()),
         Err(err) => Err(err.to_string()),
     }
 }
@@ -215,6 +275,7 @@ width_khz = 12.5
                     high_hz: 434.0e6,
                     min_duration: ms(1000),
                     min_above_db: 20.5,
+                    record: false,
                 },
                 Rule {
                     name: "433.475 MHz".into(),
@@ -222,9 +283,40 @@ width_khz = 12.5
                     high_hz: 433.475e6 + 6250.0,
                     min_duration: Duration::ZERO,
                     min_above_db: 10.0,
+                    record: false,
                 },
             ])
         );
+    }
+
+    #[test]
+    fn a_rule_records_when_asked_and_the_file_says_how_much_may_be_kept() {
+        let text =
+            "record_limit_mb = 500\n[[alert]]\nfreq_mhz = 433.9\nwidth_khz = 10\nrecord = true\n";
+        let file = parse_file(text).unwrap();
+        assert_eq!(file.record_limit, 500_000_000);
+        assert!(file.rules[0].record);
+        assert_eq!(parse_file("").unwrap().record_limit, 2_000_000_000);
+        assert_eq!(
+            parse_file("record_limit_mb = 0.5").unwrap().record_limit,
+            500_000
+        );
+        assert_eq!(
+            parse_file("record_limit_mb = -1").unwrap_err(),
+            "record_limit_mb must be a number, 0 or more"
+        );
+        assert_eq!(
+            parse("[[alert]]\nfreq_mhz = 433.9\nwidth_khz = 10\nrecord = 1\n").unwrap_err(),
+            "alert 1: record must be true or false"
+        );
+        // What the app adds says whether it records.
+        let recording = Rule {
+            record: true,
+            ..made()
+        };
+        let (text, _) = append(MINE, &[recording]).unwrap();
+        assert!(text.ends_with("min_db = 10.0\nrecord = true\n"), "{text}");
+        assert!(parse(&text).unwrap()[1].record);
     }
 
     #[test]
@@ -286,7 +378,7 @@ width_khz = 12.5
         );
         assert_eq!(
             parse("[[alarm]]\nfreq_mhz = 433.9").unwrap_err(),
-            "unknown key `alarm`: rules are [[alert]] tables"
+            "unknown key `alarm`: the file has record_limit_mb and [[alert]] tables"
         );
         assert!(parse("[[alert]\n").is_err());
     }
@@ -299,6 +391,7 @@ width_khz = 12.5
             high_hz: 433.48125e6,
             min_duration: Duration::ZERO,
             min_above_db: DEFAULT_MIN_ABOVE_DB,
+            record: false,
         }
     }
 
@@ -312,7 +405,7 @@ width_khz = 12.5
         assert_eq!(
             text,
             format!(
-                "{MINE}\n[[alert]]\nname = \"LPD 17\"\nfreq_mhz = 433.475\nwidth_khz = 12.5\nmin_ms = 0\nmin_db = 10.0\n"
+                "{MINE}\n[[alert]]\nname = \"LPD 17\"\nfreq_mhz = 433.475\nwidth_khz = 12.5\nmin_ms = 0\nmin_db = 10.0\nrecord = false\n"
             )
         );
         let rules = parse(&text).unwrap();
@@ -365,7 +458,7 @@ width_khz = 12.5
         assert_eq!(add(&path, &[made()]), Ok(1));
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.starts_with(HEADER), "{text}");
-        assert_eq!(load(&path).unwrap().len(), 1);
+        assert_eq!(load(&path).unwrap().rules.len(), 1);
         // What the user wrote meanwhile stays.
         std::fs::write(&path, format!("{text}# mine\n")).unwrap();
         assert_eq!(add(&path, &[made()]), Ok(0));
@@ -383,16 +476,16 @@ width_khz = 12.5
     fn a_file_not_there_is_no_rules_until_made_with_the_example() {
         let dir = TempDir::new("load");
         let path = dir.0.join("sdr-viewer/alerts.toml");
-        assert_eq!(load(&path), Ok(Vec::new()));
+        assert_eq!(load(&path), Ok(AlertsFile::default()));
         assert!(!path.exists());
         assert_eq!(make(&path), Ok(true));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), HEADER);
-        assert_eq!(load(&path), Ok(Vec::new()));
+        assert_eq!(load(&path), Ok(AlertsFile::default()));
         // The user's file is never made again.
         let rule = "\n[[alert]]\nfreq_mhz = 433.9\nwidth_khz = 10\n";
         std::fs::write(&path, format!("{HEADER}{rule}")).unwrap();
         assert_eq!(make(&path), Ok(false));
-        assert_eq!(load(&path).unwrap().len(), 1);
+        assert_eq!(load(&path).unwrap().rules.len(), 1);
         std::fs::write(&path, "[[alert]]\n").unwrap();
         assert!(load(&path).is_err());
     }

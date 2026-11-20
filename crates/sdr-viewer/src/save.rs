@@ -49,17 +49,20 @@ pub fn save(cut: &Cut, dir: &Path, started: Option<SystemTime>) -> Result<String
     }
 }
 
-/// When the event began — in UTC, or in the stream — and where:
-/// "20261112T120000.500Z_434.200MHz", "at-0.500s_434.200MHz".
 fn name(cut: &Cut, started: Option<SystemTime>) -> String {
-    let event = &cut.event;
+    name_of(cut.event.start, cut.event.center_hz(), started)
+}
+
+/// When an event began — in UTC, or in the stream — and where:
+/// "20261112T120000.500Z_434.200MHz", "at-0.500s_434.200MHz".
+pub fn name_of(start: Duration, center_hz: f64, started: Option<SystemTime>) -> String {
     let when = match started {
-        Some(started) => DateTime::<Utc>::from(started + event.start)
+        Some(started) => DateTime::<Utc>::from(started + start)
             .format("%Y%m%dT%H%M%S%.3fZ")
             .to_string(),
-        None => format!("at-{:.3}s", event.start.as_secs_f64()),
+        None => format!("at-{:.3}s", start.as_secs_f64()),
     };
-    format!("{when}_{:.3}MHz", event.center_hz() / 1e6)
+    format!("{when}_{:.3}MHz", center_hz / 1e6)
 }
 
 #[cfg(test)]

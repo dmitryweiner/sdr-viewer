@@ -59,8 +59,9 @@ Open questions are in the plan's section 13. SDR and LoRa stay apart
   periodicity of the channel that repeats most surely (or of the first
   row), `--screen 4` the density screen instead. `--alerts FILE` lists
   the alerts of its rules after the events.
-- `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
-  of the generator and of the IQ ring per sample.
+- `cargo test --release -p sdr-core -p sdr-dsp -- --ignored --nocapture
+  bench_` — cost of the generator, of the IQ ring and of the
+  downconverter of an alert's recording per sample.
 - `cargo run --release -- --mesh[=HOST[:PORT]]` — the Meshtastic pulse
   from `meshtasticd`'s API (4403); alone it opens no receiver, beside a
   file or `--rtlsdr` both run. The device's node answers the Mac too:
@@ -215,7 +216,9 @@ a crate is added in the phase that needs it):
   frequency is in, from a table compiled in), `frame` (`SpectrumFrame`: dBFS
   per bin, lowest frequency first), `ring` (`IqRing`: the newest samples
   as `cu8` pairs, numbered from the start of the stream).
-- `sdr-dsp` — `analyzer`: Hann window, FFT, power averaged over a number
+- `sdr-dsp` — `ddc` (`Downconverter`: a signal moved to zero and
+  narrowed — a third-order CIC's taps, then a Blackman sinc for the last
+  factor of up to 4; `decimation_for` a width), `analyzer`: Hann window, FFT, power averaged over a number
   of blocks into one `SpectrumFrame` (2048 bins); `average`:
   `FrameAverager`, fast frames into slow ones; `period`:
   `autocorrelation` of an envelope (by FFT) and its `peaks` (the main
@@ -240,8 +243,9 @@ a crate is added in the phase that needs it):
   pair (the JSON is written by hand); `channels`: the channels file
   (TOML read with the `toml` crate, additions written by hand to the end
   of the text as it is); `alerts`: the alerts file (`HEADER` with the
-  example, `parse`, `load`, `make`, `append` and `add` — every key
-  written).
+  example, `parse`, `parse_file` with `record_limit_mb` (`AlertsFile`),
+  `load`, `make`, `append` and `add` — every key written); `sigmf::Meta`
+  and `write_meta`, for samples written elsewhere as they come.
 - `sdr-rtl` — `RtlSource`: the RTL-SDR through `rtl-sdr-rs` (pure Rust on
   `nusb`), queued transfers, gain along the tuner's own steps, retuning.
 - `sdr-mesh` — `meshtasticd`'s TCP API: `proto` (Meshtastic's protobuf
@@ -301,6 +305,11 @@ a crate is added in the phase that needs it):
   older; `keep_mesh`: the same for the mesh, the last day read and the
   week's texts before it, the writer told `MeshKept`: the client's
   updates with their time, and the erasing), `writer` (the loop of a thread that writes: one write a second),
+  `record` (`Recorder`: the reader's side of recording on an alert —
+  which samples of the ring go to which recording, from a second
+  before its event to a second after; `Step`s), `recordings`
+  (`Recordings`: the worker's side — narrowing, `ci16_le` SigMF in
+  `alerts/` of the IQ directory, the limit counted with what is there),
   `channels` (read the channels file; the thread that adds to it),
   `alerts` (read, or make, the alerts file; the thread that adds the
   rules made with `!` to it; the tone's WAV and its thread, which plays
@@ -337,6 +346,11 @@ a crate is added in the phase that needs it):
   the reader as `Command::AddRule`, the file's sent before it starts.
   The tone's thread is never waited for, and plays nothing that was
   asked while it played.
+- Recording on an alert: the reader hands the worker the ring's samples
+  after every read (`Job::Record`), never waits for the disk, and ends
+  a recording at a retune and at the end of the stream; the worker
+  narrows and writes them. No recording is ever deleted: at the limit
+  no new one is made (`Update::RecordingsFull`).
 - The alerts file is the user's, like the channels file: the app makes
   it when it is missing, reads it at the start and only appends (the
   rules made with `!`, by a thread of its own, re-reading the disk

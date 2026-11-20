@@ -212,6 +212,11 @@ impl Detector {
         numbered.map(|(_, event)| event).collect()
     }
 
+    /// Whether the event of this number is still going on.
+    pub fn is_open(&self, number: u64) -> bool {
+        self.open.iter().any(|open| open.number == number)
+    }
+
     /// The same, each with its number: an event keeps it from its first
     /// frame to its last, and no other event gets it. Events that join
     /// go on under the number of the one found first.
@@ -583,6 +588,8 @@ mod tests {
         ]);
         let numbers = numbers(&air, 40);
         assert!(numbers[9].is_empty());
+        let (_, detector) = watch(&air, 31);
+        assert!(!detector.is_open(numbers[10][0]) && detector.is_open(numbers[10][1]));
         let (first, second) = (numbers[10][0], numbers[10][1]);
         assert_ne!(first, second);
         assert_eq!(numbers[20], [first, second]);

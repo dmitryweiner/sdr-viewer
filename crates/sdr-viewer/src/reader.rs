@@ -13,6 +13,7 @@ use sdr_tui::fragment::Fragment;
 use sdr_tui::{Command, SourceState, SourceStatus};
 
 use crate::pipeline::{Output, Pipeline};
+use crate::record::{Recorder, Step};
 
 /// Samples per read: ~7 ms at 2.4 MS/s.
 const CHUNK: usize = 16 * 1024;
@@ -49,6 +50,8 @@ pub enum Update {
     Density(DensityMap),
     /// From the mesh's thread, not the reader's.
     Mesh(sdr_mesh::update::MeshUpdate),
+    /// The alerts' recordings have reached their limit: no more are made.
+    RecordingsFull,
 }
 
 /// What the store is told, in the order it happened.
@@ -67,6 +70,33 @@ pub enum Job {
     Save(Cut),
     /// Make the event's picture of them.
     Picture(Cut),
+    /// A step of recording on an alert.
+    Record(Record),
+}
+
+/// A step of recording on an alert (see `record::Step`), with the
+/// samples cut from the ring.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Record {
+    Start {
+        id: u64,
+        first: u64,
+        center_hz: f64,
+        width_hz: f64,
+        alert: Alert,
+        source: SourceInfo,
+    },
+    Mark {
+        id: u64,
+        alert: Alert,
+    },
+    Samples {
+        id: u64,
+        samples: Vec<[u8; 2]>,
+    },
+    End {
+        id: u64,
+    },
 }
 
 /// Samples around an event, cut from the ring.
@@ -126,8 +156,14 @@ pub fn run(
     // not taken yet.
     let mut fresh: Vec<Event> = Vec::new();
     let mut events: Vec<Event> = Vec::new();
-    // Alerts the interface has not taken yet.
+    // Alerts the interface has not taken yet, and those of the latest read.
     let mut alerts: Vec<Alert> = Vec::new();
+    let mut fresh_alerts: Vec<Alert> = Vec::new();
+    // Recording on an alert needs the ring, from which it takes its
+    // samples, and the worker, which writes them.
+    let mut recorder = Recorder::new(source.info().sample_rate);
+    let mut steps: Vec<Step> = Vec::new();
+    let mut unrecorded_told = false;
     // Samples at full scale and all samples since the last report.
     let (mut clipped, mut seen) = (0u64, 0u64);
     let status = |state, rate, clipped: f64, lost| {
@@ -149,7 +185,10 @@ pub fn run(
             let done = match command {
                 Command::Tune(center_hz) => match source.tune(center_hz) {
                     Ok(()) => {
-                        // What is held was another band.
+                        // What is held was another band; so is what is
+                        // being recorded.
+                        recorder.end_all(&mut steps);
+                        hand_steps(&mut steps, &ring, &source.info(), jobs.as_ref());
                         ring.clear();
                         Ok(Some(Update::Source(source.info())))
                     }
@@ -241,8 +280,23 @@ pub fn run(
                     Output::Density(map) => {
                         let _ = updates.try_send(Update::Density(map));
                     }
-                    Output::Alert(alert) => alerts.push(alert),
+                    Output::Alert(alert) => fresh_alerts.push(alert),
                 });
+                let recording = ring.capacity() > 0 && jobs.is_some();
+                for alert in &fresh_alerts {
+                    if recording {
+                        recorder.on_alert(alert, ring.held(), &mut steps);
+                    } else if alert.record && !unrecorded_told {
+                        unrecorded_told = true;
+                        let why = "alerts are not recorded: no samples are held (--iq-buffer is 0)";
+                        let _ = updates.send(Update::Notice(why.into()));
+                    }
+                }
+                alerts.append(&mut fresh_alerts);
+                if recorder.is_recording() {
+                    recorder.on_read(ring.held(), |number| pipeline.is_on(number), &mut steps);
+                }
+                hand_steps(&mut steps, &ring, &source.info(), jobs.as_ref());
                 if !alerts.is_empty() {
                     let batch = Update::Alerts(std::mem::take(&mut alerts));
                     if let Err(TrySendError::Full(Update::Alerts(waiting))) =
@@ -290,6 +344,46 @@ pub fn run(
         }
     }
     keep(pipeline.finish());
+    // What is being recorded ends with the reading.
+    recorder.end_all(&mut steps);
+    hand_steps(&mut steps, &ring, &source.info(), jobs.as_ref());
+}
+
+/// Hands the recording's steps to the worker, with their samples cut
+/// from the ring.
+fn hand_steps(
+    steps: &mut Vec<Step>,
+    ring: &IqRing,
+    source: &SourceInfo,
+    jobs: Option<&Sender<Job>>,
+) {
+    for step in steps.drain(..) {
+        let record = match step {
+            Step::Start {
+                id,
+                first,
+                center_hz,
+                width_hz,
+                alert,
+            } => Record::Start {
+                id,
+                first,
+                center_hz,
+                width_hz,
+                alert,
+                source: source.clone(),
+            },
+            Step::Mark { id, alert } => Record::Mark { id, alert },
+            Step::Samples { id, range } => Record::Samples {
+                id,
+                samples: ring.copy(range),
+            },
+            Step::End { id } => Record::End { id },
+        };
+        if let Some(jobs) = jobs {
+            let _ = jobs.send(Job::Record(record));
+        }
+    }
 }
 
 /// Cuts the samples of `event` out of the ring and hands them over as a
@@ -622,6 +716,7 @@ mod tests {
             high_hz: 434.21e6,
             min_duration: Duration::from_millis(100),
             min_above_db: 20.0,
+            record: false,
         };
         command_tx.send(Command::AddRule(rule)).unwrap();
         let source = Announced(demo(), over_tx);
@@ -774,7 +869,7 @@ mod tests {
         let (jobs, updates) = jobs(ring_s, asks);
         let cuts = jobs.into_iter().map(|job| match job {
             Job::Save(cut) => cut,
-            Job::Picture(_) => panic!("{job:?}"),
+            Job::Picture(_) | Job::Record(_) => panic!("{job:?}"),
         });
         let notices = updates.into_iter().filter_map(|update| match update {
             Update::Notice(notice) => Some(notice),
@@ -796,6 +891,92 @@ mod tests {
         };
         let stop = Arc::new(AtomicBool::new(false));
         run(source, tx, command_rx, stop, sinks);
+        (job_rx.try_iter().collect(), rx.try_iter().collect())
+    }
+
+    /// A rule on the demo's burst at 434.2 MHz.
+    fn burst_rule(record: bool) -> Rule {
+        Rule {
+            name: "burst".into(),
+            low_hz: 434.19e6,
+            high_hz: 434.21e6,
+            min_duration: Duration::from_millis(100),
+            min_above_db: 20.0,
+            record,
+        }
+    }
+
+    #[test]
+    fn a_rule_that_records_hands_its_events_band_to_the_worker_from_the_ring() {
+        let (jobs, _) = jobs(2.0, &[(0, Command::AddRule(burst_rule(true)))]);
+        let steps: Vec<&Record> = jobs
+            .iter()
+            .map(|job| match job {
+                Job::Record(record) => record,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        match steps[0] {
+            Record::Start {
+                id: 0,
+                first: 0,
+                center_hz,
+                width_hz: 10_000.0,
+                alert,
+                source,
+            } => {
+                assert!((center_hz - 434.2e6).abs() < 2_000.0, "{center_hz}");
+                assert_eq!(alert.rule, "burst");
+                assert_eq!(source.sample_rate, 2_400_000);
+            }
+            other => panic!("{other:?}"),
+        }
+        // Every sample of the stream once, in order, to the end of it: the
+        // burst ended at 0.3 s, and its second after is beyond the 1.37 s.
+        let mut next = 0;
+        for step in &steps[1..steps.len() - 1] {
+            match step {
+                Record::Samples { id: 0, samples } => next += samples.len(),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(next, 200 * CHUNK);
+        assert_eq!(steps.last(), Some(&&Record::End { id: 0 }));
+    }
+
+    #[test]
+    fn a_rule_that_does_not_record_or_a_ring_that_holds_nothing_records_nothing() {
+        let (jobs, _) = jobs(2.0, &[(0, Command::AddRule(burst_rule(false)))]);
+        assert!(jobs.is_empty(), "{jobs:?}");
+        let (jobs, updates) = jobs_without_a_ring(Command::AddRule(burst_rule(true)));
+        assert!(jobs.is_empty(), "{jobs:?}");
+        let notices: Vec<&Update> = (updates.iter())
+            .filter(|update| matches!(update, Update::Notice(_)))
+            .collect();
+        assert_eq!(
+            notices,
+            [&Update::Notice(
+                "alerts are not recorded: no samples are held (--iq-buffer is 0)".into()
+            )]
+        );
+    }
+
+    fn jobs_without_a_ring(command: Command) -> (Vec<Job>, Vec<Update>) {
+        let (tx, rx) = sync_channel(1024);
+        let (command_tx, command_rx) = channel();
+        let (job_tx, job_rx) = channel();
+        command_tx.send(command).unwrap();
+        let sinks = Sinks {
+            jobs: Some(job_tx),
+            ..Sinks::default()
+        };
+        run(
+            demo(),
+            tx,
+            command_rx,
+            Arc::new(AtomicBool::new(false)),
+            sinks,
+        );
         (job_rx.try_iter().collect(), rx.try_iter().collect())
     }
 
@@ -847,6 +1028,7 @@ mod tests {
             .try_iter()
             .map(|job| match job {
                 Job::Picture(cut) | Job::Save(cut) => (cut.first_sample, cut.samples.len()),
+                Job::Record(_) => panic!("{job:?}"),
             })
             .collect();
         assert_eq!(lengths, [(9, 30), (9, 82)]);

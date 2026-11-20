@@ -458,6 +458,7 @@ impl App {
             high_hz: center_hz + width_hz / 2.0,
             min_duration: Duration::ZERO,
             min_above_db: DEFAULT_MIN_ABOVE_DB,
+            record: false,
         };
         match self.alerts.add(rule.clone()) {
             Ok(done) => {
@@ -1136,6 +1137,7 @@ mod tests {
             high_hz: 433.105e6,
             min_duration: Duration::ZERO,
             min_above_db: 10.0,
+            record: false,
         };
         assert_eq!(app.commands, [Command::AddRule(made)]);
         assert_eq!(
@@ -1178,6 +1180,7 @@ mod tests {
             high_hz: 433.055e6,
             min_duration: Duration::ZERO,
             min_above_db: 10.0,
+            record: false,
         };
         assert_eq!(app.commands, [Command::AddRule(rule.clone())]);
         assert_eq!(
