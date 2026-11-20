@@ -1,26 +1,30 @@
 //! The thread that works on the samples cut for an event — writes them to
-//! the disk, makes the event's picture — so that reception never waits
-//! for either.
+//! the disk, makes the event's picture, narrows and writes an alert's
+//! recording — so that reception never waits for any of it.
 
 use std::path::Path;
 use std::sync::mpsc::Receiver;
 use std::time::SystemTime;
 
-use crate::reader::{Job, Update};
+use crate::reader::{Job, Record, Update};
+use crate::recordings::{Recordings, Told};
 use crate::{fragment, save};
 
 /// Does every job that comes and tells the interface what came of it.
-/// Recordings go to `dir`; `started` is when the stream began, for a
-/// source that receives as the clock runs.
+/// Saved samples go to `dir`, the alerts' recordings to `alerts` in it,
+/// which they may fill up to `record_limit` bytes; `started` is when the
+/// stream began, for a source that receives as the clock runs.
 ///
 /// Of the pictures asked for while it was busy only the last is made:
 /// the selection has left the others behind.
 pub fn run(
     jobs: Receiver<Job>,
-    dir: Option<&Path>,
+    (dir, record_limit): (Option<&Path>, u64),
     started: Option<SystemTime>,
     mut tell: impl FnMut(Update),
 ) {
+    let mut recordings = dir.map(|dir| Recordings::new(dir.join("alerts"), started, record_limit));
+    let mut nowhere_told = false;
     while let Ok(first) = jobs.recv() {
         let mut waiting = vec![first];
         waiting.extend(jobs.try_iter());
@@ -41,6 +45,39 @@ pub fn run(
                     tell(Update::Picture(cut.event, Some(fragment)));
                 }
                 Job::Picture(_) => {}
+                Job::Record(step) => {
+                    let Some(recordings) = recordings.as_mut() else {
+                        if !nowhere_told {
+                            nowhere_told = true;
+                            tell(Update::Notice(
+                                "nowhere to record alerts: name a directory with --iq-dir".into(),
+                            ));
+                        }
+                        continue;
+                    };
+                    let told = match step {
+                        Record::Start {
+                            id,
+                            first,
+                            center_hz,
+                            width_hz,
+                            alert,
+                            source,
+                        } => recordings.start((id, first), (center_hz, width_hz), &alert, &source),
+                        Record::Mark { id, alert } => {
+                            recordings.mark(id, &alert);
+                            None
+                        }
+                        Record::Samples { id, samples } => recordings.samples(id, &samples),
+                        Record::End { id } => recordings.end(id),
+                    };
+                    match told {
+                        Some(Told::Done(done)) => tell(Update::Done(done)),
+                        Some(Told::Notice(why)) => tell(Update::Notice(why)),
+                        Some(Told::Full) => tell(Update::RecordingsFull),
+                        None => {}
+                    }
+                }
             }
         }
     }
@@ -84,7 +121,7 @@ mod tests {
         }
         drop(tx);
         let mut told = Vec::new();
-        run(rx, dir, None, |update| told.push(update));
+        run(rx, (dir, 1_000_000), None, |update| told.push(update));
         told
     }
 

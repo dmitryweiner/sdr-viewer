@@ -299,19 +299,42 @@ reads none). A file that is not there is made, with this example in its
 comments:
 
 ```toml
+record_limit_mb = 2000 # what the alerts' recordings may take, all together
+
 [[alert]]
 name = "gate"          # optional; without it the alert shows the frequency
 from_mhz = 433.9       # the band the signal's centre must be in;
 to_mhz = 434.0         # or freq_mhz = 433.95 with width_khz = 100
 min_ms = 1000          # optional: on for at least this long (0)
 min_db = 20            # optional: its peak this far above the noise (10)
+record = true          # optional: record the signal (false)
+```
+
+A rule with `record = true` records what meets it: the signal's own
+band, not the whole 2.4 MHz, nor more than the rule's — moved to zero and
+narrowed to at least two and a half times the signal's width, 50 kS/s
+for a narrow one (a 200 kHz recording a second against 4.8 MB) — from a second before the event (the
+samples held in memory, see "Saving an event's samples") to a second
+after it ends. The next alert of the same rule in that band while it
+runs goes into the same recording. The recordings go to `alerts/` in the
+directory where `r` saves (`--iq-dir`), as SigMF pairs of `ci16_le`
+samples, each alert marked with the event as it was when its rule was
+met; when one is done the status line says so. Once they take
+`record_limit_mb` together (counting those already there), no new one is
+made and the status line says `recordings full`; nothing is ever
+deleted — the files are yours. The app plays one back as it would any
+recording:
+
+```sh
+sdr-viewer ~/.local/share/sdr-viewer/iq/alerts/20261120T143012.250Z_433.475MHz.sigmf-data \
+  --format cs16 --rate 50k --center 433.475M
 ```
 
 `!` on the channel strip makes a rule for the selected channel (by its
 name, or its frequency); in the log, for the selected event's band (at
 least 10 kHz wide). It holds at once, and goes to the end of the file
-with every key written, ready to be changed: `min_ms = 0`, `min_db = 10`.
-A band that has a rule already gets no second one.
+with every key written, ready to be changed: `min_ms = 0`, `min_db = 10`,
+`record = false`. A band that has a rule already gets no second one.
 
 The app reads the file when it starts and only ever adds to its end:
 what you wrote stays as it is. Edit it while the app is not running, or

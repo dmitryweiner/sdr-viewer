@@ -114,6 +114,11 @@ impl Pipeline {
     pub fn open_events(&self) -> Vec<Event> {
         self.detector.open()
     }
+
+    /// Whether the detector's event of this number is still going on.
+    pub fn is_on(&self, number: u64) -> bool {
+        self.detector.is_open(number)
+    }
 }
 
 #[cfg(test)]
@@ -292,6 +297,7 @@ mod tests {
             high_hz: center_hz + 10e3,
             min_duration: Duration::from_millis(min_ms),
             min_above_db: 20.0,
+            record: false,
         };
         for rule in [
             rule("carrier", 433.5e6, 500),

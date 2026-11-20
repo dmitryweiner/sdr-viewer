@@ -278,6 +278,7 @@ mod tests {
             high_hz: 434.21e6,
             min_duration: Duration::from_millis(100),
             min_above_db: 20.0,
+            record: false,
         };
         let text = run(
             generator,

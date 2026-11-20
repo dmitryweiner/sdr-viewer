@@ -25,9 +25,12 @@ Phases of the plan (its section 14 has the detail):
 
 Next: alerts, each its own pull request — (1) the rules of
 `alerts.toml`, an alert on the status line and a tone through the
-speaker (PR #38); (2) `!` on the channel strip and the log, which
-appends a rule; (3) recording the event's own band, decimated, with the
-limit.
+speaker (PR #38, merged); (2) `!` on the channel strip and the log,
+which appends a rule (PR #39, merged); (3) recording the event's own
+band, decimated, with the limit (PR #40; its 4 at once approved by the
+user); (4) `!` again on the band of a rule removes it from the file,
+and the strip marks the channels that have one (the user's ask after
+#39).
 Open questions are in the plan's section 13. SDR and LoRa stay apart
 (asked again on 2026-11-20: never together).
 
@@ -59,8 +62,9 @@ Open questions are in the plan's section 13. SDR and LoRa stay apart
   periodicity of the channel that repeats most surely (or of the first
   row), `--screen 4` the density screen instead. `--alerts FILE` lists
   the alerts of its rules after the events.
-- `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
-  of the generator and of the IQ ring per sample.
+- `cargo test --release -p sdr-core -p sdr-dsp -- --ignored --nocapture
+  bench_` — cost of the generator, of the IQ ring and of the
+  downconverter of an alert's recording per sample.
 - `cargo run --release -- --mesh[=HOST[:PORT]]` — the Meshtastic pulse
   from `meshtasticd`'s API (4403); alone it opens no receiver, beside a
   file or `--rtlsdr` both run. The device's node answers the Mac too:
@@ -137,7 +141,11 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-20 `sdr-viewer` there is PR #39's build (`!` on the
+  Since 2026-11-20 `sdr-viewer` there is PR #40's build (recording on
+  an alert: tried there on `capture-433.cu8` with `--iq-dir iq-test` and
+  a rule on 433.475 MHz — a file per return of the hopper, read back
+  with `--format cs16 --rate 50k`; removed after); PR #39's is
+  `sdr-viewer.before-recording` (`!` on the
   strip, tried there with the generator and `--alerts test-key.toml`:
   the rule appended, the file removed after); PR #38's is
   `sdr-viewer.before-key` (alerts: its
@@ -215,7 +223,9 @@ a crate is added in the phase that needs it):
   frequency is in, from a table compiled in), `frame` (`SpectrumFrame`: dBFS
   per bin, lowest frequency first), `ring` (`IqRing`: the newest samples
   as `cu8` pairs, numbered from the start of the stream).
-- `sdr-dsp` — `analyzer`: Hann window, FFT, power averaged over a number
+- `sdr-dsp` — `ddc` (`Downconverter`: a signal moved to zero and
+  narrowed — a third-order CIC's taps, then a Blackman sinc for the last
+  factor of up to 4; `decimation_for` a width), `analyzer`: Hann window, FFT, power averaged over a number
   of blocks into one `SpectrumFrame` (2048 bins); `average`:
   `FrameAverager`, fast frames into slow ones; `period`:
   `autocorrelation` of an envelope (by FFT) and its `peaks` (the main
@@ -240,8 +250,9 @@ a crate is added in the phase that needs it):
   pair (the JSON is written by hand); `channels`: the channels file
   (TOML read with the `toml` crate, additions written by hand to the end
   of the text as it is); `alerts`: the alerts file (`HEADER` with the
-  example, `parse`, `load`, `make`, `append` and `add` — every key
-  written).
+  example, `parse`, `parse_file` with `record_limit_mb` (`AlertsFile`),
+  `load`, `make`, `append` and `add` — every key written); `sigmf::Meta`
+  and `write_meta`, for samples written elsewhere as they come.
 - `sdr-rtl` — `RtlSource`: the RTL-SDR through `rtl-sdr-rs` (pure Rust on
   `nusb`), queued transfers, gain along the tuner's own steps, retuning.
 - `sdr-mesh` — `meshtasticd`'s TCP API: `proto` (Meshtastic's protobuf
@@ -301,6 +312,11 @@ a crate is added in the phase that needs it):
   older; `keep_mesh`: the same for the mesh, the last day read and the
   week's texts before it, the writer told `MeshKept`: the client's
   updates with their time, and the erasing), `writer` (the loop of a thread that writes: one write a second),
+  `record` (`Recorder`: the reader's side of recording on an alert —
+  which samples of the ring go to which recording, from a second
+  before its event to a second after, `AT_ONCE` (4) at most; `Step`s), `recordings`
+  (`Recordings`: the worker's side — narrowing, `ci16_le` SigMF in
+  `alerts/` of the IQ directory, the limit counted with what is there),
   `channels` (read the channels file; the thread that adds to it),
   `alerts` (read, or make, the alerts file; the thread that adds the
   rules made with `!` to it; the tone's WAV and its thread, which plays
@@ -337,6 +353,11 @@ a crate is added in the phase that needs it):
   the reader as `Command::AddRule`, the file's sent before it starts.
   The tone's thread is never waited for, and plays nothing that was
   asked while it played.
+- Recording on an alert: the reader hands the worker the ring's samples
+  after every read (`Job::Record`), never waits for the disk, and ends
+  a recording at a retune and at the end of the stream; the worker
+  narrows and writes them. No recording is ever deleted: at the limit
+  no new one is made (`Update::RecordingsFull`).
 - The alerts file is the user's, like the channels file: the app makes
   it when it is missing, reads it at the start and only appends (the
   rules made with `!`, by a thread of its own, re-reading the disk
@@ -476,6 +497,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | The density on the CM4 (the recording looped, 160×45, 15 s, main's build and PR #22's side by side, twice) | gathering it costs nothing measurable: spectrum (`--keys 1`) 37 and 34% before, 35 and 36% with it. The density screen (`--keys 3`) **33 and 34%** of a core, 0.6 MB/s to the terminal against the spectrum's 0.9 |
 | Periodicity on the CM4 (the recording looped, 160×45, 15 s, PR #26's build and PR #28's side by side; 80 channels) | keeping bursts and working out one channel's period a frame costs nothing measurable: strip (`--keys 2`) 24 → 25% of a core, spectrum (`--keys 1`) 36 → 37%. The periodicity screen with a channel selected (`--keys $'4\x1b[B\x1b[B\x1b[B'`) **20%**, 11 kB/s to the terminal. On the Mac (generator, 12 s): spectrum 16%, strip 12%, periodicity 12% |
 | Alerts on the CM4 (`capture-433.cu8` looped, 160×45, 15 s, `smoke.py --keys 1`, twice each; a rule over the whole ISM band, met ~60 times a second: 608 alerts in 10 s) | 38 → **41%** of a core both times: the open events held against the rules 100 times a second, and `aplay` twice. Without rules nothing is checked |
+| Recording on an alert on the CM4 (`capture-433.cu8` looped, 160×45, 15 s, `smoke.py --keys 1`, twice each) | no rule 38 and 39%; one LPD channel recorded (a file every 2.92 s, one at a time) **42%** both times; a rule recording the whole ISM band, four at once all the time (`record::AT_ONCE`) **86 and 87%**, a fifth of it in the kernel (sys 0.5 → 2.3 s: a copy of every read per recording, and their allocations). On the Mac the downconverter alone is 5.7 ns a sample for a narrow band (`bench_downconverter`), 21.5 for 200 kHz |
 | `sdr-mesh`'s protobuf types (`build.rs`: `protox` + `prost-build`, ~10 500 lines of Rust) | ~10 s on a clean debug build of the crate; nothing on later builds unless `proto/` changes |
 | The Meshtastic pulse on the Mac (`smoke.py --keys $'6\x1b[B\x1b[B-+?1' --secs 8 -- --mesh=192.168.1.246`, the device's node over the LAN) | 0% of one core, 23 KiB to the terminal in 8 s |
 | The Meshtastic pulse on the CM4 (`smoke.py --keys 6`, and with two downs, 160×45, 15 s, `-- --mesh=127.0.0.1`; 17 nodes) | **0%** of a core (0.05 s in 15 s), 16–17 KiB to the terminal |

@@ -883,6 +883,9 @@ mod tests {
         let mut app = app();
         let alert = |secs: f64| Alert {
             rule: "gate".into(),
+            record: false,
+            band: (433.9e6, 434.0e6),
+            number: 1,
             event: Event {
                 start: Duration::from_secs_f64(secs - 0.5),
                 duration: Duration::from_millis(500),

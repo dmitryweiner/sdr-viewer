@@ -9,13 +9,14 @@ use std::sync::mpsc::{Sender, SyncSender, channel};
 use std::thread::JoinHandle;
 
 use sdr_detect::Rule;
+use sdr_store::alerts::AlertsFile;
 
 use crate::reader::Update;
 use crate::writer;
 
-/// The rules of the file at `path`. Unless `make` is false, a file that
-/// is not there is made, with an example in its comments.
-pub fn load(path: &Path, make: bool) -> Result<Vec<Rule>, String> {
+/// What the file at `path` says. Unless `make` is false, a file that is
+/// not there is made, with an example in its comments.
+pub fn load(path: &Path, make: bool) -> Result<AlertsFile, String> {
     let wrap = |err: String| {
         format!(
             "the alerts file {}: {err} (--no-alerts runs without it)",
@@ -151,9 +152,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("sdr-viewer-alerts-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("alerts.toml");
-        assert_eq!(load(&path, false), Ok(Vec::new()));
+        assert_eq!(load(&path, false), Ok(AlertsFile::default()));
         assert!(!path.exists());
-        assert_eq!(load(&path, true), Ok(Vec::new()));
+        assert_eq!(load(&path, true), Ok(AlertsFile::default()));
         assert!(path.exists());
         std::fs::write(&path, "[[alert]]\n").unwrap();
         let told = load(&path, true).unwrap_err();
@@ -177,13 +178,14 @@ mod tests {
             high_hz: low_hz + 12.5e3,
             min_duration: std::time::Duration::ZERO,
             min_above_db: 10.0,
+            record: false,
         };
         let (updates, told) = sync_channel(4);
         let (new, saver) = save(path.clone(), updates);
         new.send(vec![rule(433.46875e6)]).unwrap();
         drop(new);
         saver.join().unwrap();
-        assert_eq!(load(&path, false).unwrap(), [rule(433.46875e6)]);
+        assert_eq!(load(&path, false).unwrap().rules, [rule(433.46875e6)]);
         assert_eq!(told.try_iter().count(), 0);
         // A file that no longer reads is not touched.
         std::fs::write(&path, "[[alert]]\n").unwrap();

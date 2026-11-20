@@ -33,6 +33,21 @@ pub struct Mark {
     pub comment: String,
 }
 
+/// What the samples of a recording are, whatever writes them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Meta<'a> {
+    /// SigMF's name for the samples' type: `cu8`, `ci16_le`.
+    pub datatype: &'a str,
+    pub sample_rate: f64,
+    pub center_hz: f64,
+    /// When the first sample was received; `None` where the wall clock
+    /// says nothing about the samples.
+    pub start: Option<SystemTime>,
+    /// What received them and how they were made, in a few words.
+    pub source: &'a str,
+    pub marks: &'a [Mark],
+}
+
 /// Writes `NAME.sigmf-data` and `NAME.sigmf-meta` into `dir`, making the
 /// directory if need be, and returns the path of the data file.
 pub fn write(dir: &Path, name: &str, recording: &Recording) -> io::Result<PathBuf> {
@@ -43,8 +58,26 @@ pub fn write(dir: &Path, name: &str, recording: &Recording) -> io::Result<PathBu
     Ok(data)
 }
 
+/// Writes `NAME.sigmf-meta` into `dir`: for samples written by another
+/// hand, as they come, into `NAME.sigmf-data` beside it.
+pub fn write_meta(dir: &Path, name: &str, meta: &Meta) -> io::Result<()> {
+    std::fs::write(dir.join(format!("{name}.sigmf-meta")), meta_text(meta))
+}
+
 /// The `.sigmf-meta` file of `recording`.
 pub fn meta(recording: &Recording) -> String {
+    meta_text(&Meta {
+        datatype: "cu8",
+        sample_rate: f64::from(recording.sample_rate),
+        center_hz: recording.center_hz,
+        start: recording.start,
+        source: recording.source,
+        marks: recording.marks,
+    })
+}
+
+/// The `.sigmf-meta` file of samples that `meta` tells.
+pub fn meta_text(recording: &Meta) -> String {
     let mut capture = format!(
         "      \"core:sample_start\": 0,\n      \"core:frequency\": {}",
         recording.center_hz
@@ -78,10 +111,11 @@ pub fn meta(recording: &Recording) -> String {
         format!("[\n{}\n  ]", marks.join(",\n"))
     };
     format!(
-        "{{\n  \"global\": {{\n    \"core:datatype\": \"cu8\",\n    \"core:sample_rate\": {},\n    \
+        "{{\n  \"global\": {{\n    \"core:datatype\": {},\n    \"core:sample_rate\": {},\n    \
          \"core:version\": \"1.0.0\",\n    \"core:recorder\": \"sdr-viewer {}\",\n    \
          \"core:description\": {}\n  }},\n  \"captures\": [\n    {{\n{capture}\n    }}\n  ],\n  \
          \"annotations\": {annotations}\n}}\n",
+        json_string(recording.datatype),
         recording.sample_rate,
         env!("CARGO_PKG_VERSION"),
         json_string(recording.source),
@@ -203,6 +237,31 @@ mod tests {
             std::fs::read_to_string(dir.join("iq/burst.sigmf-meta")).unwrap(),
             meta(&recording)
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_meta_of_samples_written_elsewhere_says_their_type_and_rate() {
+        let dir = std::env::temp_dir().join(format!("sdr-sigmf-meta-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let narrow = Meta {
+            datatype: "ci16_le",
+            sample_rate: 42_666.5,
+            center_hz: 433.475e6,
+            start: Some(start()),
+            source: "rtl-sdr; 433.475 MHz decimated by 48",
+            marks: &[],
+        };
+        write_meta(&dir, "narrow", &narrow).unwrap();
+        let text = std::fs::read_to_string(dir.join("narrow.sigmf-meta")).unwrap();
+        assert_eq!(text, meta_text(&narrow));
+        for part in [
+            r#""core:datatype": "ci16_le","#,
+            r#""core:sample_rate": 42666.5,"#,
+            r#""core:frequency": 433475000,"#,
+        ] {
+            assert!(text.contains(part), "{part} is not in {text}");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

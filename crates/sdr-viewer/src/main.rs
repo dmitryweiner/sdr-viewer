@@ -9,6 +9,8 @@ mod keep;
 mod mesh;
 mod pipeline;
 mod reader;
+mod record;
+mod recordings;
 mod save;
 mod snapshot;
 mod writer;
@@ -26,6 +28,7 @@ use ratatui::crossterm::event::{self, Event};
 use sdr_core::{IqRing, Source, SourceInfo};
 use sdr_detect::{Channel, Rule};
 use sdr_mesh::update::MeshUpdate;
+use sdr_store::alerts::AlertsFile;
 use sdr_tui::alerts::AlertsView;
 use sdr_tui::channels::ChannelsView;
 use sdr_tui::log::WallClock;
@@ -71,16 +74,23 @@ fn run(args: &cli::Args) -> Result<ExitCode, String> {
     };
     // And the rules of their alerts: a snapshot makes no file.
     let alerts_path = cli::alerts_path(args, |name| std::env::var(name).ok());
-    let rules = match (&source, alerts_path.as_deref()) {
+    let alerts_file = match (&source, alerts_path.as_deref()) {
         (Some(_), Some(path)) => alerts::load(path, args.snapshot.is_none())?,
-        _ => Vec::new(),
+        _ => AlertsFile::default(),
     };
     if let Some(size) = args.snapshot {
         let Some(source) = source else {
             return Err("a snapshot of this screen needs a recording or --rtlsdr".into());
         };
-        let text = snapshot::run(source, size, args.secs, args.screen, listed, rules)
-            .map_err(|err| err.to_string())?;
+        let text = snapshot::run(
+            source,
+            size,
+            args.secs,
+            args.screen,
+            listed,
+            alerts_file.rules,
+        )
+        .map_err(|err| err.to_string())?;
         print!("{text}");
         return Ok(ExitCode::SUCCESS);
     }
@@ -108,7 +118,7 @@ fn run(args: &cli::Args) -> Result<ExitCode, String> {
             let files = UserFiles {
                 channels: listed,
                 channels_path,
-                rules,
+                alerts: alerts_file,
                 alerts_path,
             };
             Some(Reception::start(
@@ -207,6 +217,7 @@ fn interface(
                     Update::Done(done) => app.done = Some(done),
                     Update::Picture(event, fragment) => app.on_picture(&event, fragment),
                     Update::Density(map) => app.on_density(map),
+                    Update::RecordingsFull => app.alerts.set_full(),
                     Update::Mesh(update) => {
                         if kept_mesh.is_some() {
                             told.push(MeshKept::told(mesh::unix_now(), update.clone()));
@@ -266,7 +277,7 @@ fn interface(
 struct UserFiles {
     channels: Vec<Channel>,
     channels_path: Option<PathBuf>,
-    rules: Vec<Rule>,
+    alerts: AlertsFile,
     alerts_path: Option<PathBuf>,
 }
 
@@ -299,7 +310,10 @@ impl Reception {
         let UserFiles {
             channels: listed,
             channels_path,
-            rules,
+            alerts: AlertsFile {
+                rules,
+                record_limit,
+            },
             alerts_path,
         } = files;
         app.channels = ChannelsView::new(listed);
@@ -345,7 +359,7 @@ impl Reception {
             let updates = updates_tx.clone();
             let clock = args.rtlsdr.then_some(started);
             std::thread::spawn(move || {
-                jobs::run(jobs_rx, dir.as_deref(), clock, |update| {
+                jobs::run(jobs_rx, (dir.as_deref(), record_limit), clock, |update| {
                     let _ = updates.send(update);
                 });
             })
