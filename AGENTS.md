@@ -137,7 +137,10 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-20 `sdr-viewer` there is PR #38's build (alerts: its
+  Since 2026-11-20 `sdr-viewer` there is PR #39's build (`!` on the
+  strip, tried there with the generator and `--alerts test-key.toml`:
+  the rule appended, the file removed after); PR #38's is
+  `sdr-viewer.before-key` (alerts: its
   first run with `--rtlsdr` makes `~/.config/sdr-viewer/alerts.toml`
   with the example; with the generator and a rule on its burst it showed
   `! burst ×1` and `aplay` played without a word against it); PR #36's,
