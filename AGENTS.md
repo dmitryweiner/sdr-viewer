@@ -130,9 +130,14 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-20 `sdr-viewer` there is PR #34's build (the node's own
+  Since 2026-11-20 `sdr-viewer` there is PR #35's build (the mesh's
+  database: its first run with `--mesh` or `--rtlsdr` brings the user's
+  `events.db` up to layout 2, which the older builds below then refuse —
+  they run with `--no-db`; `events.db.before-mesh-db` there is a copy of
+  the user's file before it, 3.9 MB). PR #34's (the node's own
   row: its `--snapshot --screen 6 -- --mesh` there showed the node's
-  minute telemetry as `•` and `→ this app`, not heard); PR #32's (the
+  minute telemetry as `•` and `→ this app`, not heard) is
+  `sdr-viewer.before-mesh-db`; PR #32's (the
   pulse as its first trial changed it; with `meshtasticd` down it
   names `sudo /home/dmw/sdr-viewer-check/lora.sh on`) is
   `sdr-viewer.before-own-row`; PR #31's (the
@@ -421,7 +426,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | `sdr-mesh`'s protobuf types (`build.rs`: `protox` + `prost-build`, ~10 500 lines of Rust) | ~10 s on a clean debug build of the crate; nothing on later builds unless `proto/` changes |
 | The Meshtastic pulse on the Mac (`smoke.py --keys $'6\x1b[B\x1b[B-+?1' --secs 8 -- --mesh=192.168.1.246`, the device's node over the LAN) | 0% of one core, 23 KiB to the terminal in 8 s |
 | The Meshtastic pulse on the CM4 (`smoke.py --keys 6`, and with two downs, 160×45, 15 s, `-- --mesh=127.0.0.1`; 17 nodes) | **0%** of a core (0.05 s in 15 s), 16–17 KiB to the terminal |
-| Static aarch64 binary from CI | 5.7 MB with the mesh client; 5.3 MB with periodicity; 5.1 MB before (4.8 before the `toml` crate, 2.4 before SQLite) |
+| Static aarch64 binary from CI | 5.9 MB with the mesh's database; 5.7 MB with the mesh client; 5.3 MB with periodicity; 5.1 MB before (4.8 before the `toml` crate, 2.4 before SQLite) |
 
 Before phasors and the noise table the generator took 70% of a CM4 core:
 measure on the device, the Mac's numbers do not scale.
