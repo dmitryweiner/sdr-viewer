@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use sdr_core::SourceInfo;
 use sdr_detect::Event as Detected;
-use sdr_mesh::update::MeshUpdate;
+use sdr_mesh::update::{MeshUpdate, Packet};
 use sdr_store::mesh::{ListenId, MeshHistory};
 use sdr_store::{Store, StoredEvent};
 
@@ -86,15 +86,17 @@ pub fn keep_events(
 
 /// The mesh in the database at work: where the interface sends what the
 /// client told, each with the time it was told, the thread that writes it,
-/// and what earlier runs kept of the last day.
+/// what earlier runs kept of the last day, and the texts of the week before
+/// it.
 pub struct KeptMesh {
     pub told: Sender<Vec<(u64, MeshUpdate)>>,
     pub writer: JoinHandle<()>,
     pub history: MeshHistory,
+    pub texts: Vec<Packet>,
 }
 
 /// Opens the database at `path` for the mesh at `now` (Unix seconds), reads
-/// the last day, and starts the thread that deletes what is older than
+/// the last day and the texts of the week before it, and starts the thread that deletes what is older than
 /// `KEEP_EVENTS` and then writes what is told: when the app listened to
 /// which node (from its `Ready` to its `Lost`, or to the last thing told
 /// if the app was stopped short), the packets and the node's own queued.
@@ -106,9 +108,13 @@ pub fn keep_mesh(path: &Path, now: u64, updates: SyncSender<Update>) -> Result<K
     let history = store
         .mesh_since(day_ago, MAX_HISTORY)
         .map_err(|err| failed(path, &err))?;
+    let week_ago = now.saturating_sub(KEEP_EVENTS.as_secs());
+    let texts = store
+        .texts(week_ago, day_ago, sdr_tui::mesh::MAX_TEXTS)
+        .map_err(|err| failed(path, &err))?;
     let (told, rx) = channel::<Vec<(u64, MeshUpdate)>>();
     let writer = std::thread::spawn(move || {
-        if let Err(err) = store.prune_mesh(now.saturating_sub(KEEP_EVENTS.as_secs())) {
+        if let Err(err) = store.prune_mesh(week_ago) {
             let _ = updates.send(Update::Notice(format!(
                 "old packets are not deleted: {err}"
             )));
@@ -153,6 +159,7 @@ pub fn keep_mesh(path: &Path, now: u64, updates: SyncSender<Update>) -> Result<K
         told,
         writer,
         history,
+        texts,
     })
 }
 
@@ -174,7 +181,7 @@ fn failed(path: &Path, err: &dyn std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sdr_mesh::update::{BROADCAST, Content, Packet, Ready, Sent};
+    use sdr_mesh::update::{BROADCAST, Content, Packet, Payload, Ready, Sent};
     use sdr_store::mesh::Listened;
     use std::sync::mpsc::sync_channel;
     use std::time::UNIX_EPOCH;
@@ -347,9 +354,31 @@ mod tests {
         })
     }
 
+    /// A text heard at `received`.
+    fn text(received: u64) -> MeshUpdate {
+        let MeshUpdate::Packet(mut packet) = heard(received) else {
+            unreachable!()
+        };
+        packet.payload = Some(Payload {
+            port: 1,
+            data: vec![0x08, 0x01, 0x12, 0x02, b'h', b'i'],
+        });
+        packet.content = Content::Text("hi".into());
+        MeshUpdate::Packet(packet)
+    }
+
     /// One run of the app: `told` sent to its writer, which is then
     /// waited for; what it read at its start.
     fn run(path: &Path, now: u64, told: Vec<Vec<(u64, MeshUpdate)>>) -> MeshHistory {
+        run_for_texts(path, now, told).0
+    }
+
+    /// The same, with the texts of the week before the day it read.
+    fn run_for_texts(
+        path: &Path,
+        now: u64,
+        told: Vec<Vec<(u64, MeshUpdate)>>,
+    ) -> (MeshHistory, Vec<Packet>) {
         let (updates, notices) = sync_channel(8);
         let kept = keep_mesh(path, now, updates).unwrap();
         for batch in told {
@@ -358,7 +387,28 @@ mod tests {
         drop(kept.told);
         kept.writer.join().unwrap();
         assert!(notices.try_recv().is_err());
-        kept.history
+        (kept.history, kept.texts)
+    }
+
+    #[test]
+    fn the_next_run_reads_the_texts_of_the_week_before_its_day_too() {
+        let dir = TempDir::new("mesh-texts");
+        let path = dir.0.join("events.db");
+        for ago in [8 * DAY_S, 3 * DAY_S, 2 * 3600] {
+            let at = NOON_S - ago;
+            let told = vec![vec![
+                (at, ready()),
+                (at + 1, text(at)),
+                (at + 2, heard(at + 2)),
+            ]];
+            run(&path, at, told);
+        }
+        let (history, texts) = run_for_texts(&path, NOON_S, Vec::new());
+        let received: Vec<u64> = texts.iter().map(|text| text.received).collect();
+        assert_eq!(received, [NOON_S - 3 * DAY_S]);
+        assert_eq!(texts[0].content, Content::Text("hi".into()));
+        // The day's are among the day's packets.
+        assert_eq!(history.packets.len(), 2);
     }
 
     #[test]

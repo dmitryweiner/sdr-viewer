@@ -217,7 +217,14 @@ minute: it was not on the air. The node's card adds its own count of
 what it sent on the air, acknowledgements too, which it tells every 15
 minutes. `meshtasticd` serves one client at a time: a phone app on the
 node's API and the pulse take turns.
-The card counts a node's packets in the last 24 hours, or since `m`.
+The card counts a node's packets in the last 24 hours, or since `m`, and
+tells what the node last told of itself: its battery (or "powered"),
+voltage, how busy the channel is and its own airtime; where it is (to
+the metre or, when its sender rounded it, "±365 m"), and how far that is
+from where the node itself is, when it has told that; and its last text.
+Under the list are the last texts of every channel the node reads, the
+newest last — those of the last week in the database too:
+`09:59  HG1 → all · MediumFast  the gate is open`.
 Packets on a channel the node has no key for count too: their header is
 in the clear. The selected node's card names its id, hardware and role,
 and tells its last packet: what it was, to whom, on which channel (or the

@@ -1106,6 +1106,66 @@ mod tests {
     }
 
     #[test]
+    fn the_card_and_the_feed_tell_texts_positions_and_batteries() {
+        use crate::mesh::tests::{FAR, GATE, ME, packet, place};
+        use sdr_mesh::update::{Content, DeviceMetrics, Position};
+        let mut app = mesh_app();
+        let rounded = Position {
+            within_m: Some(364.8),
+            ..place(32.82)
+        };
+        let metrics = DeviceMetrics {
+            battery: Some(80),
+            voltage: Some(3.95),
+            channel_utilization: Some(12.5),
+            air_util_tx: Some(1.5),
+        };
+        let mut to_me = packet(GATE, 35_940, Content::Text("the gate is open".into()));
+        to_me.to = ME;
+        // What the node itself sent of where it is.
+        let mut own = packet(ME, 35_300, Content::Position(place(32.81)));
+        own.hops = Some(0);
+        for packet in [
+            own,
+            packet(GATE, 35_400, Content::Position(rounded)),
+            packet(GATE, 35_880, Content::Device(metrics)),
+            packet(FAR, 35_700, Content::Text("shalom\nall".into())),
+            to_me,
+        ] {
+            app.on_mesh(MeshUpdate::Packet(packet));
+        }
+        app.mesh.move_selection(1);
+        app.mesh.move_selection(1);
+        insta::assert_snapshot!(render(&app, 160, 45).backend());
+        let text = render_text(&app, 160, 45);
+        for line in [
+            " battery 80% 3.95 V · channel 12.5% · air 1.5% · 2 m ago",
+            " at 32.82000, 34.99000 ±365 m · 1.1 km away · 10 m ago",
+            " text 09:59 to this node: the gate is open",
+        ] {
+            assert!(text.contains(line), "{line:?} in\n{text}");
+        }
+        // The feed is under the list, the newest last.
+        let feed: Vec<&str> = text
+            .lines()
+            .filter(|line| line.starts_with(" 09:5"))
+            .collect();
+        assert_eq!(feed.len(), 2, "{text}");
+        assert!(
+            feed[0].starts_with(" 09:55  !43396f6c → all · MediumFast  shalom all"),
+            "{text}"
+        );
+        assert!(
+            feed[1].starts_with(" 09:59  HG1 → this node · MediumFast  the gate is open"),
+            "{text}"
+        );
+        // It all fits the smallest screen.
+        let small = render_text(&app, MIN_WIDTH, MIN_HEIGHT);
+        assert!(small.contains(" 09:59  HG1 → this node"), "{small}");
+        assert!(small.contains(" text 09:59"), "{small}");
+    }
+
+    #[test]
     fn the_nodes_own_row_tells_what_it_sent_and_what_it_handed_the_app_alone() {
         use crate::mesh::tests::app_only;
         use sdr_mesh::update::{Content, LocalStats, Sent};

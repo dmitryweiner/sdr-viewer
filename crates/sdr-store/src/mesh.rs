@@ -192,6 +192,22 @@ impl Store {
         })
     }
 
+    /// The last `limit` texts heard from `from` on and before `until`, the
+    /// oldest first.
+    pub fn texts(&self, from: u64, until: u64, limit: usize) -> Result<Vec<Packet>, StoreError> {
+        let mut select = self.connection.prepare_cached(
+            "SELECT received_s, from_node, to_node, channel, packet_id, snr, rssi, hops,
+                    hop_start, relay, via_mqtt, app_only, port, data
+             FROM mesh_packets WHERE received_s >= ?1 AND received_s < ?2 AND port = ?3
+             ORDER BY received_s DESC, id DESC LIMIT ?4",
+        )?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let span = params![signed(from), signed(until), session::TEXT_PORT, limit];
+        let mut texts: Vec<Packet> = select.query_map(span, packet)?.collect::<Result<_, _>>()?;
+        texts.reverse();
+        Ok(texts)
+    }
+
     /// Deletes what the mesh told before `before`; returns how many
     /// packets went.
     pub fn prune_mesh(&mut self, before: u64) -> Result<u64, StoreError> {
@@ -282,13 +298,7 @@ mod tests {
         let mut minute = heard(ME, 36_030, None);
         (minute.snr, minute.rssi, minute.relay, minute.app_only) = (0.0, 0, 0, true);
         let packets = [heard(GATE, 36_005, Some(text())), sealed, minute];
-        assert_eq!(
-            packets[0].content,
-            Content::Other {
-                port: 1,
-                name: "text message".into()
-            }
-        );
+        assert_eq!(packets[0].content, Content::Text("hi".into()));
         store.add_packets(&packets).unwrap();
         store
             .add_sent(&[(
@@ -351,6 +361,28 @@ mod tests {
         let received: Vec<u64> = history.packets.iter().map(|p| p.received).collect();
         assert_eq!(received, [36_010, 36_050]);
         assert_eq!(history.sent.len(), 2);
+    }
+
+    #[test]
+    fn the_texts_of_a_span_are_its_last_the_oldest_first() {
+        let mut store = Store::in_memory().unwrap();
+        let telemetry = Payload {
+            port: 67,
+            data: vec![0x08, 67],
+        };
+        store
+            .add_packets(&[
+                heard(GATE, 1_000, Some(text())),
+                heard(GATE, 2_000, Some(text())),
+                heard(GATE, 2_500, Some(telemetry)),
+                heard(GATE, 2_600, None),
+                heard(GATE, 3_000, Some(text())),
+                heard(GATE, 4_000, Some(text())),
+            ])
+            .unwrap();
+        let at = |texts: Vec<Packet>| -> Vec<u64> { texts.iter().map(|p| p.received).collect() };
+        assert_eq!(at(store.texts(1_500, 4_000, 10).unwrap()), [2_000, 3_000]);
+        assert_eq!(at(store.texts(0, 4_000, 2).unwrap()), [2_000, 3_000]);
     }
 
     #[test]

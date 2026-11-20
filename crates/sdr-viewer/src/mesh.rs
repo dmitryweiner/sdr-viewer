@@ -14,7 +14,7 @@ use sdr_core::SourceInfo;
 use sdr_mesh::client::{self, Timing};
 use sdr_mesh::update::{BROADCAST, Content, MeshUpdate, Packet, Sent};
 use sdr_store::mesh::MeshHistory;
-use sdr_tui::mesh::{Link, MeshView};
+use sdr_tui::mesh::{History, Link, MeshView};
 use sdr_tui::{App, Screen, SourceState, ui};
 
 use crate::reader::Update;
@@ -58,9 +58,10 @@ pub fn starter(addr: &str, exe: Option<&Path>, exists: impl Fn(&Path) -> bool) -
 }
 
 /// What earlier runs kept, as the pulse takes it (`MeshView::load_history`):
-/// the node they listened to last, the times they listened, and the packets
-/// and that node's own queued, in the order they came.
-pub fn for_the_pulse(history: MeshHistory) -> (Option<u32>, Vec<(u64, u64)>, Vec<MeshUpdate>) {
+/// the node they listened to last, the times they listened, the `texts` of
+/// the days before, and the packets and that node's own queued, in the
+/// order they came.
+pub fn for_the_pulse(history: MeshHistory, texts: Vec<Packet>) -> History {
     let me = history.listened.last().map(|listened| listened.node);
     let listened = history.listened.iter();
     let listened = listened.map(|listened| (listened.from, listened.until));
@@ -75,8 +76,12 @@ pub fn for_the_pulse(history: MeshHistory) -> (Option<u32>, Vec<(u64, u64)>, Vec
     let sent = sent.map(|(_, sent)| (sent.at, MeshUpdate::Sent(sent)));
     let mut told: Vec<(u64, MeshUpdate)> = packets.chain(sent).collect();
     told.sort_by_key(|&(at, _)| at);
-    let told = told.into_iter().map(|(_, update)| update).collect();
-    (me, listened.collect(), told)
+    History {
+        me,
+        listened: listened.collect(),
+        texts,
+        told: told.into_iter().map(|(_, update)| update).collect(),
+    }
 }
 
 /// Talks to `meshtasticd` at `addr` until `stop`, or until the interface
@@ -201,6 +206,20 @@ fn describe(view: &MeshView, packet: &Packet) -> String {
         Content::Encrypted => "encrypted".to_string(),
         Content::User(user) => format!("node info {} {:?}", user.short_name, user.long_name),
         Content::LocalStats(stats) => format!("local stats: {} sent", stats.sent),
+        Content::Text(text) => format!("text {text:?}"),
+        Content::Position(position) => format!(
+            "position {:.5}, {:.5}",
+            position.latitude, position.longitude
+        ),
+        Content::Device(device) => {
+            let battery = device
+                .battery
+                .map_or("battery ?".into(), |percent| format!("battery {percent}%"));
+            let busy = device
+                .channel_utilization
+                .map_or(String::new(), |busy| format!(", channel {busy:.1}%"));
+            format!("{battery}{busy}")
+        }
         Content::Other { name, .. } => name.clone(),
     };
     let hops = packet.hops.map_or("hops ?".to_string(), |hops| {
@@ -219,8 +238,9 @@ fn describe(view: &MeshView, packet: &Packet) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sdr_mesh::update::LocalStats;
+    use sdr_mesh::update::{DeviceMetrics, LocalStats, Position};
     use sdr_store::mesh::Listened;
+    use sdr_tui::mesh::History;
 
     fn minute_of(from: u32, received: u64) -> Packet {
         Packet {
@@ -242,6 +262,38 @@ mod tests {
             },
             payload: None,
         }
+    }
+
+    #[test]
+    fn texts_positions_and_metrics_are_told_by_what_they_say() {
+        let view = MeshView::new(Link::Off);
+        let mut packet = minute_of(0x015b_8900, 36_000);
+        let mut said = |content| {
+            packet.content = content;
+            describe(&view, &packet)
+        };
+        let text = said(Content::Text("shalom\nall".into()));
+        assert!(text.contains(" text \"shalom\\nall\" "), "{text}");
+        let position = said(Content::Position(Position {
+            latitude: 32.79412,
+            longitude: 34.9892,
+            altitude_m: Some(240),
+            within_m: Some(2918.0),
+        }));
+        assert!(
+            position.contains(" position 32.79412, 34.98920 "),
+            "{position}"
+        );
+        let metrics = said(Content::Device(DeviceMetrics {
+            battery: Some(87),
+            voltage: Some(4.05),
+            channel_utilization: Some(12.5),
+            air_util_tx: Some(1.5),
+        }));
+        assert!(
+            metrics.contains(" battery 87%, channel 12.5% "),
+            "{metrics}"
+        );
     }
 
     #[test]
@@ -296,11 +348,14 @@ mod tests {
                 (ME, Sent { at: 35_200, id: 2 }),
             ],
         };
-        let (me, listened, told) = for_the_pulse(history);
-        assert_eq!(me, Some(ME));
-        assert_eq!(listened, [(30_000, 31_000), (35_000, 35_600)]);
+        let older = vec![packet(3_000)];
+        let pulse = for_the_pulse(history, older.clone());
+        assert_eq!(pulse.me, Some(ME));
+        assert_eq!(pulse.listened, [(30_000, 31_000), (35_000, 35_600)]);
+        assert_eq!(pulse.texts, older);
         // What another node queued is not this one's.
-        let times: Vec<u64> = told
+        let times: Vec<u64> = pulse
+            .told
             .iter()
             .map(|update| match update {
                 MeshUpdate::Packet(packet) => packet.received,
@@ -309,7 +364,10 @@ mod tests {
             })
             .collect();
         assert_eq!(times, [35_100, 35_200, 35_300]);
-        assert_eq!(for_the_pulse(MeshHistory::default()).0, None);
+        assert_eq!(
+            for_the_pulse(MeshHistory::default(), Vec::new()),
+            History::default()
+        );
     }
 
     #[test]

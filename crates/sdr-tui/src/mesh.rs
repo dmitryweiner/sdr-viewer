@@ -9,7 +9,9 @@
 
 use std::collections::VecDeque;
 
-use sdr_mesh::update::{Content, LocalStats, MeshUpdate, Node, NodeUser, Packet, Ready};
+use sdr_mesh::update::{
+    Content, DeviceMetrics, LocalStats, MeshUpdate, Node, NodeUser, Packet, Position, Ready,
+};
 
 /// Seconds to a column of the pulse.
 pub const SCALES: [u64; 6] = [10, 30, 60, 300, 900, 3600];
@@ -26,6 +28,12 @@ pub const HISTORY_S: u64 = 24 * 3600;
 
 /// And at most so many of them.
 const MAX_TICKS: usize = 10_000;
+
+/// The texts the feed keeps, the newest.
+pub const MAX_TEXTS: usize = 200;
+
+/// The mean radius of the Earth, metres.
+const EARTH_M: f64 = 6_371_000.0;
 
 /// The numbers of the node's last packets sent, so that one told twice
 /// (queued, then its copy) is one.
@@ -85,6 +93,24 @@ pub struct NodeRow {
     pub last_sent: Option<u64>,
     /// The node's own count of what it sent, the last time it told it.
     pub tx_count: Option<TxCount>,
+    /// Where it last told it was, and its last device metrics, each with
+    /// when it told it, if known.
+    pub position: Option<(Position, Option<u64>)>,
+    pub device: Option<(DeviceMetrics, Option<u64>)>,
+}
+
+/// What earlier runs kept, as the pulse takes it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct History {
+    /// The node they listened to last.
+    pub me: Option<u32>,
+    /// When they listened.
+    pub listened: Vec<(u64, u64)>,
+    /// The texts of the days before, for the feed alone, the oldest first.
+    pub texts: Vec<Packet>,
+    /// The packets of the last day and the node's own queued, the oldest
+    /// first.
+    pub told: Vec<MeshUpdate>,
 }
 
 /// What the node counts of its own transmissions, in its local stats.
@@ -117,6 +143,8 @@ impl NodeRow {
             sent_ids: VecDeque::new(),
             last_sent: None,
             tx_count: None,
+            position: None,
+            device: None,
         }
     }
 
@@ -166,6 +194,8 @@ pub struct MeshView {
     /// told while it does not answer.
     pub starter: Option<String>,
     nodes: Vec<NodeRow>,
+    /// The texts heard, the oldest first.
+    texts: VecDeque<Packet>,
     /// When the app was connected: from each `Ready` to the next loss.
     listened: Vec<(u64, Option<u64>)>,
     order: Order,
@@ -187,6 +217,7 @@ impl MeshView {
             me: None,
             starter: None,
             nodes: Vec::new(),
+            texts: VecDeque::new(),
             listened: Vec::new(),
             order: Order::default(),
             active_only: false,
@@ -226,19 +257,16 @@ impl MeshView {
         }
     }
 
-    /// What earlier runs kept: the node they listened to, the times they
-    /// did, and the packets and the node's own told then, the oldest
-    /// first. Before the node answers.
-    pub fn load_history(
-        &mut self,
-        me: Option<u32>,
-        listened: Vec<(u64, u64)>,
-        told: Vec<MeshUpdate>,
-    ) {
-        self.me = me;
-        let listened = listened.into_iter().map(|(on, off)| (on, Some(off)));
+    /// What earlier runs kept, before the node answers.
+    pub fn load_history(&mut self, history: History) {
+        self.me = history.me;
+        let listened = history.listened.into_iter();
+        let listened = listened.map(|(on, off)| (on, Some(off)));
         self.listened.splice(0..0, listened);
-        for update in told {
+        for text in history.texts {
+            self.note_text(text);
+        }
+        for update in history.told {
             self.on_update(update);
         }
     }
@@ -260,13 +288,35 @@ impl MeshView {
             row.hops = node.hops_away;
         }
         row.last_heard = row.last_heard.max(node.last_heard);
+        // The node's database has the last it heard, here or not; if it
+        // is what was heard here, that tells when.
+        if let Some(position) = node.position
+            && row
+                .position
+                .as_ref()
+                .is_none_or(|(ours, _)| *ours != position)
+        {
+            row.position = Some((position, None));
+        }
+        if let Some(device) = node.device
+            && row.device.as_ref().is_none_or(|(ours, _)| *ours != device)
+        {
+            row.device = Some((device, None));
+        }
     }
 
     fn on_packet(&mut self, packet: Packet) {
         let own = self.me == Some(packet.from);
+        if let Content::Text(_) = &packet.content {
+            self.note_text(packet.clone());
+        }
         let row = self.row_mut(packet.from);
-        if let Content::User(user) = &packet.content {
-            row.user = Some(user.clone());
+        let received = packet.received;
+        match &packet.content {
+            Content::User(user) => row.user = Some(user.clone()),
+            Content::Position(position) => newest(&mut row.position, position, received),
+            Content::Device(device) => newest(&mut row.device, device, received),
+            _ => {}
         }
         if packet.app_only {
             keep(&mut row.app_only_times, packet.received);
@@ -289,6 +339,47 @@ impl MeshView {
             keep(&mut row.times, packet.received);
         }
         row.last = Some(packet);
+    }
+
+    /// Into the feed in the order heard: what `meshtasticd` kept comes late.
+    fn note_text(&mut self, text: Packet) {
+        let at = self
+            .texts
+            .partition_point(|other| other.received <= text.received);
+        self.texts.insert(at, text);
+        if self.texts.len() > MAX_TEXTS {
+            self.texts.pop_front();
+        }
+    }
+
+    /// The last `count` texts, the oldest first; none from before the list
+    /// was started afresh.
+    pub fn texts(&self, count: usize) -> Vec<&Packet> {
+        let from = self.since.unwrap_or(0);
+        let shown: Vec<&Packet> = self
+            .texts
+            .iter()
+            .filter(|text| text.received >= from)
+            .collect();
+        shown[shown.len().saturating_sub(count)..].to_vec()
+    }
+
+    /// The last text of the node `num` the feed holds.
+    pub fn last_text(&self, num: u32) -> Option<&Packet> {
+        self.texts.iter().rev().find(|text| text.from == num)
+    }
+
+    /// How far `row` is from the node itself, when both told where.
+    pub fn distance_m(&self, row: &NodeRow) -> Option<f64> {
+        let me = self.me.filter(|&me| me != row.num)?;
+        let here = &self
+            .nodes
+            .iter()
+            .find(|node| node.num == me)?
+            .position
+            .as_ref()?
+            .0;
+        Some(distance_m(here, &row.position.as_ref()?.0))
     }
 
     fn row_mut(&mut self, num: u32) -> &mut NodeRow {
@@ -596,6 +687,26 @@ impl MeshView {
     }
 }
 
+/// `told` at `at`, unless what is kept was told later.
+fn newest<T: Clone>(kept: &mut Option<(T, Option<u64>)>, told: &T, at: u64) {
+    if kept
+        .as_ref()
+        .and_then(|(_, when)| *when)
+        .is_none_or(|when| when <= at)
+    {
+        *kept = Some((told.clone(), Some(at)));
+    }
+}
+
+/// Metres between two places along the Earth's surface (the haversine).
+pub fn distance_m(a: &Position, b: &Position) -> f64 {
+    let (lat_a, lat_b) = (a.latitude.to_radians(), b.latitude.to_radians());
+    let half_lat = (lat_b - lat_a) / 2.0;
+    let half_lon = (b.longitude - a.longitude).to_radians() / 2.0;
+    let h = half_lat.sin().powi(2) + lat_a.cos() * lat_b.cos() * half_lon.sin().powi(2);
+    2.0 * EARTH_M * h.sqrt().asin()
+}
+
 /// Adds `time` to a row's times, and lets go of what is older than the
 /// history or beyond its count.
 fn keep(times: &mut VecDeque<u64>, time: u64) {
@@ -688,6 +799,8 @@ pub(crate) mod tests {
                 snr: None,
                 hops_away: None,
                 via_mqtt: false,
+                position: None,
+                device: None,
             }),
             // Heard of before the run, without a name.
             MeshUpdate::Node(Node {
@@ -697,6 +810,8 @@ pub(crate) mod tests {
                 snr: Some(-13.25),
                 hops_away: Some(3),
                 via_mqtt: false,
+                position: None,
+                device: None,
             }),
             MeshUpdate::Ready(ready()),
             MeshUpdate::Packet(packet(
@@ -755,6 +870,8 @@ pub(crate) mod tests {
             snr: Some(-13.25),
             hops_away: Some(3),
             via_mqtt: false,
+            position: None,
+            device: None,
         }));
         let gate = view.rows()[1];
         assert_eq!(gate.user.as_ref().unwrap().short_name, "HG1");
@@ -977,6 +1094,8 @@ pub(crate) mod tests {
                 snr: None,
                 hops_away: Some(1),
                 via_mqtt: false,
+                position: None,
+                device: None,
             }));
         }
         let nums: Vec<u32> = view.rows().iter().map(|row| row.num).collect();
@@ -999,6 +1118,8 @@ pub(crate) mod tests {
             snr: None,
             hops_away: None,
             via_mqtt: false,
+            position: None,
+            device: None,
         }));
         let nums =
             |view: &MeshView| -> Vec<u32> { view.rows().iter().map(|row| row.num).collect() };
@@ -1086,8 +1207,16 @@ pub(crate) mod tests {
             }),
             MeshUpdate::Packet(packet(GATE, 34_900, telemetry())),
         ];
-        view.load_history(Some(ME), vec![(32_400, 33_000), (34_800, 35_100)], told);
+        // A text of the week before: in the feed, nowhere else.
+        let older = packet(FAR, 3_000, Content::Text("a week ago".into()));
+        view.load_history(History {
+            me: Some(ME),
+            listened: vec![(32_400, 33_000), (34_800, 35_100)],
+            texts: vec![older.clone()],
+            told,
+        });
         assert_eq!(view.me(), Some(ME));
+        assert_eq!(view.texts(5), [&older]);
         let rows: Vec<NodeRow> = view.rows().into_iter().cloned().collect();
         let nums: Vec<u32> = rows.iter().map(|row| row.num).collect();
         assert_eq!(nums, [ME, GATE]);
@@ -1110,6 +1239,126 @@ pub(crate) mod tests {
         assert_eq!(view.rows()[0].num, ME);
     }
 
+    /// Haifa's harbour, and 1 km north of it, give or take.
+    pub(crate) fn place(latitude: f64) -> Position {
+        Position {
+            latitude,
+            longitude: 34.99,
+            altitude_m: None,
+            within_m: None,
+        }
+    }
+
+    fn battery(percent: u32) -> DeviceMetrics {
+        DeviceMetrics {
+            battery: Some(percent),
+            voltage: Some(4.0),
+            channel_utilization: Some(12.5),
+            air_util_tx: Some(1.25),
+        }
+    }
+
+    #[test]
+    fn where_a_node_is_and_its_battery_are_its_last_told() {
+        let mut view = view();
+        let told = [
+            (35_960, Content::Position(place(32.82))),
+            // Kept by meshtasticd and handed over late: older.
+            (35_100, Content::Position(place(32.70))),
+            (35_970, Content::Device(battery(80))),
+        ];
+        for (at, content) in told {
+            view.on_update(MeshUpdate::Packet(packet(GATE, at, content)));
+        }
+        // The node's own, handed the app alone.
+        let mut minute = app_only(35_980);
+        minute.content = Content::Device(battery(101));
+        view.on_update(MeshUpdate::Packet(minute));
+        let gate = view.rows()[1];
+        assert_eq!(gate.position, Some((place(32.82), Some(35_960))));
+        assert_eq!(gate.device, Some((battery(80), Some(35_970))));
+        assert_eq!(view.rows()[0].device, Some((battery(101), Some(35_980))));
+        // A new connection's database: the same is no news, another is
+        // newer than anything heard here, and when, nobody says.
+        let mut node = Node {
+            num: GATE,
+            user: None,
+            last_heard: Some(30_000),
+            snr: None,
+            hops_away: None,
+            via_mqtt: false,
+            position: Some(place(32.82)),
+            device: Some(battery(79)),
+        };
+        view.on_update(MeshUpdate::Node(node.clone()));
+        let gate = view.rows()[1];
+        assert_eq!(gate.position, Some((place(32.82), Some(35_960))));
+        assert_eq!(gate.device, Some((battery(79), None)));
+        node.position = None;
+        view.on_update(MeshUpdate::Node(node));
+        assert!(view.rows()[1].position.is_some());
+    }
+
+    #[test]
+    fn the_distance_to_a_node_is_from_where_the_node_itself_is() {
+        // A degree along the equator.
+        let east = Position {
+            longitude: 35.99,
+            ..place(0.0)
+        };
+        assert!((distance_m(&place(0.0), &east) - 111_195.0).abs() < 1.0);
+        let mut view = view();
+        view.on_update(MeshUpdate::Packet(packet(
+            GATE,
+            35_960,
+            Content::Position(place(32.82)),
+        )));
+        let gate = view.rows()[1].clone();
+        // The node itself has told no place yet.
+        assert_eq!(view.distance_m(&gate), None);
+        let mut own = packet(ME, 35_970, Content::Position(place(32.81)));
+        own.hop_start = 3;
+        view.on_update(MeshUpdate::Packet(own));
+        let distance = view.distance_m(&gate).unwrap();
+        assert!((distance - 1_112.0).abs() < 1.0, "{distance}");
+        assert_eq!(view.distance_m(view.rows()[0]), None);
+    }
+
+    #[test]
+    fn texts_are_a_feed_in_the_order_they_were_heard() {
+        let mut view = view();
+        let text = |from, at, text: &str| packet(from, at, Content::Text(text.into()));
+        for packet in [
+            text(GATE, 35_970, "second"),
+            // Kept by meshtasticd, heard before.
+            text(FAR, 35_900, "first"),
+            text(GATE, 35_990, "third"),
+        ] {
+            view.on_update(MeshUpdate::Packet(packet));
+        }
+        let said = |view: &MeshView, n| -> Vec<String> {
+            view.texts(n)
+                .iter()
+                .map(|packet| match &packet.content {
+                    Content::Text(text) => text.clone(),
+                    other => panic!("{other:?}"),
+                })
+                .collect()
+        };
+        assert_eq!(said(&view, 5), ["first", "second", "third"]);
+        assert_eq!(said(&view, 2), ["second", "third"]);
+        assert_eq!(view.last_text(GATE).unwrap().received, 35_990);
+        assert_eq!(view.last_text(ME), None);
+        // Started afresh, the feed is too; nothing is forgotten.
+        view.start_afresh();
+        assert!(view.texts(5).is_empty());
+        assert_eq!(view.last_text(FAR).unwrap().received, 35_900);
+        for at in 0..MAX_TEXTS as u64 + 5 {
+            view.on_update(MeshUpdate::Packet(text(GATE, 36_000 + at, "more")));
+        }
+        assert_eq!(view.texts(usize::MAX).len(), MAX_TEXTS);
+    }
+
     #[test]
     fn the_nodes_database_is_taken_when_newer_than_what_was_heard_here() {
         let mut view = view();
@@ -1120,6 +1369,8 @@ pub(crate) mod tests {
             snr: Some(-3.0),
             hops_away: Some(1),
             via_mqtt: false,
+            position: None,
+            device: None,
         }));
         let gate = view.rows()[1];
         assert_eq!(

@@ -114,8 +114,8 @@ fn run(args: &cli::Args) -> Result<ExitCode, String> {
         // What earlier runs kept, before the node answers.
         if let Some(path) = cli::mesh_db_path(args, |name| std::env::var(name).ok()) {
             let kept = keep::keep_mesh(&path, mesh::unix_now(), updates_tx.clone())?;
-            let (me, listened, told) = mesh::for_the_pulse(kept.history);
-            app.mesh.load_history(me, listened, told);
+            app.mesh
+                .load_history(mesh::for_the_pulse(kept.history, kept.texts));
             kept_mesh = Some((kept.told, kept.writer));
         }
         // The client keeps nothing itself: it is not waited for at the end.
