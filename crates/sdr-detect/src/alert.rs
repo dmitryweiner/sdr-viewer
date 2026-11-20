@@ -23,7 +23,17 @@ pub struct Rule {
     pub min_above_db: f32,
 }
 
+/// Bands whose edges are this close, in hertz, are one: a band read back
+/// from a file is a hair off the one written.
+const SAME_HZ: f64 = 1.0;
+
 impl Rule {
+    /// Whether `other` watches the same band, whatever else it asks.
+    pub fn same_band(&self, other: &Rule) -> bool {
+        (self.low_hz - other.low_hz).abs() < SAME_HZ
+            && (self.high_hz - other.high_hz).abs() < SAME_HZ
+    }
+
     pub fn is_met_by(&self, event: &Event) -> bool {
         let center = event.center_hz();
         self.low_hz <= center
@@ -142,6 +152,23 @@ mod tests {
         assert!(!rule.is_met_by(&event(434.001e6, ms(5000), 30.0)));
         assert!(!rule.is_met_by(&event(433.95e6, ms(990), 30.0)));
         assert!(!rule.is_met_by(&event(433.95e6, ms(5000), 19.9)));
+    }
+
+    #[test]
+    fn a_band_a_hair_off_is_the_same_band() {
+        let near = Rule {
+            name: "another".into(),
+            low_hz: 433.9e6 + 0.5,
+            high_hz: 434.0e6 - 0.5,
+            min_duration: Duration::ZERO,
+            min_above_db: 0.0,
+        };
+        assert!(rule().same_band(&near));
+        let wider = Rule {
+            high_hz: 434.0e6 + 1.0,
+            ..near
+        };
+        assert!(!rule().same_band(&wider));
     }
 
     #[test]

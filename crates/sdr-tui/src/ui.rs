@@ -35,10 +35,11 @@ const BAND_KEYS: [(&str, &str); 7] = [
     ("Space", "pause"),
 ];
 
-const CHANNEL_KEYS: [(&str, &str); 4] = [
+const CHANNEL_KEYS: [(&str, &str); 5] = [
     ("↑, ↓", "select a channel (PgUp, PgDn, Home, End)"),
     ("+, -", "fewer, more seconds to a column"),
     ("Enter", "tune to the selected channel"),
+    ("!", "alert on the selected channel"),
     ("X, X", "let go of the silent channels the app made"),
 ];
 
@@ -57,12 +58,13 @@ const MESH_KEYS: [(&str, &str); 6] = [
     ("X, X", "erase every node: those heard again come back"),
 ];
 
-const LOG_KEYS: [(&str, &str); 6] = [
+const LOG_KEYS: [(&str, &str); 7] = [
     ("↑, ↓", "select an event (PgUp, PgDn, Home, End)"),
     ("+, -", "raise, lower the level that hides weak events"),
     ("s", "sort by time, level, duration, frequency"),
     ("Enter", "tune to the selected event"),
     ("r", "save the selected event's IQ samples"),
+    ("!", "alert on the selected event's band"),
     ("X, X", "erase the ended events, in the database too"),
 ];
 

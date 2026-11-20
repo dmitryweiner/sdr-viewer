@@ -1,7 +1,9 @@
 //! The alerts file: TOML the user writes, one `[[alert]]` rule each. The
 //! app reads it at the start; one that does not exist yet is made with an
-//! example in its comments.
+//! example in its comments. The app only adds to its end — the rules
+//! made with `!` — and never rewrites what is there.
 
+use std::fmt::Write;
 use std::path::Path;
 use std::time::Duration;
 
@@ -25,6 +27,8 @@ pub const HEADER: &str = "\
 #   min_db = 20            # optional: its peak this far above the noise (10)
 #
 # A signal sounds the tone once; a rule, at most once in 10 s.
+# ! on the channel strip or the log adds a rule for the selected channel
+# or event to the end of this file.
 ";
 
 /// The keys a rule may have.
@@ -110,6 +114,54 @@ pub fn parse(text: &str) -> Result<Vec<Rule>, String> {
         })
     });
     rules.collect()
+}
+
+/// `text` with those of `new` added to its end whose band no rule of the
+/// text has, and how many that was. The text itself is left as it is,
+/// byte for byte. Every key is written, so the user sees what to change.
+pub fn append(text: &str, new: &[Rule]) -> Result<(String, usize), String> {
+    let mut there = parse(text)?;
+    let mut out = text.to_string();
+    let mut added = 0;
+    for rule in new {
+        if there.iter().any(|old| old.same_band(rule)) {
+            continue;
+        }
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        // Hertz as whole numbers first, so 433.475 MHz is not written as
+        // 433.47499999999997.
+        let center = ((rule.low_hz + rule.high_hz) / 2.0).round();
+        let width = (rule.high_hz - rule.low_hz).round();
+        let _ = writeln!(out, "\n[[alert]]");
+        let _ = writeln!(out, "name = {}", Value::String(rule.name.clone()));
+        let _ = writeln!(out, "freq_mhz = {:?}", center / 1e6);
+        let _ = writeln!(out, "width_khz = {:?}", width / 1e3);
+        let _ = writeln!(out, "min_ms = {}", rule.min_duration.as_millis());
+        let _ = writeln!(out, "min_db = {:?}", f64::from(rule.min_above_db));
+        there.push(rule.clone());
+        added += 1;
+    }
+    // What goes to the disk must read back.
+    parse(&out)?;
+    Ok((out, added))
+}
+
+/// Adds `new` to the file at `path` as it is on the disk now (see
+/// [`append`]), making the file, with the example, if need be. The new
+/// text replaces the old in one step, so the file is never half written.
+pub fn add(path: &Path, new: &[Rule]) -> Result<usize, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => HEADER.to_string(),
+        Err(err) => return Err(err.to_string()),
+    };
+    let (text, added) = append(&text, new)?;
+    if added > 0 {
+        crate::channels::replace(path, &text)?;
+    }
+    Ok(added)
 }
 
 /// The rules of the file at `path`; none when there is no file.
@@ -239,6 +291,55 @@ width_khz = 12.5
         assert!(parse("[[alert]\n").is_err());
     }
 
+    /// What `!` makes for the channel "LPD 17", 433.475 MHz, 12.5 kHz wide.
+    fn made() -> Rule {
+        Rule {
+            name: "LPD 17".into(),
+            low_hz: 433.46875e6,
+            high_hz: 433.48125e6,
+            min_duration: Duration::ZERO,
+            min_above_db: DEFAULT_MIN_ABOVE_DB,
+        }
+    }
+
+    const MINE: &str =
+        "# my alerts\n[[alert]]\nname = \"gate\"  # the gate\nfrom_mhz = 433.9\nto_mhz = 434\n";
+
+    #[test]
+    fn a_rule_made_in_the_app_goes_to_the_end_with_every_key_written() {
+        let (text, added) = append(MINE, &[made()]).unwrap();
+        assert_eq!(added, 1);
+        assert_eq!(
+            text,
+            format!(
+                "{MINE}\n[[alert]]\nname = \"LPD 17\"\nfreq_mhz = 433.475\nwidth_khz = 12.5\nmin_ms = 0\nmin_db = 10.0\n"
+            )
+        );
+        let rules = parse(&text).unwrap();
+        assert_eq!(rules.len(), 2);
+        assert!(rules[1].same_band(&made()));
+        assert_eq!(rules[1].name, "LPD 17");
+        // A text without its last line's end gets one first.
+        let (text, _) = append(MINE.trim_end(), &[made()]).unwrap();
+        assert!(text.contains("to_mhz = 434\n\n[[alert]]"), "{text}");
+    }
+
+    #[test]
+    fn a_band_the_file_has_already_is_not_added_again() {
+        let (once, _) = append(MINE, &[made()]).unwrap();
+        assert_eq!(append(&once, &[made()]), Ok((once.clone(), 0)));
+        // Nor twice in one go; the gate's band has a rule.
+        let gate = Rule {
+            name: "the gate again".into(),
+            low_hz: 433.9e6,
+            high_hz: 434.0e6,
+            ..made()
+        };
+        assert_eq!(append(MINE, &[made(), made(), gate]).unwrap().1, 1);
+        // A file that does not read is not added to.
+        assert!(append("[[alert]]\n", &[made()]).is_err());
+    }
+
     /// A directory of its own per test, removed when dropped.
     struct TempDir(std::path::PathBuf);
 
@@ -255,6 +356,27 @@ width_khz = 12.5
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn adding_to_a_file_not_there_makes_it_with_the_example_first() {
+        let dir = TempDir::new("add");
+        let path = dir.0.join("sdr-viewer/alerts.toml");
+        assert_eq!(add(&path, &[made()]), Ok(1));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with(HEADER), "{text}");
+        assert_eq!(load(&path).unwrap().len(), 1);
+        // What the user wrote meanwhile stays.
+        std::fs::write(&path, format!("{text}# mine\n")).unwrap();
+        assert_eq!(add(&path, &[made()]), Ok(0));
+        let other = Rule {
+            low_hz: 433.5e6,
+            high_hz: 433.51e6,
+            ..made()
+        };
+        assert_eq!(add(&path, &[other]), Ok(1));
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.starts_with(&format!("{text}# mine\n")), "{after}");
     }
 
     #[test]

@@ -1,9 +1,10 @@
-//! The alerts the rules gave, for the status line: the rule that gave
-//! the latest, how many it gave, and whether a tone is due.
+//! The alerts: the rules there are, those made with `!` for the file,
+//! and what the rules gave, for the status line — the rule that gave the
+//! latest, how many it gave, and whether a tone is due.
 
 use std::time::Duration;
 
-use sdr_detect::Alert;
+use sdr_detect::{Alert, Rule};
 
 /// An alert is told brightly for this long, then dimly.
 pub const BRIGHT: Duration = Duration::from_secs(10);
@@ -33,9 +34,14 @@ pub struct Told {
     pub bright: bool,
 }
 
-/// The alerts of this run, by rule, in stream time.
+/// The rules, and the alerts of this run by rule, in stream time.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AlertsView {
+    rules: Vec<Rule>,
+    /// A file keeps the rules made here.
+    kept: bool,
+    /// Made here and not yet handed to the file.
+    new: Vec<Rule>,
     given: Vec<Given>,
     /// The latest alert's rule (an index into `given`) and its time.
     latest: Option<(usize, Duration)>,
@@ -45,6 +51,48 @@ pub struct AlertsView {
 }
 
 impl AlertsView {
+    /// The rules the app started with; `kept` when a file keeps those
+    /// made in it.
+    pub fn new(rules: Vec<Rule>, kept: bool) -> Self {
+        AlertsView {
+            rules,
+            kept,
+            ..AlertsView::default()
+        }
+    }
+
+    pub fn rules(&self) -> &[Rule] {
+        &self.rules
+    }
+
+    /// Takes in a rule made here, and says so; one for a band that has a
+    /// rule already is refused, naming that rule.
+    pub fn add(&mut self, rule: Rule) -> Result<String, String> {
+        if let Some(there) = self.rules.iter().find(|there| there.same_band(&rule)) {
+            return Err(format!(
+                "an alert watches that band already: {}",
+                there.name
+            ));
+        }
+        let told = match self.kept {
+            true => format!("alert on {} added to the alerts file", rule.name),
+            false => format!(
+                "alert on {} for this run: there is no alerts file",
+                rule.name
+            ),
+        };
+        if self.kept {
+            self.new.push(rule.clone());
+        }
+        self.rules.push(rule);
+        Ok(told)
+    }
+
+    /// The rules made since the last call: for the file.
+    pub fn take_new(&mut self) -> Vec<Rule> {
+        std::mem::take(&mut self.new)
+    }
+
     /// The stream's time, as of the latest frame: what an alert's
     /// brightness is held against.
     pub fn set_now(&mut self, now: Duration) {
@@ -127,6 +175,47 @@ mod tests {
                 above_floor_db: 30.0,
             },
         }
+    }
+
+    fn rule(name: &str, low_hz: f64) -> Rule {
+        Rule {
+            name: name.into(),
+            low_hz,
+            high_hz: low_hz + 12.5e3,
+            min_duration: Duration::ZERO,
+            min_above_db: 10.0,
+        }
+    }
+
+    #[test]
+    fn a_rule_made_here_goes_to_the_file_unless_its_band_has_one() {
+        let mut view = AlertsView::new(vec![rule("gate", 433.9e6)], true);
+        assert_eq!(
+            view.add(rule("LPD 17", 433.46875e6)),
+            Ok("alert on LPD 17 added to the alerts file".into())
+        );
+        assert_eq!(
+            view.add(rule("433.906 MHz", 433.9e6)),
+            Err("an alert watches that band already: gate".into())
+        );
+        assert_eq!(
+            view.add(rule("again", 433.46875e6)),
+            Err("an alert watches that band already: LPD 17".into())
+        );
+        assert_eq!(view.rules().len(), 2);
+        assert_eq!(view.take_new(), [rule("LPD 17", 433.46875e6)]);
+        assert!(view.take_new().is_empty());
+    }
+
+    #[test]
+    fn without_a_file_a_rule_made_here_holds_for_this_run() {
+        let mut view = AlertsView::default();
+        assert_eq!(
+            view.add(rule("LPD 17", 433.46875e6)),
+            Ok("alert on LPD 17 for this run: there is no alerts file".into())
+        );
+        assert_eq!(view.rules().len(), 1);
+        assert!(view.take_new().is_empty());
     }
 
     #[test]
