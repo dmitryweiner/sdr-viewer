@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use sdr_core::rate::RateMeter;
 use sdr_core::{Iq, IqRing, Source, SourceInfo, SpectrumFrame};
-use sdr_detect::{DensityMap, Event, Levels};
+use sdr_detect::{Alert, DensityMap, Event, Levels};
 use sdr_tui::fragment::Fragment;
 use sdr_tui::{Command, SourceState, SourceStatus};
 
@@ -20,8 +20,8 @@ const CHUNK: usize = 16 * 1024;
 /// How often the measured rate is reported.
 const REPORT_EVERY: Duration = Duration::from_millis(500);
 
-/// Ended events kept for an interface that is not taking them; beyond
-/// this the oldest are lost.
+/// Ended events, and alerts, kept for an interface that is not taking
+/// them; beyond this the oldest are lost.
 const MAX_WAITING_EVENTS: usize = 10_000;
 
 /// What the reader tells the interface.
@@ -34,6 +34,8 @@ pub enum Update {
     Events(Vec<Event>),
     /// The events going on now, as far as they have got.
     OpenEvents(Vec<Event>),
+    /// Rules met by events going on, in the order they were met.
+    Alerts(Vec<Alert>),
     /// The source after a command changed it.
     Source(SourceInfo),
     /// A command that could not be carried out, and why.
@@ -124,6 +126,8 @@ pub fn run(
     // not taken yet.
     let mut fresh: Vec<Event> = Vec::new();
     let mut events: Vec<Event> = Vec::new();
+    // Alerts the interface has not taken yet.
+    let mut alerts: Vec<Alert> = Vec::new();
     // Samples at full scale and all samples since the last report.
     let (mut clipped, mut seen) = (0u64, 0u64);
     let status = |state, rate, clipped: f64, lost| {
@@ -194,6 +198,10 @@ pub fn run(
                 }
                 // The mesh's writer's, not the source's.
                 Command::EraseMesh => Ok(None),
+                Command::AddRule(rule) => {
+                    pipeline.add_rule(rule);
+                    Ok(None)
+                }
             };
             // The answer to a key press must not get lost: wait for room.
             let _ = match done {
@@ -204,6 +212,9 @@ pub fn run(
         }
         match source.read(&mut buf) {
             Ok(0) => {
+                if !alerts.is_empty() {
+                    let _ = updates.send(Update::Alerts(alerts));
+                }
                 if !events.is_empty() {
                     let _ = updates.send(Update::Events(events));
                 }
@@ -230,7 +241,18 @@ pub fn run(
                     Output::Density(map) => {
                         let _ = updates.try_send(Update::Density(map));
                     }
+                    Output::Alert(alert) => alerts.push(alert),
                 });
+                if !alerts.is_empty() {
+                    let batch = Update::Alerts(std::mem::take(&mut alerts));
+                    if let Err(TrySendError::Full(Update::Alerts(waiting))) =
+                        updates.try_send(batch)
+                    {
+                        alerts = waiting;
+                        let extra = alerts.len().saturating_sub(MAX_WAITING_EVENTS);
+                        alerts.drain(..extra);
+                    }
+                }
                 keep(fresh.clone());
                 events.append(&mut fresh);
                 if !events.is_empty() {
@@ -317,6 +339,7 @@ mod tests {
     use sdr_core::file::{FileSource, SampleFormat};
     use sdr_core::generator::{Generator, GeneratorConfig};
     use sdr_core::{GainChange, SourceError};
+    use sdr_detect::Rule;
     use std::io::Cursor;
     use std::sync::mpsc::{Sender, channel, sync_channel};
 
@@ -582,6 +605,45 @@ mod tests {
             ] => {
                 assert_eq!((ended.len(), open.len()), (1, 1));
                 assert_eq!(status.state, SourceState::Ended);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn alerts_of_the_rules_given_wait_for_an_interface_that_has_no_room() {
+        let (tx, rx) = sync_channel(1);
+        let (command_tx, command_rx) = channel();
+        let (over_tx, over_rx) = channel();
+        // The demo's burst at 434.2 MHz, longer than 0.1 s.
+        let rule = Rule {
+            name: "burst".into(),
+            low_hz: 434.19e6,
+            high_hz: 434.21e6,
+            min_duration: Duration::from_millis(100),
+            min_above_db: 20.0,
+        };
+        command_tx.send(Command::AddRule(rule)).unwrap();
+        let source = Announced(demo(), over_tx);
+        let reader = std::thread::spawn(move || {
+            let stop = Arc::new(AtomicBool::new(false));
+            run(source, tx, command_rx, stop, Sinks::default());
+        });
+        over_rx.recv().unwrap();
+        let got: Vec<Update> = rx.iter().collect();
+        reader.join().unwrap();
+        match &got[..] {
+            [
+                Update::Frame(..),
+                Update::Alerts(alerts),
+                Update::Events(ended),
+                Update::OpenEvents(_),
+                Update::Status(_),
+            ] => {
+                assert_eq!(alerts.len(), 1, "{alerts:?}");
+                assert_eq!(alerts[0].rule, "burst");
+                assert!((alerts[0].event.peak_hz - 434.2e6).abs() < 1_200.0);
+                assert_eq!(ended.len(), 1);
             }
             other => panic!("{other:?}"),
         }

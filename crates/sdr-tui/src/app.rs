@@ -3,9 +3,10 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use sdr_core::units::parse_hz;
 use sdr_core::{GainChange, SourceInfo, SpectrumFrame};
-use sdr_detect::{DensityMap, Event, Levels};
+use sdr_detect::{Alert, DensityMap, Event, Levels, Rule};
 use sdr_mesh::update::MeshUpdate;
 
+use crate::alerts::AlertsView;
 use crate::channels::ChannelsView;
 use crate::fragment::{Fragment, Picture};
 use crate::log::LogView;
@@ -152,6 +153,9 @@ pub enum Command {
     EraseEvents,
     /// Forget what the mesh told, in the database: the nodes were erased.
     EraseMesh,
+    /// Hold the events going on against this rule too: one of the
+    /// alerts file's, at the start.
+    AddRule(Rule),
 }
 
 pub struct App {
@@ -165,6 +169,8 @@ pub struct App {
     pub channels: ChannelsView,
     /// The Meshtastic pulse, `Link::Off` without `--mesh`.
     pub mesh: MeshView,
+    /// The alerts the rules gave, for the status line.
+    pub alerts: AlertsView,
     /// The range of delays chosen on the periodicity screen, of
     /// `period::DELAYS`; until one is, the range follows the channel.
     pub delays: Option<usize>,
@@ -205,6 +211,7 @@ impl App {
             log: LogView::default(),
             channels: ChannelsView::default(),
             mesh: MeshView::new(Link::Off),
+            alerts: AlertsView::default(),
             delays: None,
             density: None,
             commands: Vec::new(),
@@ -237,7 +244,14 @@ impl App {
     pub fn on_frame(&mut self, frame: SpectrumFrame, levels: Levels) {
         self.channels
             .on_frame(frame.time, frame.center_hz, frame.sample_rate);
+        self.alerts.set_now(frame.time);
         self.spectrum.on_frame(frame, levels);
+    }
+
+    /// Rules met by events: told on the status line. Says whether the
+    /// tone is to sound.
+    pub fn on_alerts(&mut self, alerts: &[Alert]) -> bool {
+        self.alerts.on_alerts(alerts)
     }
 
     /// Events that have ended: rows of the log, and the channels' time.

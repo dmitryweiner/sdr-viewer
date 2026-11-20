@@ -1,5 +1,6 @@
 //! Screens, keys and widgets of the console interface.
 
+pub mod alerts;
 pub mod app;
 pub mod channels;
 mod channels_ui;

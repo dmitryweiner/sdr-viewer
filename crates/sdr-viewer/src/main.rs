@@ -1,5 +1,6 @@
 //! SDR Viewer: watches the air and shows what a person would miss.
 
+mod alerts;
 mod channels;
 mod cli;
 mod fragment;
@@ -23,7 +24,7 @@ use std::time::{Duration, SystemTime};
 use clap::Parser;
 use ratatui::crossterm::event::{self, Event};
 use sdr_core::{IqRing, Source, SourceInfo};
-use sdr_detect::Channel;
+use sdr_detect::{Channel, Rule};
 use sdr_mesh::update::MeshUpdate;
 use sdr_tui::channels::ChannelsView;
 use sdr_tui::log::WallClock;
@@ -67,11 +68,17 @@ fn run(args: &cli::Args) -> Result<ExitCode, String> {
         (Some(_), Some(path)) => channels::load(path)?,
         _ => Vec::new(),
     };
+    // And the rules of their alerts: a snapshot makes no file.
+    let alerts_path = cli::alerts_path(args, |name| std::env::var(name).ok());
+    let rules = match (&source, alerts_path.as_deref()) {
+        (Some(_), Some(path)) => alerts::load(path, args.snapshot.is_none())?,
+        _ => Vec::new(),
+    };
     if let Some(size) = args.snapshot {
         let Some(source) = source else {
             return Err("a snapshot of this screen needs a recording or --rtlsdr".into());
         };
-        let text = snapshot::run(source, size, args.secs, args.screen, listed)
+        let text = snapshot::run(source, size, args.secs, args.screen, listed, rules)
             .map_err(|err| err.to_string())?;
         print!("{text}");
         return Ok(ExitCode::SUCCESS);
@@ -97,7 +104,7 @@ fn run(args: &cli::Args) -> Result<ExitCode, String> {
     };
     let reception = match source {
         Some(source) => {
-            let parts = (listed, channels_path);
+            let parts = (listed, channels_path, rules);
             Some(Reception::start(
                 source,
                 args,
@@ -184,6 +191,11 @@ fn interface(
                         app.on_open_events(open);
                         continue;
                     }
+                    Update::Alerts(alerts) => {
+                        if let (true, Some(reception)) = (app.on_alerts(&alerts), reception) {
+                            let _ = reception.tone.send(());
+                        }
+                    }
                     Update::Source(info) => app.source = info,
                     Update::Notice(notice) => app.notice = Some(notice),
                     Update::Done(done) => app.done = Some(done),
@@ -243,9 +255,12 @@ fn interface(
 }
 
 /// The threads of a source: the reader, the store's writer, the worker
-/// that saves and pictures samples, the channels' saver.
+/// that saves and pictures samples, the channels' saver, the alerts'
+/// tone (not waited for at the end).
 struct Reception {
     commands: Sender<Command>,
+    /// Asks for the tone.
+    tone: Sender<()>,
     reader: JoinHandle<()>,
     writer: Option<JoinHandle<()>>,
     worker: JoinHandle<()>,
@@ -258,12 +273,17 @@ impl Reception {
         source: Box<dyn Source>,
         args: &cli::Args,
         app: &mut App,
-        (listed, channels_path): (Vec<Channel>, Option<PathBuf>),
+        (listed, channels_path, rules): (Vec<Channel>, Option<PathBuf>, Vec<Rule>),
         (updates_tx, stop): (&SyncSender<Update>, &Arc<AtomicBool>),
         utc_offset_s: i32,
     ) -> Result<Self, String> {
         app.channels = ChannelsView::new(listed);
         let (commands_tx, commands_rx) = channel();
+        // The rules hold from the first samples on.
+        for rule in rules {
+            let _ = commands_tx.send(Command::AddRule(rule));
+        }
+        let (tone, _) = alerts::start_tone(alerts::aplay, updates_tx.clone());
         let db = cli::db_path(args, |name| std::env::var(name).ok());
         let started = SystemTime::now();
         let kept =
@@ -313,6 +333,7 @@ impl Reception {
         };
         Ok(Reception {
             commands: commands_tx,
+            tone,
             reader,
             writer,
             worker,

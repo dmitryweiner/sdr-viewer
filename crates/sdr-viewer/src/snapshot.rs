@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use sdr_core::units::format_hz;
 use sdr_core::{Iq, Source, SpectrumFrame};
-use sdr_detect::{Channel, Event};
+use sdr_detect::{Alert, Channel, Event, Rule};
 use sdr_tui::channels::ChannelsView;
 use sdr_tui::{App, Screen, SourceState, ui};
 
@@ -24,6 +24,7 @@ pub fn run(
     secs: f64,
     screen: Screen,
     channels: Vec<Channel>,
+    rules: Vec<Rule>,
 ) -> Result<String, String> {
     let info = source.info();
     let mut app = App::new(info.clone());
@@ -31,7 +32,10 @@ pub fn run(
     app.channels = ChannelsView::new(channels);
     let mut pipeline = Pipeline::new(info.sample_rate);
     pipeline.watch_density(screen == Screen::Density);
+    let ruled = !rules.is_empty();
+    rules.into_iter().for_each(|rule| pipeline.add_rule(rule));
     let mut events = Vec::new();
+    let mut alerts = Vec::new();
     let wanted = (secs * f64::from(info.sample_rate)) as u64;
     let mut buf = vec![Iq::new(0.0, 0.0); 16 * 1024];
     let mut seen = 0u64;
@@ -54,6 +58,10 @@ pub fn run(
                 events.push(event);
             }
             Output::Density(map) => app.on_density(map),
+            Output::Alert(alert) => {
+                app.on_alerts(std::slice::from_ref(&alert));
+                alerts.push(alert);
+            }
         });
     }
     // The stream's time to the sample, not to the last frame's start.
@@ -106,7 +114,28 @@ pub fn run(
         );
     }
     write_events(&mut text, &events, &pipeline.open_events());
+    if ruled {
+        write_alerts(&mut text, &alerts);
+    }
     Ok(text)
+}
+
+fn write_alerts(text: &mut String, alerts: &[Alert]) {
+    let _ = writeln!(text, "Alerts: {}.", alerts.len());
+    for alert in alerts.iter().take(MAX_EVENTS) {
+        let event = &alert.event;
+        let _ = writeln!(
+            text,
+            "  {:>7.3} s  {:>13}  +{:.1} dB  {}",
+            alert.time().as_secs_f64(),
+            format_hz(event.center_hz()),
+            event.above_floor_db,
+            alert.rule
+        );
+    }
+    if alerts.len() > MAX_EVENTS {
+        let _ = writeln!(text, "  … and {} more", alerts.len() - MAX_EVENTS);
+    }
 }
 
 /// Selects the channel that repeats most surely, or the first row when
@@ -202,7 +231,15 @@ mod tests {
     #[test]
     fn a_snapshot_of_the_demo_scene_shows_and_lists_both_signals() {
         let generator = Generator::new(GeneratorConfig::demo());
-        let text = run(generator, (100, 30), 3.0, Screen::Spectrum, Vec::new()).unwrap();
+        let text = run(
+            generator,
+            (100, 30),
+            3.0,
+            Screen::Spectrum,
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
         assert_eq!(text.lines().take(30).count(), 30);
         assert!(
             text.contains("peak 434.200 MHz") || text.contains("peak 433.500 MHz"),
@@ -233,9 +270,65 @@ mod tests {
     }
 
     #[test]
+    fn a_snapshot_lists_the_alerts_of_the_rules_it_is_given() {
+        let generator = Generator::new(GeneratorConfig::demo());
+        let burst = Rule {
+            name: "burst".into(),
+            low_hz: 434.19e6,
+            high_hz: 434.21e6,
+            min_duration: Duration::from_millis(100),
+            min_above_db: 20.0,
+        };
+        let text = run(
+            generator,
+            (100, 30),
+            3.0,
+            Screen::Spectrum,
+            Vec::new(),
+            vec![burst],
+        )
+        .unwrap();
+        // The status line tells it, and the list after the events: the
+        // burst of 0.3 s every 2.04 s, a tenth of a second on.
+        let status = text.lines().nth(29).unwrap();
+        assert!(status.ends_with("! burst ×2  ? help  q quit"), "{text}");
+        let alerts = text.split("Alerts: ").nth(1).unwrap();
+        let lines: Vec<&str> = alerts.lines().collect();
+        assert_eq!(lines.len(), 3, "{text}");
+        assert_eq!(lines[0], "2.");
+        // At the end of the tenth frame of 10.24 ms, where the burst was
+        // as its first frames had it.
+        assert!(
+            lines[1].starts_with("    0.102 s    434.199 MHz  +66.2 dB  burst"),
+            "{text}"
+        );
+        assert!(lines[2].starts_with("    2.140 s    434.200 MHz"), "{text}");
+        // Without rules there is no such list.
+        let generator = Generator::new(GeneratorConfig::demo());
+        let text = run(
+            generator,
+            (100, 30),
+            1.0,
+            Screen::Spectrum,
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(!text.contains("Alerts"), "{text}");
+    }
+
+    #[test]
     fn a_snapshot_of_the_density_screen_shows_what_was_gathered() {
         let generator = Generator::new(GeneratorConfig::demo());
-        let text = run(generator, (100, 30), 3.0, Screen::Density, Vec::new()).unwrap();
+        let text = run(
+            generator,
+            (100, 30),
+            3.0,
+            Screen::Density,
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
         let screen: Vec<&str> = text.lines().take(30).collect();
         assert!(screen[1].contains("half-life 30 s"), "{text}");
         // Half blocks from the noise at the bottom up to the carrier.
@@ -255,7 +348,15 @@ mod tests {
             width_hz: 25e3,
             hidden: false,
         }];
-        let text = run(generator, (100, 30), 5.0, Screen::Channels, mine).unwrap();
+        let text = run(
+            generator,
+            (100, 30),
+            5.0,
+            Screen::Channels,
+            mine,
+            Vec::new(),
+        )
+        .unwrap();
         let screen: Vec<&str> = text.lines().take(30).collect();
         assert!(
             screen[1].contains("2 channels · 1 s a column · the last 5 s"),
@@ -273,7 +374,15 @@ mod tests {
     #[test]
     fn a_snapshot_of_the_periodicity_screen_is_of_the_channel_that_repeats() {
         let generator = Generator::new(GeneratorConfig::demo());
-        let text = run(generator, (100, 30), 20.0, Screen::Periodicity, Vec::new()).unwrap();
+        let text = run(
+            generator,
+            (100, 30),
+            20.0,
+            Screen::Periodicity,
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
         let screen: Vec<&str> = text.lines().take(30).collect();
         // The carrier is the first row; the bursts are what repeats.
         assert_eq!(
@@ -286,7 +395,15 @@ mod tests {
         assert_eq!(screen[5].chars().position(|c| c == '│'), Some(20), "{text}");
         // And the strip says so in the row.
         let generator = Generator::new(GeneratorConfig::demo());
-        let text = run(generator, (100, 30), 20.0, Screen::Channels, Vec::new()).unwrap();
+        let text = run(
+            generator,
+            (100, 30),
+            20.0,
+            Screen::Channels,
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
         assert!(text.lines().nth(3).unwrap().contains("  2.04 s "), "{text}");
         assert!(!text.lines().nth(2).unwrap().contains(" s "), "{text}");
     }
@@ -294,7 +411,15 @@ mod tests {
     #[test]
     fn a_snapshot_lists_the_events_in_the_order_they_began() {
         let generator = Generator::new(GeneratorConfig::demo());
-        let text = run(generator, (100, 30), 3.0, Screen::Spectrum, Vec::new()).unwrap();
+        let text = run(
+            generator,
+            (100, 30),
+            3.0,
+            Screen::Spectrum,
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
         let from = text.find("Events:").expect(&text);
         let lines: Vec<&str> = text[from..].lines().collect();
         assert_eq!(lines[0], "Events: 2 ended, 1 still on at the end.");

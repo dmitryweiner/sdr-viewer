@@ -2,6 +2,7 @@
 //! sessions of reception and the events the detector found in them, and
 //! what the mesh told ([`mesh`]). Recordings of samples are in [`sigmf`].
 
+pub mod alerts;
 pub mod channels;
 pub mod mesh;
 pub mod sigmf;

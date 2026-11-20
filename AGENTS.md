@@ -42,7 +42,10 @@ Open questions are in the plan's section 13. SDR and LoRa stay apart
   recording or the generator too; `--no-db` nowhere). The channels made
   for new signals go to `~/.config/sdr-viewer/channels.toml` (`--channels
   FILE` elsewhere, and for a recording or the generator too;
-  `--no-channels` nowhere). On the user's
+  `--no-channels` nowhere). The alerts' rules are read from
+  `~/.config/sdr-viewer/alerts.toml`, made with an example when missing
+  (`--alerts FILE` elsewhere, and for a recording or the generator too;
+  `--no-alerts` none). On the user's
   uConsole only through `sdr-viewer-rx.sh` (see "The user's device").
 - With any source: `--iq-buffer SECS` (30; 0 = none) is the IQ ring in
   memory, `--iq-dir DIR` (default `~/.local/share/sdr-viewer/iq`) is where
@@ -53,7 +56,8 @@ Open questions are in the plan's section 13. SDR and LoRa stay apart
   peaks and the detector's events. The way to look at a recording, at the air, or at the picture from
   a script. Below 80x24 it prints only "too small". `--screen 2` prints the channel strip, `--screen 3` the
   periodicity of the channel that repeats most surely (or of the first
-  row), `--screen 4` the density screen instead.
+  row), `--screen 4` the density screen instead. `--alerts FILE` lists
+  the alerts of its rules after the events.
 - `cargo test --release -p sdr-core -- --ignored --nocapture bench_` — cost
   of the generator and of the IQ ring per sample.
 - `cargo run --release -- --mesh[=HOST[:PORT]]` — the Meshtastic pulse
@@ -127,14 +131,18 @@ touching USB.
   no data and reset the hub.
 - A new binary: download the PR's `sdr-viewer-aarch64` artifact
   (`gh run download RUN -n sdr-viewer-aarch64`) and `scp` it to
-  `~/sdr-viewer-check/sdr-viewer`. `smoke.py` there is PR #15's (arrow
-  keys). The user has run phase 3, the density and the channel strip on
+  `~/sdr-viewer-check/sdr-viewer`. `smoke.py` there is PR #38's (with
+  `--words`). The user has run phase 3, the density and the channel strip on
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-20 `sdr-viewer` there is PR #36's build with `X` twice
-  on the pulse and the selected node's feed (its first run brings
-  `events.db` to layout 3); its first commit's (texts, telemetry and
+  Since 2026-11-20 `sdr-viewer` there is PR #38's build (alerts: its
+  first run with `--rtlsdr` makes `~/.config/sdr-viewer/alerts.toml`
+  with the example; with the generator and a rule on its burst it showed
+  `! burst ×1` and `aplay` played without a word against it); PR #36's,
+  with `X` twice on the pulse and the selected node's feed (its first
+  run brings `events.db` to layout 3), is `sdr-viewer.before-alerts`;
+  its first commit's (texts, telemetry and
   positions) is `sdr-viewer.before-erase`, PR #35's (the mesh's
   database: its first run with `--mesh` or `--rtlsdr` brings the user's
   `events.db` up to layout 2, which the older builds below then refuse —
@@ -215,7 +223,10 @@ a crate is added in the phase that needs it):
   for the screen), `density` (`Density`: how often each bin was at each
   level, forgetting with a half-life; `DensityMap`: that as plain numbers,
   for the screen), `channel` (`Channel`; `Channels`: which channel an
-  event is in, and making one where it is in none).
+  event is in, and making one where it is in none), `alert` (`Rule`: a
+  band, a duration, a level; `Alerts`: the events going on held against
+  the rules, an `Alert` once per event and rule). The detector numbers
+  its open events (`open_numbered`) for that.
 - `sdr-store` — `Store`: the SQLite event database (`rusqlite`, SQLite
   compiled in), `sessions` and `events`, the layout's version in
   `user_version` (`LAYOUTS`: what each adds; an older file is brought
@@ -224,7 +235,8 @@ a crate is added in the phase that needs it):
   and `MeshHistory`, what they hold of a time; `sigmf`: a recording as a `.sigmf-data` + `.sigmf-meta`
   pair (the JSON is written by hand); `channels`: the channels file
   (TOML read with the `toml` crate, additions written by hand to the end
-  of the text as it is).
+  of the text as it is); `alerts`: the alerts file (`HEADER` with the
+  example, `parse`, `load`, `make`).
 - `sdr-rtl` — `RtlSource`: the RTL-SDR through `rtl-sdr-rs` (pure Rust on
   `nusb`), queued transfers, gain along the tuner's own steps, retuning.
 - `sdr-mesh` — `meshtasticd`'s TCP API: `proto` (Meshtastic's protobuf
@@ -243,6 +255,8 @@ a crate is added in the phase that needs it):
   read, heartbeat a minute, connect again after 5 s; `tcp`).
 - `sdr-tui` — `app` (state, keys and the `Command`s they ask of the
   source; no drawing), `ui` (frame of the interface, `render_text`),
+  `alerts` (`AlertsView`: the alerts by rule, the latest, its
+  brightness and whether a tone is due, in stream time),
   `spectrum` (the spectrum screen's state and arithmetic: columns, scale,
   zoom, palette), `spectrum_ui` (drawing it), `log` (the signal log's
   state: the last 10 000 events, the level filter, the order, a held
@@ -268,7 +282,8 @@ a crate is added in the phase that needs it):
 - `sdr-viewer` — the binary: `cli` (arguments → source), `pipeline`
   (samples → detector frames at 100 a second → events, and their averages
   → screen frames at 10 a second, each with the detector's `Levels`; the
-  density gathered from every detector frame; one pass of FFTs), `reader` (the source
+  density gathered from every detector frame; the open events held
+  against the rules with every detector frame; one pass of FFTs), `reader` (the source
   thread: carry out `Command`s, read, fill the IQ ring, run the pipeline,
   send `Update`s, hand ended events (and the word that the log was
   erased: `Kept`) to the store and an event's samples
@@ -281,6 +296,8 @@ a crate is added in the phase that needs it):
   week's texts before it, the writer told `MeshKept`: the client's
   updates with their time, and the erasing), `writer` (the loop of a thread that writes: one write a second),
   `channels` (read the channels file; the thread that adds to it),
+  `alerts` (read, or make, the alerts file; the tone's WAV and its
+  thread, which plays it with `aplay`),
   `mesh` (the client's thread, its updates as `Update::Mesh`;
   `for_the_pulse`: the kept history as the view takes it; the pulse's
   snapshot), `snapshot` (`--snapshot`), `main` (`Reception`: the
@@ -304,7 +321,15 @@ a crate is added in the phase that needs it):
   bin `len / 2`.
 - The detector sees every frame; only the screen's frames may be dropped.
   Ended events are never dropped by `try_send`: the reader keeps them
-  until the interface has room. The end of the stream waits for room too.
+  until the interface has room, and alerts the same way. The end of the
+  stream waits for room too.
+- Alerts come from the pipeline, not the interface: the open events are
+  held against the rules with every detector frame, so a rule is met in
+  the frame it is, and a snapshot gets the same alerts. An event gives a
+  rule's alert once, by the detector's number for it. The rules reach
+  the reader as `Command::AddRule`, the file's sent before it starts.
+  The tone's thread is never waited for, and plays nothing that was
+  asked while it played.
 - Only the writer threads touch the database after start-up — the
   events' and the mesh's, each with a connection of its own (WAL; SQLite
   makes one wait for the other); the reader hands events over an
@@ -439,6 +464,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | The detector's fix of PR #24 on the CM4 (the recording looped, 160×45, 15 s, before and after) | nothing measurable: spectrum 38 → 36 and 35%, channel strip 22 → 19% |
 | The density on the CM4 (the recording looped, 160×45, 15 s, main's build and PR #22's side by side, twice) | gathering it costs nothing measurable: spectrum (`--keys 1`) 37 and 34% before, 35 and 36% with it. The density screen (`--keys 3`) **33 and 34%** of a core, 0.6 MB/s to the terminal against the spectrum's 0.9 |
 | Periodicity on the CM4 (the recording looped, 160×45, 15 s, PR #26's build and PR #28's side by side; 80 channels) | keeping bursts and working out one channel's period a frame costs nothing measurable: strip (`--keys 2`) 24 → 25% of a core, spectrum (`--keys 1`) 36 → 37%. The periodicity screen with a channel selected (`--keys $'4\x1b[B\x1b[B\x1b[B'`) **20%**, 11 kB/s to the terminal. On the Mac (generator, 12 s): spectrum 16%, strip 12%, periodicity 12% |
+| Alerts on the CM4 (`capture-433.cu8` looped, 160×45, 15 s, `smoke.py --keys 1`, twice each; a rule over the whole ISM band, met ~60 times a second: 608 alerts in 10 s) | 38 → **41%** of a core both times: the open events held against the rules 100 times a second, and `aplay` twice. Without rules nothing is checked |
 | `sdr-mesh`'s protobuf types (`build.rs`: `protox` + `prost-build`, ~10 500 lines of Rust) | ~10 s on a clean debug build of the crate; nothing on later builds unless `proto/` changes |
 | The Meshtastic pulse on the Mac (`smoke.py --keys $'6\x1b[B\x1b[B-+?1' --secs 8 -- --mesh=192.168.1.246`, the device's node over the LAN) | 0% of one core, 23 KiB to the terminal in 8 s |
 | The Meshtastic pulse on the CM4 (`smoke.py --keys 6`, and with two downs, 160×45, 15 s, `-- --mesh=127.0.0.1`; 17 nodes) | **0%** of a core (0.05 s in 15 s), 16–17 KiB to the terminal |
