@@ -435,8 +435,11 @@ Known limits of the alerts' recordings as built:
   the band: one lands 18 kHz below its burst at −76.7 dBFS in the
   burst's recording (the downconverter itself leaves that carrier at
   −193 dB). The RTL-SDR's samples are 8 bits from the start.
-- Each event in another channel is a recording of its own: a rule that
-  records over a hopper's whole band makes a file for every hop.
+- Each event in another channel is a recording of its own, and at most
+  4 run at once (each costs the reader a copy of every read and the
+  worker its narrowing): a rule that records over a hopper's whole band
+  gets the first hops' and not those that come while 4 run; the status
+  line says so once a run.
 - With `--iq-buffer 0` nothing is recorded (the status line says so
   once); the second before an event is what the ring still holds.
 - The limit counts what is in `alerts/` at the start and what this run

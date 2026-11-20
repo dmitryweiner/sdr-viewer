@@ -307,7 +307,7 @@ a crate is added in the phase that needs it):
   updates with their time, and the erasing), `writer` (the loop of a thread that writes: one write a second),
   `record` (`Recorder`: the reader's side of recording on an alert —
   which samples of the ring go to which recording, from a second
-  before its event to a second after; `Step`s), `recordings`
+  before its event to a second after, `AT_ONCE` (4) at most; `Step`s), `recordings`
   (`Recordings`: the worker's side — narrowing, `ci16_le` SigMF in
   `alerts/` of the IQ directory, the limit counted with what is there),
   `channels` (read the channels file; the thread that adds to it),

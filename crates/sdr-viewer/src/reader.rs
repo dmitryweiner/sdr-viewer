@@ -13,7 +13,7 @@ use sdr_tui::fragment::Fragment;
 use sdr_tui::{Command, SourceState, SourceStatus};
 
 use crate::pipeline::{Output, Pipeline};
-use crate::record::{Recorder, Step};
+use crate::record::{self, Recorder, Step};
 
 /// Samples per read: ~7 ms at 2.4 MS/s.
 const CHUNK: usize = 16 * 1024;
@@ -163,7 +163,7 @@ pub fn run(
     // samples, and the worker, which writes them.
     let mut recorder = Recorder::new(source.info().sample_rate);
     let mut steps: Vec<Step> = Vec::new();
-    let mut unrecorded_told = false;
+    let (mut unrecorded_told, mut crowded_told) = (false, false);
     // Samples at full scale and all samples since the last report.
     let (mut clipped, mut seen) = (0u64, 0u64);
     let status = |state, rate, clipped: f64, lost| {
@@ -285,7 +285,16 @@ pub fn run(
                 let recording = ring.capacity() > 0 && jobs.is_some();
                 for alert in &fresh_alerts {
                     if recording {
-                        recorder.on_alert(alert, ring.held(), &mut steps);
+                        let recorded = recorder.on_alert(alert, ring.held(), &mut steps);
+                        if !recorded && !crowded_told {
+                            crowded_told = true;
+                            let why = format!(
+                                "alert on {} not recorded: {} recordings run already (told once)",
+                                alert.rule,
+                                record::AT_ONCE
+                            );
+                            let _ = updates.send(Update::Notice(why));
+                        }
                     } else if alert.record && !unrecorded_told {
                         unrecorded_told = true;
                         let why = "alerts are not recorded: no samples are held (--iq-buffer is 0)";

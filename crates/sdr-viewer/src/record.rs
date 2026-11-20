@@ -13,6 +13,11 @@ use sdr_detect::channel::MIN_WIDTH_HZ;
 /// part of it.
 pub const AROUND: Duration = Duration::from_secs(1);
 
+/// Recordings at once, at most. Each costs the reader a copy of every
+/// read and the worker its narrowing; a rule over a hopper's band would
+/// otherwise start one for every hop, 80 a second.
+pub const AT_ONCE: usize = 4;
+
 /// What a recording asks of the worker, in order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Step {
@@ -72,10 +77,11 @@ impl Recorder {
     /// Takes an alert in. One that records starts a recording, from
     /// [`AROUND`] before its event as far as `held` (what the ring has)
     /// goes back — or joins one of its rule going on whose band its
-    /// event's centre is in.
-    pub fn on_alert(&mut self, alert: &Alert, held: Range<u64>, out: &mut Vec<Step>) {
+    /// event's centre is in. Says whether it was recorded: not when
+    /// [`AT_ONCE`] recordings run already.
+    pub fn on_alert(&mut self, alert: &Alert, held: Range<u64>, out: &mut Vec<Step>) -> bool {
         if !alert.record {
-            return;
+            return true;
         }
         let event = &alert.event;
         let center_hz = event.center_hz();
@@ -89,7 +95,10 @@ impl Recorder {
                 id: going.id,
                 alert: alert.clone(),
             });
-            return;
+            return true;
+        }
+        if self.going.len() >= AT_ONCE {
+            return false;
         }
         let first = (self
             .samples(event.start)
@@ -115,6 +124,7 @@ impl Recorder {
             width_hz,
             alert: alert.clone(),
         });
+        true
     }
 
     /// After a read: hands over what the ring now holds beyond what each
@@ -296,6 +306,22 @@ mod tests {
             })
             .collect();
         assert_eq!(first.last().unwrap().end, 5_600);
+    }
+
+    #[test]
+    fn no_more_than_four_record_at_once_but_one_going_on_may_still_be_joined() {
+        let mut recorder = Recorder::new(RATE);
+        let mut out = Vec::new();
+        let recorded: Vec<bool> = (0..6)
+            .map(|hop| {
+                let hz = 433.1e6 + 25e3 * hop as f64;
+                recorder.on_alert(&alert("hopper", hop, 1_000, hz), 0..1_500, &mut out)
+            })
+            .collect();
+        assert_eq!(recorded, [true, true, true, true, false, false]);
+        assert!(recorder.on_alert(&alert("hopper", 9, 1_200, 433.1e6), 0..1_700, &mut out));
+        assert_eq!(out.len(), 5, "{out:?}");
+        assert!(matches!(out[4], Step::Mark { id: 0, .. }));
     }
 
     #[test]
