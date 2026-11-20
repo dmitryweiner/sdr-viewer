@@ -138,7 +138,11 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-20 `sdr-viewer` there is PR #39's build (`!` on the
+  Since 2026-11-20 `sdr-viewer` there is PR #40's build (recording on
+  an alert: tried there on `capture-433.cu8` with `--iq-dir iq-test` and
+  a rule on 433.475 MHz — a file per return of the hopper, read back
+  with `--format cs16 --rate 50k`; removed after); PR #39's is
+  `sdr-viewer.before-recording` (`!` on the
   strip, tried there with the generator and `--alerts test-key.toml`:
   the rule appended, the file removed after); PR #38's is
   `sdr-viewer.before-key` (alerts: its
@@ -490,6 +494,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | The density on the CM4 (the recording looped, 160×45, 15 s, main's build and PR #22's side by side, twice) | gathering it costs nothing measurable: spectrum (`--keys 1`) 37 and 34% before, 35 and 36% with it. The density screen (`--keys 3`) **33 and 34%** of a core, 0.6 MB/s to the terminal against the spectrum's 0.9 |
 | Periodicity on the CM4 (the recording looped, 160×45, 15 s, PR #26's build and PR #28's side by side; 80 channels) | keeping bursts and working out one channel's period a frame costs nothing measurable: strip (`--keys 2`) 24 → 25% of a core, spectrum (`--keys 1`) 36 → 37%. The periodicity screen with a channel selected (`--keys $'4\x1b[B\x1b[B\x1b[B'`) **20%**, 11 kB/s to the terminal. On the Mac (generator, 12 s): spectrum 16%, strip 12%, periodicity 12% |
 | Alerts on the CM4 (`capture-433.cu8` looped, 160×45, 15 s, `smoke.py --keys 1`, twice each; a rule over the whole ISM band, met ~60 times a second: 608 alerts in 10 s) | 38 → **41%** of a core both times: the open events held against the rules 100 times a second, and `aplay` twice. Without rules nothing is checked |
+| Recording on an alert on the CM4 (`capture-433.cu8` looped, 160×45, 15 s, `smoke.py --keys 1`, twice each) | no rule 38 and 39%; one LPD channel recorded (a file every 2.92 s, one at a time) **42%** both times; a rule recording the whole ISM band, four at once all the time (`record::AT_ONCE`) **86 and 87%**, a fifth of it in the kernel (sys 0.5 → 2.3 s: a copy of every read per recording, and their allocations). On the Mac the downconverter alone is 5.7 ns a sample for a narrow band (`bench_downconverter`), 21.5 for 200 kHz |
 | `sdr-mesh`'s protobuf types (`build.rs`: `protox` + `prost-build`, ~10 500 lines of Rust) | ~10 s on a clean debug build of the crate; nothing on later builds unless `proto/` changes |
 | The Meshtastic pulse on the Mac (`smoke.py --keys $'6\x1b[B\x1b[B-+?1' --secs 8 -- --mesh=192.168.1.246`, the device's node over the LAN) | 0% of one core, 23 KiB to the terminal in 8 s |
 | The Meshtastic pulse on the CM4 (`smoke.py --keys 6`, and with two downs, 160×45, 15 s, `-- --mesh=127.0.0.1`; 17 nodes) | **0%** of a core (0.05 s in 15 s), 16–17 KiB to the terminal |
