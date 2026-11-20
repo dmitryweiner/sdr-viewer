@@ -130,9 +130,12 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-15 `sdr-viewer` there is the build of PR #32's branch
-  (the pulse as its first trial changed it; with `meshtasticd` down it
-  names `sudo /home/dmw/sdr-viewer-check/lora.sh on`); PR #31's (the
+  Since 2026-11-20 `sdr-viewer` there is PR #34's build (the node's own
+  row: its `--snapshot --screen 6 -- --mesh` there showed the node's
+  minute telemetry as `•` and `→ this app`, not heard); PR #32's (the
+  pulse as its first trial changed it; with `meshtasticd` down it
+  names `sudo /home/dmw/sdr-viewer-check/lora.sh on`) is
+  `sdr-viewer.before-own-row`; PR #31's (the
   pulse as first tried) is `sdr-viewer.before-trial`; PR #29's (periodicity on `3`, no mesh) is
   `sdr-viewer.before-mesh`; PR #26's (`main` before periodicity) is
   `sdr-viewer.before-period`, and `sdr-viewer.before-x` is older still. With the
