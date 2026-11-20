@@ -7,7 +7,9 @@ use crate::frame::{self, Deframer};
 use crate::lora::{self, Radio};
 use crate::proto::config::device_config::Role;
 use crate::proto::{self, PortNum, from_radio, mesh_packet, to_radio};
-use crate::update::{Content, LocalStats, MeshUpdate, Node, NodeUser, Packet, Ready, Sent};
+use crate::update::{
+    Content, LocalStats, MeshUpdate, Node, NodeUser, Packet, Payload, Ready, Sent,
+};
 
 /// What the node kept for a client that was not connected comes right
 /// after its configuration. A queue status has no time of its own, so
@@ -162,9 +164,15 @@ fn user(user: proto::User) -> NodeUser {
 
 /// `me`: the node's own number, once it has told it.
 fn packet(packet: proto::MeshPacket, received: u64, me: Option<u32>) -> Packet {
-    let content = match packet.payload_variant {
-        Some(mesh_packet::PayloadVariant::Decoded(data)) => content(data),
-        _ => Content::Encrypted,
+    let (content, payload) = match packet.payload_variant {
+        Some(mesh_packet::PayloadVariant::Decoded(data)) => {
+            let payload = Payload {
+                port: data.portnum,
+                data: data.encode_to_vec(),
+            };
+            (content(data), Some(payload))
+        }
+        _ => (Content::Encrypted, None),
     };
     let hops = (packet.hop_start > 0).then(|| packet.hop_start.saturating_sub(packet.hop_limit));
     // The node's time of hearing it: a packet kept for a client that was
@@ -187,7 +195,19 @@ fn packet(packet: proto::MeshPacket, received: u64, me: Option<u32>) -> Packet {
         via_mqtt: packet.via_mqtt,
         app_only: Some(packet.from) == me && packet.hop_start == 0,
         content,
+        payload,
     }
+}
+
+/// What a kept payload says: what its packet said when it came.
+pub fn read(payload: &Payload) -> Content {
+    proto::Data::decode(&payload.data[..]).map_or_else(
+        |_| Content::Other {
+            port: payload.port,
+            name: port_name(payload.port),
+        },
+        content,
+    )
 }
 
 fn content(data: proto::Data) -> Content {
@@ -524,6 +544,43 @@ mod tests {
                 sent: 3,
                 uptime_s: 975
             })
+        );
+    }
+
+    #[test]
+    fn a_packets_payload_is_kept_whole_and_reads_the_same_again() {
+        let mut session = Session::new(77);
+        let nodeinfo = user("!bfb54553", "Haifa Gate", "HG1").encode_to_vec();
+        let mut decoded = data(PortNum::NodeinfoApp, nodeinfo);
+        if let mesh_packet::PayloadVariant::Decoded(data) = &mut decoded {
+            data.request_id = 0x99;
+        }
+        let mut stream = framed(from_radio::PayloadVariant::Packet(packet(decoded)));
+        let sealed = packet(mesh_packet::PayloadVariant::Encrypted(vec![9; 20]));
+        stream.extend(framed(from_radio::PayloadVariant::Packet(sealed)));
+        let updates = session.on_bytes(&stream, 2000);
+        let [MeshUpdate::Packet(first), MeshUpdate::Packet(second)] = &updates[..] else {
+            panic!("{updates:?}");
+        };
+        let payload = first.payload.as_ref().expect("decrypted");
+        assert_eq!(payload.port, PortNum::NodeinfoApp as i32);
+        assert_eq!(
+            proto::Data::decode(&payload.data[..]).unwrap().request_id,
+            0x99
+        );
+        assert_eq!(read(payload), first.content);
+        assert_eq!(second.payload, None);
+        // What no longer decodes is told by its port.
+        let broken = Payload {
+            port: PortNum::TextMessageApp as i32,
+            data: vec![0xff; 3],
+        };
+        assert_eq!(
+            read(&broken),
+            Content::Other {
+                port: PortNum::TextMessageApp as i32,
+                name: "text message".into()
+            }
         );
     }
 

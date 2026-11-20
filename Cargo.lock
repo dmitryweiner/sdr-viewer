@@ -1894,6 +1894,7 @@ dependencies = [
  "rusqlite",
  "sdr-core",
  "sdr-detect",
+ "sdr-mesh",
  "toml",
 ]
 

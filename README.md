@@ -191,9 +191,11 @@ and starts it (`off` stops it). While the daemon does not answer, the
 pulse says so and gives the command that starts it (the `lora.sh`
 beside the app, or `systemctl`), and connects by itself once it is up.
 
-One row per node the daemon knows or that was heard in this run — the
-node itself first, then the last heard — with its short and long name, a
-tick for each of its packets on one time axis of the wall clock, and on
+One row per node the daemon knows or that was heard in the last day —
+the node itself first, then the last heard — with its short and long
+name, a tick for each of its packets on one time axis of the wall clock
+(those of earlier runs too, from the database, before the node answers),
+and on
 the right how long ago it was last heard (`heard`), and the SNR, RSSI
 and hops of its last packet. The axis is on top: what a column stands
 for (a minute at first), the time of day, and now at the right edge. The
@@ -215,6 +217,7 @@ minute: it was not on the air. The node's card adds its own count of
 what it sent on the air, acknowledgements too, which it tells every 15
 minutes. `meshtasticd` serves one client at a time: a phone app on the
 node's API and the pulse take turns.
+The card counts a node's packets in the last 24 hours, or since `m`.
 Packets on a channel the node has no key for count too: their header is
 in the clear. The selected node's card names its id, hardware and role,
 and tells its last packet: what it was, to whom, on which channel (or the
@@ -268,12 +271,15 @@ generator) is saved in 8.
 ### The event database
 
 With `--rtlsdr` every detected event is also kept in a SQLite file:
-`sdr-viewer/events.db` under `$XDG_DATA_HOME`, or under `~/.local/share`.
-`--db FILE` names another file — and keeps the events of a recording or of
-the generator too, which are not kept otherwise; `--no-db` keeps nothing.
-Events are written once a second; those still on when the app quits are
-ended there and written. Events older than 7 days are deleted when the app
-starts.
+`sdr-viewer/events.db` under `$XDG_DATA_HOME`, or under `~/.local/share`;
+with `--mesh` every packet the node hands the app is kept in the same
+file. `--db FILE` names another file — and keeps the events of a recording
+or of the generator too, which are not kept otherwise; `--no-db` keeps
+nothing. Events and packets are written once a second; events still on
+when the app quits are ended there and written. What is older than 7 days
+is deleted when the app starts. A file this build has brought up to date
+(the mesh's tables were added to it) is refused by older builds: they say
+so, and run with `--no-db`.
 
 With a database the log shows the local date and time of day instead of
 the time in the stream, and starts with what earlier runs found in the
@@ -291,6 +297,23 @@ sqlite3 ~/.local/share/sdr-viewer/events.db "
 and rate); `events` has the session, the wall-clock start (the session's
 start plus the time in the stream), the duration, the band, the peak and
 its level above the noise floor.
+
+The mesh's tables, times in Unix seconds: `mesh_listened` — when the app
+was connected to which node (`until_s` moves on while it is);
+`mesh_packets` — each packet's header (when the node heard it by its
+clock, from, to, channel or its hash, number, SNR, RSSI, hops taken and
+allowed, the last byte of the relay, via MQTT, made for the app alone)
+and what it carried as the node decrypted it: its kind (`port`,
+Meshtastic's `PortNum`: 1 a text, 3 a position, 4 node info, 67
+telemetry) and its `Data` message (`data`), both NULL without the
+channel's key; `mesh_sent` — the packets the node queued of its own.
+
+```sh
+sqlite3 ~/.local/share/sdr-viewer/events.db "
+  SELECT datetime(received_s, 'unixepoch', 'localtime'),
+         printf('!%08x', from_node), port, snr, hops
+  FROM mesh_packets ORDER BY received_s DESC LIMIT 20"
+```
 
 Without a terminal — the screen as text, the strongest signals and the
 detected events of the first seconds of a recording:

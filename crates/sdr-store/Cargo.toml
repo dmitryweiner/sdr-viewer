@@ -1,6 +1,6 @@
 [package]
 name = "sdr-store"
-description = "What is kept on disk: the SQLite event database, SigMF recordings and the channels file."
+description = "What is kept on disk: the SQLite event database (the mesh's packets too), SigMF recordings and the channels file."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 sdr-core = { workspace = true }
 sdr-detect = { workspace = true }
+sdr-mesh = { workspace = true }
 rusqlite = { workspace = true }
 chrono = { workspace = true }
 toml = { workspace = true }

@@ -1,6 +1,7 @@
 //! The Meshtastic pulse's state: the nodes `meshtasticd` knows and the
-//! packets heard from each in this run (and what the node handed this app
-//! alone), on a time axis of the wall clock
+//! packets heard from each in the last day, of this run and kept by
+//! earlier ones (and what the node handed this app alone), on a time axis
+//! of the wall clock
 //! (Unix seconds) whose columns begin on whole minutes (or whatever a
 //! column stands for), so that the whole pulse steps at once; when the app
 //! was listening; the order, what is shown, the selection and the time
@@ -70,23 +71,17 @@ pub struct NodeRow {
     pub snr: Option<f32>,
     pub rssi: Option<i32>,
     pub hops: Option<u32>,
-    /// Its last packet in this run, heard or for this app only.
+    /// Its last packet, heard or for this app only.
     pub last: Option<Packet>,
-    /// When its packets of this run arrived, oldest first.
+    /// When its packets heard arrived, oldest first.
     times: VecDeque<u64>,
-    /// How many packets this run has heard from it.
-    pub packets: u64,
     /// When the node handed this app what it made for its clients alone
     /// (`Packet::app_only`): no packet heard, never on the air.
     app_only_times: VecDeque<u64>,
-    /// How many of those.
-    pub app_only: u64,
     /// When the node itself queued packets of its own for the air, or
     /// handed over a copy of one; the numbers of the last of them.
     sent_times: VecDeque<u64>,
     sent_ids: VecDeque<u32>,
-    /// How many, and the last.
-    pub sent: u64,
     pub last_sent: Option<u64>,
     /// The node's own count of what it sent, the last time it told it.
     pub tx_count: Option<TxCount>,
@@ -117,12 +112,9 @@ impl NodeRow {
             hops: None,
             last: None,
             times: VecDeque::new(),
-            packets: 0,
             app_only_times: VecDeque::new(),
-            app_only: 0,
             sent_times: VecDeque::new(),
             sent_ids: VecDeque::new(),
-            sent: 0,
             last_sent: None,
             tx_count: None,
         }
@@ -138,7 +130,6 @@ impl NodeRow {
         }
         self.sent_ids.push_back(id);
         keep(&mut self.sent_times, at);
-        self.sent += 1;
         self.last_sent = self.last_sent.max(Some(at));
     }
 
@@ -169,6 +160,8 @@ pub struct MeshView {
     pub link: Link,
     /// What the node told when it was last connected.
     pub ready: Option<Ready>,
+    /// The node's own number: told by it, or by what earlier runs kept.
+    me: Option<u32>,
     /// The command that starts `meshtasticd`, when it is this machine's:
     /// told while it does not answer.
     pub starter: Option<String>,
@@ -191,6 +184,7 @@ impl MeshView {
         MeshView {
             link,
             ready: None,
+            me: None,
             starter: None,
             nodes: Vec::new(),
             listened: Vec::new(),
@@ -210,6 +204,7 @@ impl MeshView {
             MeshUpdate::Connecting(addr) => self.link = Link::Connecting(addr),
             MeshUpdate::Ready(ready) => {
                 self.link = Link::Connected;
+                self.me = Some(ready.me);
                 self.ready = Some(ready);
                 if !matches!(self.listened.last(), Some((_, None))) {
                     self.listened.push((self.now, None));
@@ -224,38 +219,57 @@ impl MeshView {
             MeshUpdate::Node(node) => self.on_node(node),
             MeshUpdate::Packet(packet) => self.on_packet(packet),
             MeshUpdate::Sent(sent) => {
-                if let Some(me) = self.ready.as_ref().map(|ready| ready.me) {
+                if let Some(me) = self.me {
                     self.row_mut(me).note_sent(sent.at, sent.id);
                 }
             }
         }
     }
 
-    /// A node of the database; what this run has heard of it stays.
+    /// What earlier runs kept: the node they listened to, the times they
+    /// did, and the packets and the node's own told then, the oldest
+    /// first. Before the node answers.
+    pub fn load_history(
+        &mut self,
+        me: Option<u32>,
+        listened: Vec<(u64, u64)>,
+        told: Vec<MeshUpdate>,
+    ) {
+        self.me = me;
+        let listened = listened.into_iter().map(|(on, off)| (on, Some(off)));
+        self.listened.splice(0..0, listened);
+        for update in told {
+            self.on_update(update);
+        }
+    }
+
+    /// The node's own number, once known.
+    pub fn me(&self) -> Option<u32> {
+        self.me
+    }
+
+    /// A node of the database: what was heard here stays, unless the node
+    /// heard it since.
     fn on_node(&mut self, node: Node) {
         let row = self.row_mut(node.num);
         if node.user.is_some() {
             row.user = node.user;
         }
-        row.last_heard = row.last_heard.max(node.last_heard);
-        if row.packets == 0 {
+        if row.times.is_empty() || node.last_heard > row.times.back().copied() {
             row.snr = node.snr;
             row.hops = node.hops_away;
         }
+        row.last_heard = row.last_heard.max(node.last_heard);
     }
 
     fn on_packet(&mut self, packet: Packet) {
-        let own = self
-            .ready
-            .as_ref()
-            .is_some_and(|ready| ready.me == packet.from);
+        let own = self.me == Some(packet.from);
         let row = self.row_mut(packet.from);
         if let Content::User(user) = &packet.content {
             row.user = Some(user.clone());
         }
         if packet.app_only {
             keep(&mut row.app_only_times, packet.received);
-            row.app_only += 1;
             if let Content::LocalStats(stats) = packet.content {
                 row.count_tx(packet.received, stats);
             }
@@ -273,7 +287,6 @@ impl MeshView {
                 row.hops = packet.hops;
             }
             keep(&mut row.times, packet.received);
-            row.packets += 1;
         }
         row.last = Some(packet);
     }
@@ -313,7 +326,7 @@ impl MeshView {
     /// The node itself first, then the others that are shown, in the
     /// order chosen.
     pub fn rows(&self) -> Vec<&NodeRow> {
-        let me = self.ready.as_ref().map(|ready| ready.me);
+        let me = self.me;
         let from = self.shown_from();
         let mut rows: Vec<&NodeRow> = self
             .nodes
@@ -360,6 +373,42 @@ impl MeshView {
     /// The same of what the node itself sent.
     pub fn sent_cells(&self, row: &NodeRow, columns: usize) -> Vec<u32> {
         self.count(&row.sent_times, columns)
+    }
+
+    /// How many packets were heard from `row` in the last day, or since
+    /// the list was started afresh (`span_name`).
+    pub fn packets(&self, row: &NodeRow) -> usize {
+        self.in_span(&row.times)
+    }
+
+    /// The same of what the node itself sent.
+    pub fn sent(&self, row: &NodeRow) -> usize {
+        self.in_span(&row.sent_times)
+    }
+
+    /// The same of what the node handed this app only.
+    pub fn app_only(&self, row: &NodeRow) -> usize {
+        self.in_span(&row.app_only_times)
+    }
+
+    /// "in 24 h", or "since 14:30" when the list was started afresh then.
+    pub fn span_name(&self) -> String {
+        match self.since {
+            Some(since) if since >= self.day_ago() => format!("since {}", self.time_of_day(since)),
+            _ => "in 24 h".into(),
+        }
+    }
+
+    fn in_span(&self, times: &VecDeque<u64>) -> usize {
+        let from = self.since.unwrap_or(0).max(self.day_ago());
+        times
+            .iter()
+            .filter(|&&time| (from..=self.now).contains(&time))
+            .count()
+    }
+
+    fn day_ago(&self) -> u64 {
+        self.now.saturating_sub(HISTORY_S)
     }
 
     fn count(&self, times: &VecDeque<u64>, columns: usize) -> Vec<u32> {
@@ -426,9 +475,11 @@ impl MeshView {
             .collect()
     }
 
-    /// How many nodes this run has heard a packet from.
+    /// How many nodes a packet was heard from, in the last day or since
+    /// the list was started afresh.
     pub fn heard(&self) -> usize {
-        self.nodes.iter().filter(|node| node.packets > 0).count()
+        let heard = self.nodes.iter().filter(|node| self.packets(node) > 0);
+        heard.count()
     }
 
     pub fn seconds_per_column(&self) -> u64 {
@@ -603,6 +654,7 @@ pub(crate) mod tests {
             via_mqtt: false,
             app_only: false,
             content,
+            payload: None,
         }
     }
 
@@ -683,7 +735,7 @@ pub(crate) mod tests {
         let gate = rows[1];
         // Its node info named it; its last packet tells the rest.
         assert_eq!(gate.user.as_ref().unwrap().short_name, "HG1");
-        assert_eq!((gate.last_heard, gate.packets), (Some(35_950), 2));
+        assert_eq!((gate.last_heard, view.packets(gate)), (Some(35_950), 2));
         assert_eq!(
             (gate.snr, gate.rssi, gate.hops),
             (Some(-9.5), Some(-115), Some(2))
@@ -721,7 +773,7 @@ pub(crate) mod tests {
         let me = view.rows()[0];
         assert_eq!((me.snr, me.rssi, me.hops), (None, None, None));
         // A copy of what it sent.
-        assert_eq!((me.packets, me.sent), (0, 1));
+        assert_eq!((view.packets(me), view.sent(me)), (0, 1));
         assert_eq!(me.last_heard, Some(36_000));
         assert_eq!(view.heard(), 2);
     }
@@ -734,7 +786,10 @@ pub(crate) mod tests {
             view.on_update(MeshUpdate::Packet(app_only(at)));
         }
         let me = view.rows()[0].clone();
-        assert_eq!((me.packets, me.sent, me.app_only), (0, 0, 2));
+        assert_eq!(
+            (view.packets(&me), view.sent(&me), view.app_only(&me)),
+            (0, 0, 2)
+        );
         assert_eq!(view.heard(), 2);
         assert_eq!(view.cells(&me, 20), [0; 20]);
         assert_eq!(view.app_only_cells(&me, 20)[17..], [1, 1, 0]);
@@ -765,7 +820,10 @@ pub(crate) mod tests {
         untold.id = 0x78;
         view.on_update(MeshUpdate::Packet(untold));
         let me = view.rows()[0].clone();
-        assert_eq!((me.sent, me.packets, me.app_only), (2, 0, 0));
+        assert_eq!(
+            (view.sent(&me), view.packets(&me), view.app_only(&me)),
+            (2, 0, 0)
+        );
         assert_eq!(me.last_sent, Some(35_970));
         assert_eq!(view.heard(), 2);
         let cells = view.sent_cells(&me, 20);
@@ -802,7 +860,7 @@ pub(crate) mod tests {
             (count.started, count.since_start, count.since_last),
             (35_840, 1, None)
         );
-        assert_eq!(view.rows()[0].app_only, 3);
+        assert_eq!(view.app_only(view.rows()[0]), 3);
     }
 
     #[test]
@@ -984,7 +1042,90 @@ pub(crate) mod tests {
         )));
         let gate = view.rows()[1].clone();
         assert_eq!(gate.times, [35_950, 35_001 + HISTORY_S]);
-        assert_eq!(gate.packets, 3);
+        view.set_now(35_001 + HISTORY_S);
+        assert_eq!(view.packets(&gate), 2);
+    }
+
+    #[test]
+    fn counts_are_of_the_last_day_or_since_the_list_was_started_afresh() {
+        let mut view = view();
+        let gate = view.rows()[1].clone();
+        assert_eq!((view.packets(&gate), view.heard()), (2, 2));
+        assert_eq!(view.span_name(), "in 24 h");
+        // A day after 9:43:20 that packet no longer counts, nor FAR.
+        view.set_now(35_000 + HISTORY_S + 1);
+        assert_eq!((view.packets(&gate), view.heard()), (1, 1));
+        view.set_now(36_000);
+        view.start_afresh();
+        view.on_update(MeshUpdate::Packet(packet(GATE, 36_020, telemetry())));
+        view.set_now(36_030);
+        let gate = view.rows()[1].clone();
+        assert_eq!((view.packets(&gate), view.heard()), (1, 1));
+        assert_eq!(view.span_name(), "since 10:00");
+        // Started afresh more than a day ago, it is the day again.
+        view.set_now(36_000 + HISTORY_S + 1);
+        assert_eq!(view.span_name(), "in 24 h");
+    }
+
+    #[test]
+    fn what_earlier_runs_kept_is_on_the_pulse_before_the_node_answers() {
+        let mut view = MeshView::new(Link::Connecting("localhost:4403".into()));
+        view.set_now(36_000);
+        // Listened from 9:00 to 9:10 and from 9:40 to 9:45, and was told
+        // this then.
+        let told = vec![
+            MeshUpdate::Packet(packet(
+                GATE,
+                32_500,
+                Content::User(who(GATE, "HG1", "Haifa Gate")),
+            )),
+            MeshUpdate::Packet(app_only(32_520)),
+            MeshUpdate::Sent(Sent {
+                at: 32_530,
+                id: 0x77,
+            }),
+            MeshUpdate::Packet(packet(GATE, 34_900, telemetry())),
+        ];
+        view.load_history(Some(ME), vec![(32_400, 33_000), (34_800, 35_100)], told);
+        assert_eq!(view.me(), Some(ME));
+        let rows: Vec<NodeRow> = view.rows().into_iter().cloned().collect();
+        let nums: Vec<u32> = rows.iter().map(|row| row.num).collect();
+        assert_eq!(nums, [ME, GATE]);
+        let (me, gate) = (&rows[0], &rows[1]);
+        assert_eq!(gate.user.as_ref().unwrap().short_name, "HG1");
+        assert_eq!((gate.last_heard, view.packets(gate)), (Some(34_900), 2));
+        assert_eq!(
+            (view.sent(me), view.app_only(me), view.packets(me)),
+            (1, 1, 0)
+        );
+        assert_eq!(view.heard(), 1);
+        // A minute a column from 9:41: listened until 9:45.
+        let listened = view.listened(20);
+        assert_eq!(listened[..5], [true; 5]);
+        assert_eq!(listened[5..], [false; 15]);
+        assert_eq!(view.cells(gate, 20)[0], 1);
+        // Then the node answers, and the app listens again.
+        view.on_update(MeshUpdate::Ready(ready()));
+        assert_eq!(view.listened(20)[18..], [false, true]);
+        assert_eq!(view.rows()[0].num, ME);
+    }
+
+    #[test]
+    fn the_nodes_database_is_taken_when_newer_than_what_was_heard_here() {
+        let mut view = view();
+        view.on_update(MeshUpdate::Node(Node {
+            num: GATE,
+            user: None,
+            last_heard: Some(35_990),
+            snr: Some(-3.0),
+            hops_away: Some(1),
+            via_mqtt: false,
+        }));
+        let gate = view.rows()[1];
+        assert_eq!(
+            (gate.last_heard, gate.snr, gate.hops),
+            (Some(35_990), Some(-3.0), Some(1))
+        );
     }
 
     #[test]

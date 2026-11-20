@@ -1130,7 +1130,7 @@ mod tests {
         let own = text.lines().find(|line| line.starts_with("8900")).unwrap();
         assert!(own.contains("••••"), "{own}");
         assert!(
-            text.contains(" · 2 sent in this run · 32 to this app only"),
+            text.contains(" · 2 sent in 24 h · 32 to this app only"),
             "{text}"
         );
         assert!(

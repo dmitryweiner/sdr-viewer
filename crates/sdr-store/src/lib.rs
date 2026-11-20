@@ -1,8 +1,9 @@
 //! What is kept on disk. Here the event database: a SQLite file with the
-//! sessions of reception and the events the detector found in them.
-//! Recordings of samples are in [`sigmf`].
+//! sessions of reception and the events the detector found in them, and
+//! what the mesh told ([`mesh`]). Recordings of samples are in [`sigmf`].
 
 pub mod channels;
+pub mod mesh;
 pub mod sigmf;
 
 use std::fmt;
@@ -14,9 +15,13 @@ use sdr_core::SourceInfo;
 use sdr_detect::Event;
 
 /// The layout this build reads and writes, kept in SQLite's `user_version`.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = LAYOUTS.len() as i64;
 
-const SCHEMA: &str = "
+/// What each layout adds to the one before: the first the events, the
+/// second the mesh.
+const LAYOUTS: [&str; 2] = [EVENTS, mesh::TABLES];
+
+const EVENTS: &str = "
 CREATE TABLE sessions (
     id INTEGER PRIMARY KEY,
     -- When reception began, milliseconds since 1970 UTC.
@@ -107,14 +112,16 @@ impl Store {
     fn prepare(connection: Connection) -> Result<Store, StoreError> {
         connection.pragma_update(None, "foreign_keys", true)?;
         let found: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        match found {
-            0 => {
-                connection.execute_batch(&format!(
-                    "BEGIN; {SCHEMA} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;"
-                ))?;
-            }
-            SCHEMA_VERSION => {}
-            found => return Err(StoreError::Newer { found }),
+        if found > SCHEMA_VERSION {
+            return Err(StoreError::Newer { found });
+        }
+        // An older file is brought up to this layout, its contents kept.
+        let missing = usize::try_from(found).map_or(&[][..], |found| &LAYOUTS[found..]);
+        if !missing.is_empty() {
+            connection.execute_batch(&format!(
+                "BEGIN; {} PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;",
+                missing.concat()
+            ))?;
         }
         Ok(Store { connection })
     }
@@ -442,13 +449,44 @@ mod tests {
         let err = Store::open(&db.0).err().expect("must be refused");
         assert_eq!(
             err.to_string(),
-            "made by a newer sdr-viewer (layout 7, this build knows 1)"
+            "made by a newer sdr-viewer (layout 7, this build knows 2)"
         );
         let connection = Connection::open(&db.0).unwrap();
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert_eq!(version, 7);
+    }
+
+    #[test]
+    fn a_file_of_the_first_layout_keeps_its_events_and_gains_the_mesh() {
+        let db = TempDb::new("layout1");
+        {
+            let connection = Connection::open(&db.0).unwrap();
+            connection
+                .execute_batch(&format!("{EVENTS} PRAGMA user_version = 1;"))
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO sessions (started_unix_ms, source, center_hz, sample_rate)
+                     VALUES (?1, 'rtl-sdr', 433.92e6, 2400000)",
+                    [NOON_MS as i64],
+                )
+                .unwrap();
+            let mut store = Store { connection };
+            store.add_events(SessionId(1), &[event(100, 15.0)]).unwrap();
+        }
+        let mut store = Store::open(&db.0).unwrap();
+        assert_eq!(store.count().unwrap(), 1);
+        let listening = store.begin_listening(7, 1_000).unwrap();
+        store.listened_until(listening, 1_060).unwrap();
+        assert_eq!(store.mesh_since(0, 10).unwrap().listened.len(), 1);
+        drop(store);
+        let version: i64 = Connection::open(&db.0)
+            .unwrap()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 2);
     }
 
     #[test]
