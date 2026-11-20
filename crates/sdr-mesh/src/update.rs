@@ -88,6 +88,20 @@ pub struct Packet {
     /// starts with, which the node sets on what it transmits only.
     pub app_only: bool,
     pub content: Content,
+    /// What it carried as the node decrypted it; none when the node had
+    /// no key.
+    pub payload: Option<Payload>,
+}
+
+/// A packet's decrypted payload, as it is kept: the content is read from
+/// it again (`session::read`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Payload {
+    /// The port it is for (Meshtastic's `PortNum`).
+    pub port: i32,
+    /// Meshtastic's `Data` message, encoded again: the port, the bytes for
+    /// it, and what it answers or reacts to.
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

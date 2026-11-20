@@ -60,14 +60,14 @@ pub struct Args {
     #[arg(long, default_value_t = 5.0)]
     pub secs: f64,
 
-    /// Keep the detected events in this SQLite file. With --rtlsdr they
-    /// are kept anyway, in sdr-viewer/events.db under $XDG_DATA_HOME or
-    /// ~/.local/share; a recording or the generator is kept only when
-    /// this names a file.
+    /// Keep the detected events in this SQLite file, and the mesh's
+    /// packets. With --rtlsdr and with --mesh they are kept anyway, in
+    /// sdr-viewer/events.db under $XDG_DATA_HOME or ~/.local/share; a
+    /// recording or the generator is kept only when this names a file.
     #[arg(long, value_name = "FILE", conflicts_with = "snapshot")]
     pub db: Option<PathBuf>,
 
-    /// Keep no events, not even with --rtlsdr.
+    /// Keep no events and no packets, not even with --rtlsdr or --mesh.
     #[arg(long, conflicts_with = "db")]
     pub no_db: bool,
 
@@ -123,6 +123,17 @@ pub fn db_path(args: &Args, env: impl Fn(&str) -> Option<String>) -> Option<Path
         return None;
     }
     if args.db.is_some() || !args.rtlsdr {
+        return args.db.clone();
+    }
+    Some(data_dir(env)?.join("events.db"))
+}
+
+/// Where the mesh's packets go, if anywhere: the file of the events.
+pub fn mesh_db_path(args: &Args, env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    if args.mesh.is_none() || args.no_db || args.snapshot.is_some() {
+        return None;
+    }
+    if args.db.is_some() {
         return args.db.clone();
     }
     Some(data_dir(env)?.join("events.db"))
@@ -371,6 +382,27 @@ mod tests {
         let named = ["--snapshot", "80x24", "--channels", "c.toml"];
         assert_eq!(path(&named), Some("c.toml".into()));
         assert_eq!(channels_path(&args(&["--rtlsdr"]), env(&[])), None);
+    }
+
+    #[test]
+    fn the_mesh_is_kept_in_the_users_database_unless_told_otherwise() {
+        let home = [("HOME", "/home/dmw")];
+        let path = |list: &[&str]| mesh_db_path(&args(list), env(&home));
+        let users = Some("/home/dmw/.local/share/sdr-viewer/events.db".into());
+        assert_eq!(path(&["--mesh"]), users);
+        assert_eq!(path(&["--mesh=192.168.1.246"]), users);
+        // Beside a recording too: the packets are of the air, the
+        // recording's events are not kept.
+        assert_eq!(path(&["--mesh", "capture.cu8"]), users);
+        assert_eq!(db_path(&args(&["--mesh", "capture.cu8"]), env(&home)), None);
+        assert_eq!(path(&["--mesh", "--db", "x.db"]), Some("x.db".into()));
+        assert_eq!(path(&["--mesh", "--no-db"]), None);
+        assert_eq!(path(&["--rtlsdr"]), None);
+        assert_eq!(
+            path(&["--mesh", "--snapshot", "80x24", "--screen", "6"]),
+            None
+        );
+        assert_eq!(mesh_db_path(&args(&["--mesh"]), env(&[])), None);
     }
 
     #[test]

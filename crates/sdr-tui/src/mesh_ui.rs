@@ -202,7 +202,7 @@ fn draw_row(
     ticks: &Ticks,
     area: Rect,
 ) {
-    let mut style = match (is_own(view, row), row.packets) {
+    let mut style = match (is_own(view, row), view.packets(row)) {
         (true, _) => Style::new().fg(OWN).add_modifier(Modifier::BOLD),
         (false, 0) => Style::new().fg(Color::DarkGray),
         (false, _) => Style::new(),
@@ -324,20 +324,23 @@ fn draw_card(frame: &mut Frame, view: &MeshView, row: &NodeRow, area: Rect) {
         who.push(dim(" · has not told who it is".into()));
     }
     let own = is_own(view, row);
+    let span = view.span_name();
     if own {
         // It never hears itself.
-        if row.sent > 0 {
-            who.push(dim(format!(" · {} sent in this run", row.sent)));
+        let sent = view.sent(row);
+        if sent > 0 {
+            who.push(dim(format!(" · {sent} sent {span}")));
         }
     } else {
-        who.push(dim(match row.packets {
-            0 => " · not heard in this run".to_string(),
-            1 => " · 1 packet in this run".to_string(),
-            n => format!(" · {n} packets in this run"),
+        who.push(dim(match view.packets(row) {
+            0 => format!(" · not heard {span}"),
+            1 => format!(" · 1 packet {span}"),
+            n => format!(" · {n} packets {span}"),
         }));
     }
-    if row.app_only > 0 {
-        who.push(dim(format!(" · {} to this app only", row.app_only)));
+    let app_only = view.app_only(row);
+    if app_only > 0 {
+        who.push(dim(format!(" · {app_only} to this app only")));
     }
     let received = row.last.as_ref().map(|packet| packet.received);
     let last = match (row.last_sent, &row.last) {
@@ -387,7 +390,7 @@ fn count_line(view: &MeshView, row: &NodeRow) -> Line<'static> {
 
 /// Is `row` the node itself?
 fn is_own(view: &MeshView, row: &NodeRow) -> bool {
-    view.ready.as_ref().is_some_and(|ready| ready.me == row.num)
+    view.me() == Some(row.num)
 }
 
 fn packet_line(view: &MeshView, packet: &Packet) -> Line<'static> {
@@ -398,7 +401,7 @@ fn packet_line(view: &MeshView, packet: &Packet) -> Line<'static> {
         Content::LocalStats(_) => "local stats".to_string(),
         Content::Other { name, .. } => name.clone(),
     };
-    let me = view.ready.as_ref().map(|ready| ready.me);
+    let me = view.me();
     let to = match packet.to {
         BROADCAST => "all".to_string(),
         to if Some(to) == me => "this node".to_string(),

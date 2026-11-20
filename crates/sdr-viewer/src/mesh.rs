@@ -1,5 +1,6 @@
 //! The mesh's thread: `sdr_mesh`'s client, its updates handed to the
-//! interface; and the pulse as text, for `--snapshot --screen 6`.
+//! interface; what earlier runs kept, for the pulse; and the pulse as
+//! text, for `--snapshot --screen 6`.
 
 use std::fmt::Write;
 use std::path::Path;
@@ -12,6 +13,7 @@ use std::time::{Duration, SystemTime};
 use sdr_core::SourceInfo;
 use sdr_mesh::client::{self, Timing};
 use sdr_mesh::update::{BROADCAST, Content, MeshUpdate, Packet, Sent};
+use sdr_store::mesh::MeshHistory;
 use sdr_tui::mesh::{Link, MeshView};
 use sdr_tui::{App, Screen, SourceState, ui};
 
@@ -53,6 +55,28 @@ pub fn starter(addr: &str, exe: Option<&Path>, exists: impl Fn(&Path) -> bool) -
         Some(script) => format!("sudo {} on", script.display()),
         None => "sudo systemctl start meshtasticd".into(),
     })
+}
+
+/// What earlier runs kept, as the pulse takes it (`MeshView::load_history`):
+/// the node they listened to last, the times they listened, and the packets
+/// and that node's own queued, in the order they came.
+pub fn for_the_pulse(history: MeshHistory) -> (Option<u32>, Vec<(u64, u64)>, Vec<MeshUpdate>) {
+    let me = history.listened.last().map(|listened| listened.node);
+    let listened = history.listened.iter();
+    let listened = listened.map(|listened| (listened.from, listened.until));
+    let packets = history
+        .packets
+        .into_iter()
+        .map(|packet| (packet.received, MeshUpdate::Packet(packet)));
+    let sent = history
+        .sent
+        .into_iter()
+        .filter(|&(node, _)| Some(node) == me);
+    let sent = sent.map(|(_, sent)| (sent.at, MeshUpdate::Sent(sent)));
+    let mut told: Vec<(u64, MeshUpdate)> = packets.chain(sent).collect();
+    told.sort_by_key(|&(at, _)| at);
+    let told = told.into_iter().map(|(_, update)| update).collect();
+    (me, listened.collect(), told)
 }
 
 /// Talks to `meshtasticd` at `addr` until `stop`, or until the interface
@@ -196,12 +220,12 @@ fn describe(view: &MeshView, packet: &Packet) -> String {
 mod tests {
     use super::*;
     use sdr_mesh::update::LocalStats;
+    use sdr_store::mesh::Listened;
 
-    #[test]
-    fn what_the_node_hands_the_app_alone_is_not_to_all() {
-        let mut minute = Packet {
-            received: 36_000,
-            from: 0x015b_8900,
+    fn minute_of(from: u32, received: u64) -> Packet {
+        Packet {
+            received,
+            from,
             to: BROADCAST,
             channel: 0,
             id: 1,
@@ -216,7 +240,13 @@ mod tests {
                 port: 67,
                 name: "telemetry".into(),
             },
-        };
+            payload: None,
+        }
+    }
+
+    #[test]
+    fn what_the_node_hands_the_app_alone_is_not_to_all() {
+        let mut minute = minute_of(0x015b_8900, 36_000);
         let view = MeshView::new(Link::Off);
         assert!(describe(&view, &minute).contains("!015b8900 → this app "));
         minute.app_only = false;
@@ -237,6 +267,49 @@ mod tests {
             sent.ends_with("  !015b8900 queued a packet of its own for the air, 0x00000077"),
             "{sent}"
         );
+    }
+
+    #[test]
+    fn what_earlier_runs_kept_goes_to_the_pulse_in_the_order_it_came() {
+        const ME: u32 = 0x015b_8900;
+        let packet = |received| {
+            let mut packet = minute_of(ME, received);
+            packet.app_only = false;
+            packet
+        };
+        let history = MeshHistory {
+            listened: vec![
+                Listened {
+                    node: 0x0bad_cafe,
+                    from: 30_000,
+                    until: 31_000,
+                },
+                Listened {
+                    node: ME,
+                    from: 35_000,
+                    until: 35_600,
+                },
+            ],
+            packets: vec![packet(35_100), packet(35_300)],
+            sent: vec![
+                (0x0bad_cafe, Sent { at: 30_500, id: 1 }),
+                (ME, Sent { at: 35_200, id: 2 }),
+            ],
+        };
+        let (me, listened, told) = for_the_pulse(history);
+        assert_eq!(me, Some(ME));
+        assert_eq!(listened, [(30_000, 31_000), (35_000, 35_600)]);
+        // What another node queued is not this one's.
+        let times: Vec<u64> = told
+            .iter()
+            .map(|update| match update {
+                MeshUpdate::Packet(packet) => packet.received,
+                MeshUpdate::Sent(sent) => sent.at,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(times, [35_100, 35_200, 35_300]);
+        assert_eq!(for_the_pulse(MeshHistory::default()).0, None);
     }
 
     #[test]

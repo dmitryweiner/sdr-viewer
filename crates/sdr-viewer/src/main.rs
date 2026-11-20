@@ -24,6 +24,7 @@ use clap::Parser;
 use ratatui::crossterm::event::{self, Event};
 use sdr_core::{IqRing, Source, SourceInfo};
 use sdr_detect::Channel;
+use sdr_mesh::update::MeshUpdate;
 use sdr_tui::channels::ChannelsView;
 use sdr_tui::log::WallClock;
 use sdr_tui::{App, Command, Screen, SourceState, ui};
@@ -107,9 +108,17 @@ fn run(args: &cli::Args) -> Result<ExitCode, String> {
         }
         None => None,
     };
+    let mut kept_mesh = None;
     if let Some(addr) = &args.mesh {
         app.mesh = mesh::view(addr, utc_offset_s);
-        // Nothing of it is kept: it is not waited for at the end.
+        // What earlier runs kept, before the node answers.
+        if let Some(path) = cli::mesh_db_path(args, |name| std::env::var(name).ok()) {
+            let kept = keep::keep_mesh(&path, mesh::unix_now(), updates_tx.clone())?;
+            let (me, listened, told) = mesh::for_the_pulse(kept.history);
+            app.mesh.load_history(me, listened, told);
+            kept_mesh = Some((kept.told, kept.writer));
+        }
+        // The client keeps nothing itself: it is not waited for at the end.
         mesh::start(addr, updates_tx.clone(), Arc::clone(&stop));
     }
     drop(updates_tx);
@@ -119,11 +128,19 @@ fn run(args: &cli::Args) -> Result<ExitCode, String> {
         &updates_rx,
         reception.as_ref(),
         args.mesh.is_some(),
+        kept_mesh.as_ref().map(|(told, _)| told),
     );
 
     stop.store(true, Ordering::Relaxed);
     // The reader may be waiting for room to answer a command: let it go.
     drop(updates_rx);
+    if let Some((told, writer)) = kept_mesh {
+        // The app listened until now.
+        let quit = MeshUpdate::Lost("the app quit".into());
+        let _ = told.send(vec![(mesh::unix_now(), quit)]);
+        drop(told);
+        let _ = writer.join();
+    }
     if let Some(reception) = reception {
         reception.finish();
     }
@@ -133,12 +150,14 @@ fn run(args: &cli::Args) -> Result<ExitCode, String> {
     }
 }
 
-/// The terminal's loop, until the user quits.
+/// The terminal's loop, until the user quits. What the mesh's client tells
+/// is handed on to `kept_mesh` too, with the time.
 fn interface(
     app: &mut App,
     updates: &Receiver<Update>,
     reception: Option<&Reception>,
     mesh: bool,
+    kept_mesh: Option<&Sender<Vec<(u64, MeshUpdate)>>>,
 ) -> std::io::Result<()> {
     let mut terminal = ratatui::init();
     let result = (|| -> std::io::Result<()> {
@@ -147,6 +166,7 @@ fn interface(
         let mut dirty = true;
         let mut second = 0;
         while !app.quit {
+            let mut told = Vec::new();
             for update in updates.try_iter() {
                 match update {
                     Update::Status(status) => app.status = status,
@@ -166,9 +186,17 @@ fn interface(
                     Update::Done(done) => app.done = Some(done),
                     Update::Picture(event, fragment) => app.on_picture(&event, fragment),
                     Update::Density(map) => app.on_density(map),
-                    Update::Mesh(update) => app.on_mesh(update),
+                    Update::Mesh(update) => {
+                        if kept_mesh.is_some() {
+                            told.push((mesh::unix_now(), update.clone()));
+                        }
+                        app.on_mesh(update);
+                    }
                 }
                 dirty = true;
+            }
+            if let (Some(kept_mesh), false) = (kept_mesh, told.is_empty()) {
+                let _ = kept_mesh.send(told);
             }
             if let Some(reception) = reception {
                 reception.save_channels(app);
