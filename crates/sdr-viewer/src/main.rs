@@ -26,7 +26,7 @@ use std::time::{Duration, SystemTime};
 use clap::Parser;
 use ratatui::crossterm::event::{self, Event};
 use sdr_core::{IqRing, Source, SourceInfo};
-use sdr_detect::{Channel, Rule};
+use sdr_detect::Channel;
 use sdr_mesh::update::MeshUpdate;
 use sdr_store::alerts::AlertsFile;
 use sdr_tui::alerts::AlertsView;
@@ -293,8 +293,9 @@ struct Reception {
     worker: JoinHandle<()>,
     new_channels: Option<Sender<Vec<sdr_tui::channels::Change>>>,
     saver: Option<JoinHandle<()>>,
-    /// The rules made with `!`, to their file, by a thread of their own.
-    new_rules: Option<Sender<Vec<Rule>>>,
+    /// What `!` and `R` changed of the rules, to their file, by a thread
+    /// of their own.
+    new_rules: Option<Sender<Vec<sdr_tui::alerts::Change>>>,
     rules_saver: Option<JoinHandle<()>>,
 }
 
@@ -387,11 +388,12 @@ impl Reception {
         })
     }
 
-    /// Hands the rules made since the last look to their saver.
+    /// Hands what was changed of the rules since the last look to their
+    /// saver.
     fn save_rules(&self, app: &mut App) {
-        let rules = app.alerts.take_new();
-        if let (Some(new_rules), false) = (&self.new_rules, rules.is_empty()) {
-            let _ = new_rules.send(rules);
+        let changes = app.alerts.take_changes();
+        if let (Some(new_rules), false) = (&self.new_rules, changes.is_empty()) {
+            let _ = new_rules.send(changes);
         }
     }
 
@@ -417,7 +419,7 @@ impl Reception {
         if let Some(saver) = self.saver {
             let _ = saver.join();
         }
-        // And the rules made with `!`.
+        // And what `!` and `R` changed of the rules.
         drop(self.new_rules);
         if let Some(saver) = self.rules_saver {
             let _ = saver.join();

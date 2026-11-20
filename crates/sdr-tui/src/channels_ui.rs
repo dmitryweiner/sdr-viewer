@@ -1,5 +1,6 @@
 //! Drawing the channel strip: one row per channel, its name or frequency
-//! on the left, how busy it was through time in the middle — all rows on
+//! on the left — after `!` when an alert watches its band, `!R` when the
+//! alert records — how busy it was through time in the middle — all rows on
 //! one time axis, now at the right — and on the right its share of that
 //! time and how long it has been quiet.
 
@@ -11,20 +12,31 @@ use ratatui::widgets::Paragraph;
 use sdr_core::SourceInfo;
 use sdr_core::units::format_hz;
 
+use crate::alerts::AlertsView;
 use crate::channels::{ChannelsView, Row, format_ago};
 use crate::density_ui::percent;
 use crate::period::format_period;
 use crate::spectrum::BARS;
 
-/// Columns for the channel's name: "1090.000 MHz" and a space.
-const LABEL: u16 = 13;
+/// Columns for the alert's mark: "!R" and a space.
+const MARK: u16 = 3;
+
+/// Columns for the mark and the channel's name: "1090.000 MHz" and a
+/// space.
+const LABEL: u16 = MARK + 13;
 
 /// Columns right of the strip: "  2.04 s 12.3%  now".
 const FIGURES: u16 = 20;
 
 const BUSY: Color = Color::Rgb(90, 200, 120);
 
-pub(crate) fn draw(frame: &mut Frame, view: &ChannelsView, source: &SourceInfo, area: Rect) {
+pub(crate) fn draw(
+    frame: &mut Frame,
+    view: &ChannelsView,
+    alerts: &AlertsView,
+    source: &SourceInfo,
+    area: Rect,
+) {
     let [header, list, axis] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Fill(1),
@@ -53,7 +65,7 @@ pub(crate) fn draw(frame: &mut Frame, view: &ChannelsView, source: &SourceInfo, 
         };
         draw_row(
             frame,
-            view,
+            (view, alerts),
             source,
             *row,
             selected == Some(y),
@@ -78,14 +90,14 @@ fn header_line(view: &ChannelsView, rows: usize, columns: usize) -> Line<'static
 
 fn draw_row(
     frame: &mut Frame,
-    view: &ChannelsView,
+    (view, alerts): (&ChannelsView, &AlertsView),
     source: &SourceInfo,
     row: Row,
     selected: bool,
     columns: usize,
     area: Rect,
 ) {
-    let width = usize::from(LABEL) - 1;
+    let width = usize::from(LABEL - MARK) - 1;
     let label = match &row.channel.name {
         Some(name) => name.chars().take(width).collect(),
         None => format_hz(row.channel.center_hz),
@@ -99,9 +111,22 @@ fn draw_row(
         (false, true) => Style::new(),
         (false, false) => Style::new().fg(Color::DarkGray),
     };
+    let mut plain = Style::new();
     if selected {
         style = style.add_modifier(Modifier::REVERSED);
+        plain = plain.add_modifier(Modifier::REVERSED);
     }
+    let rule = alerts.rule_on(row.channel.center_hz, row.channel.width_hz);
+    let mark = match rule {
+        Some(rule) if rule.record => "!R",
+        Some(_) => "!",
+        None => "",
+    };
+    let alert = plain.fg(Color::Red).add_modifier(Modifier::BOLD);
+    let mark = Line::from(vec![
+        Span::styled(mark, alert),
+        Span::styled(" ".repeat(usize::from(MARK) - mark.len()), plain),
+    ]);
     let quiet = match (active, view.quiet_for(row.index)) {
         (true, _) => "now".to_string(),
         (false, Some(quiet)) => format_ago(quiet),
@@ -112,7 +137,13 @@ fn draw_row(
     let period = view.period(row.index);
     let period = period.map_or(String::new(), |period| format_period(period.seconds));
     let figures = format!(" {period:>7} {share:>5} {quiet:>5}");
-    frame.render_widget(Span::styled(format!("{label:<width$}"), style), area);
+    frame.render_widget(mark, area);
+    let name = Rect {
+        x: area.x + MARK,
+        width: area.width - MARK,
+        ..area
+    };
+    frame.render_widget(Span::styled(format!("{label:<width$}"), style), name);
     frame.render_widget(
         Line::from(figures).right_aligned(),
         Rect {

@@ -1,5 +1,6 @@
 ---
 source: crates/sdr-tui/src/ui.rs
+assertion_line: 1173
 expression: "render(&app, 80, 24).backend()"
 ---
 "1 Spectrum 2 Channels 3 Period 4 Density 5 Log 6 Mesh 7 Panorama 8 Decoders     "
@@ -13,7 +14,7 @@ expression: "render(&app, 80, 24).backend()"
 "     │ s               sort by time, level, duration, frequency           │     "
 "     │ Enter           tune to the selected event                         │     "
 "     │ r               save the selected event's IQ samples               │     "
-"     │ !               alert on the selected event's band                 │     "
+"     │ !               alert on the selected event's band, or no more     │     "
 "     │ X, X            erase the ended events, in the database too        │     "
 "     │ ?               this help                                          │     "
 "     │ 1–8             switch screens                                     │     "

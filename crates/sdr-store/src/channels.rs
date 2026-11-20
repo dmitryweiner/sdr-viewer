@@ -106,40 +106,59 @@ pub fn append(text: &str, new: &[Channel]) -> Result<(String, usize), String> {
 /// the next one.
 pub fn forget_made(text: &str, keep: &[Channel]) -> Result<(String, usize), String> {
     parse(text)?;
-    let is_header = |line: &str| line.trim_start().starts_with('[');
-    let is_channel = |line: &str| {
-        let code = line.split('#').next().unwrap_or_default();
-        code.split_whitespace().collect::<String>() == "[[channel]]"
-    };
-    let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    let mut out = String::new();
-    let mut removed = 0;
-    let mut start = 0;
-    while start < lines.len() {
-        // A table: its header and what follows up to the next header.
-        let rest = &lines[start + 1..];
-        let end = start
-            + 1
-            + rest
-                .iter()
-                .position(|line| is_header(line))
-                .unwrap_or(rest.len());
-        let table = &lines[start..end];
-        let made = is_channel(table[0])
+    let (out, removed) = without(text, |table| {
+        Ok(is_header_of(table[0], "channel")
             && parse(&table.concat())?.first().is_some_and(|channel| {
                 // A centre comes back from the file a hair off.
                 let stays = |kept: &Channel| (kept.center_hz - channel.center_hz).abs() < 1.0;
                 channel.name.is_none() && !channel.hidden && !keep.iter().any(stays)
-            });
-        if made {
+            }))
+    })?;
+    parse(&out)?;
+    Ok((out, removed))
+}
+
+/// The tables of a TOML text: each its header line and the lines up to
+/// the next header, with their ends. What comes before the first header
+/// is the first.
+pub(crate) fn tables(text: &str) -> Vec<Vec<&str>> {
+    let is_header = |line: &str| line.trim_start().starts_with('[');
+    let mut tables: Vec<Vec<&str>> = Vec::new();
+    for line in text.split_inclusive('\n') {
+        match tables.last_mut() {
+            Some(table) if !is_header(line) => table.push(line),
+            _ => tables.push(vec![line]),
+        }
+    }
+    tables
+}
+
+/// Whether `line` heads a table of the array `name`: `[[name]]`, spaced
+/// or with a comment after it as may be.
+pub(crate) fn is_header_of(line: &str, name: &str) -> bool {
+    let code = line.split('#').next().unwrap_or_default();
+    code.split_whitespace().collect::<String>() == format!("[[{name}]]")
+}
+
+/// Whether `line` is blank or a comment.
+pub(crate) fn blank_or_comment(line: &str) -> bool {
+    let line = line.trim();
+    line.is_empty() || line.starts_with('#')
+}
+
+/// `text` without the tables `gone` says go, and how many went.
+/// Everything else stays byte for byte; the comment lines that end a
+/// removed table stay too, as they are most likely about the next one.
+pub(crate) fn without(
+    text: &str,
+    mut gone: impl FnMut(&[&str]) -> Result<bool, String>,
+) -> Result<(String, usize), String> {
+    let mut out = String::new();
+    let mut removed = 0;
+    for table in tables(text) {
+        if gone(&table)? {
             removed += 1;
-            let blank_or_comment = |line: &str| {
-                let line = line.trim();
-                line.is_empty() || line.starts_with('#')
-            };
-            let tail = table
-                .iter()
-                .rev()
+            let tail = (table.iter().rev())
                 .take_while(|line| blank_or_comment(line))
                 .count();
             let comments = table[table.len() - tail..].iter();
@@ -147,14 +166,12 @@ pub fn forget_made(text: &str, keep: &[Channel]) -> Result<(String, usize), Stri
         } else {
             out.extend(table.iter().copied());
         }
-        start = end;
     }
-    // Blank lines that stood between the removed channels.
+    // Blank lines that stood between the removed tables.
     let out = match removed {
         0 => out,
         _ => format!("{}\n", out.trim_end()),
     };
-    parse(&out)?;
     Ok((out, removed))
 }
 

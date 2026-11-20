@@ -160,6 +160,10 @@ pub enum Command {
     /// Hold the events going on against this rule too: one of the
     /// alerts file's, at the start, or one made with `!`.
     AddRule(Rule),
+    /// Let go of the rules of this one's band: `!` again.
+    RemoveRule(Rule),
+    /// The rules of this one's band record as it does, or not: `R`.
+    RecordRule(Rule),
 }
 
 pub struct App {
@@ -191,9 +195,9 @@ pub struct App {
     pub done: Option<String>,
     /// The event selected in the log and what there is of its picture.
     picture: Option<(Event, Picture)>,
-    /// `X` was pressed once on this screen: the next one there does what
-    /// was asked about.
-    armed: Option<Screen>,
+    /// `X` (or `R` on the strip) was pressed once on this screen: the
+    /// next one there does what was asked about.
+    armed: Option<(Screen, char)>,
 }
 
 /// Cursor steps as shares of the width: fine, and coarse with Shift.
@@ -324,8 +328,13 @@ impl App {
         self.notice = None;
         self.done = None;
         let armed = self.armed.take();
-        if armed == Some(self.screen) && key.code == KeyCode::Char('X') {
-            self.clean_slate();
+        if let (Some((screen, armed)), KeyCode::Char(key)) = (armed, key.code)
+            && (screen, armed) == (self.screen, key)
+        {
+            match key {
+                'X' => self.clean_slate(),
+                _ => self.record_on_selected_channel(true),
+            }
             return;
         }
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -428,7 +437,7 @@ impl App {
             KeyCode::Char('X') => match self.channels.made() {
                 0 => self.notice = Some("no silent channel made by the app: nothing to go".into()),
                 made => {
-                    self.armed = Some(Screen::Channels);
+                    self.armed = Some((Screen::Channels, 'X'));
                     self.notice = Some(format!(
                         "X again lets go of the {} the app made; named, hidden and those on now stay",
                         count_channels(made)
@@ -445,13 +454,48 @@ impl App {
                 }
                 None => self.notice = Some("select a channel first: ↑ ↓".into()),
             },
+            KeyCode::Char('R') => self.record_on_selected_channel(false),
             _ => {}
         }
     }
 
-    /// Makes a rule for the band: an alert on what comes there from now
-    /// on, kept in the alerts file when there is one.
+    /// `R` on the strip: the selected channel's alert stops recording at
+    /// once, or records once `confirmed` — a recording takes the disk.
+    fn record_on_selected_channel(&mut self, confirmed: bool) {
+        let Some(channel) = self.channels.selected() else {
+            self.notice = Some("select a channel first: ↑ ↓".into());
+            return;
+        };
+        let Some(rule) = self.alerts.rule_on(channel.center_hz, channel.width_hz) else {
+            self.notice = Some("no alert on this channel: ! makes one".into());
+            return;
+        };
+        if !rule.record && !confirmed {
+            self.armed = Some((Screen::Channels, 'R'));
+            self.notice = Some(format!(
+                "R again records the signals of {}: their own band, from 1 s before to 1 s after",
+                rule.name
+            ));
+            return;
+        }
+        let band = Rule {
+            record: !rule.record,
+            ..rule.clone()
+        };
+        self.done = Some(self.alerts.set_record(&band));
+        self.commands.push(Command::RecordRule(band));
+    }
+
+    /// Makes a rule for the band — an alert on what comes there from now
+    /// on, kept in the alerts file when there is one — or, when the band
+    /// has one, lets go of it.
     fn alert_on(&mut self, name: String, center_hz: f64, width_hz: f64) {
+        if let Some(rule) = self.alerts.rule_on(center_hz, width_hz) {
+            let band = rule.clone();
+            self.done = Some(self.alerts.remove(&band));
+            self.commands.push(Command::RemoveRule(band));
+            return;
+        }
         let rule = Rule {
             name,
             low_hz: center_hz - width_hz / 2.0,
@@ -486,7 +530,7 @@ impl App {
             KeyCode::Char('X') => match self.mesh.known() {
                 0 => self.notice = Some("no nodes: nothing to erase".into()),
                 known => {
-                    self.armed = Some(Screen::Mesh);
+                    self.armed = Some((Screen::Mesh, 'X'));
                     let kept = if self.mesh.kept {
                         ", in the database too"
                     } else {
@@ -527,7 +571,7 @@ impl App {
             KeyCode::Char('X') => match self.log.ended() {
                 0 => self.notice = Some("the log has no ended events: nothing to erase".into()),
                 ended => {
-                    self.armed = Some(Screen::Log);
+                    self.armed = Some((Screen::Log, 'X'));
                     let kept = match self.log.clock() {
                         Some(_) => ", in the database too",
                         None => "",
@@ -674,6 +718,7 @@ fn count_channels(count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alerts::Change;
 
     fn app() -> App {
         App::new(SourceInfo {
@@ -1139,21 +1184,27 @@ mod tests {
             min_above_db: 10.0,
             record: false,
         };
-        assert_eq!(app.commands, [Command::AddRule(made)]);
+        assert_eq!(app.commands, [Command::AddRule(made.clone())]);
         assert_eq!(
             app.done.as_deref(),
             Some("alert on 433.100 MHz for this run: there is no alerts file")
         );
+        // Again: it goes.
+        app.commands.clear();
         press(&mut app, KeyCode::Char('!'));
-        assert_eq!(app.commands.len(), 1);
+        assert_eq!(app.commands, [Command::RemoveRule(made)]);
         assert_eq!(
-            app.notice.as_deref(),
-            Some("an alert watches that band already: 433.100 MHz")
+            app.done.as_deref(),
+            Some("alert on 433.100 MHz removed for this run: there is no alerts file")
         );
+        assert!(app.alerts.rules().is_empty());
         // A named one by its name.
+        app.commands.clear();
         press(&mut app, KeyCode::End);
         press(&mut app, KeyCode::Char('!'));
-        match &app.commands[1] {
+        press(&mut app, KeyCode::Home);
+        press(&mut app, KeyCode::Char('!'));
+        match &app.commands[0] {
             Command::AddRule(rule) => {
                 assert_eq!(rule.name, "LPD 17");
                 assert_eq!((rule.low_hz, rule.high_hz), (433.46875e6, 433.48125e6));
@@ -1187,7 +1238,89 @@ mod tests {
             app.done.as_deref(),
             Some("alert on 433.050 MHz added to the alerts file")
         );
-        assert_eq!(app.alerts.take_new(), [rule]);
+        // Again: it goes.
+        press(&mut app, KeyCode::Char('!'));
+        assert_eq!(
+            app.done.as_deref(),
+            Some("alert on 433.050 MHz removed from the alerts file")
+        );
+        assert_eq!(
+            app.alerts.take_changes(),
+            [Change::Made(rule.clone()), Change::Removed(rule)]
+        );
+    }
+
+    /// The strip with its one channel, "LPD 17", selected, and a file for
+    /// rules.
+    fn app_on_the_strip() -> App {
+        let mut app = app();
+        app.channels = ChannelsView::new(vec![sdr_detect::Channel {
+            name: Some("LPD 17".into()),
+            center_hz: 433.475e6,
+            width_hz: 12.5e3,
+            hidden: false,
+        }]);
+        app.alerts = AlertsView::new(Vec::new(), true);
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::End);
+        app
+    }
+
+    #[test]
+    fn r_twice_makes_a_channel_s_alert_record_and_once_stops_it() {
+        let mut app = app_on_the_strip();
+        press(&mut app, KeyCode::Char('R'));
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("no alert on this channel: ! makes one")
+        );
+        press(&mut app, KeyCode::Char('!'));
+        app.commands.clear();
+        press(&mut app, KeyCode::Char('R'));
+        assert!(app.commands.is_empty());
+        assert_eq!(
+            app.notice.as_deref(),
+            Some(
+                "R again records the signals of LPD 17: their own band, from 1 s before to 1 s after"
+            )
+        );
+        // Another key in between: asked again.
+        press(&mut app, KeyCode::Char('+'));
+        press(&mut app, KeyCode::Char('R'));
+        assert!(app.commands.is_empty());
+        press(&mut app, KeyCode::Char('R'));
+        let rule = app.alerts.rules()[0].clone();
+        assert!(rule.record);
+        assert_eq!(app.commands, [Command::RecordRule(rule.clone())]);
+        assert_eq!(
+            app.done.as_deref(),
+            Some("alert on LPD 17 records: record = true in the alerts file")
+        );
+        // Once stops it, at once.
+        app.commands.clear();
+        press(&mut app, KeyCode::Char('R'));
+        let quiet = Rule {
+            record: false,
+            ..rule.clone()
+        };
+        assert_eq!(app.commands, [Command::RecordRule(quiet.clone())]);
+        assert_eq!(app.alerts.rules(), std::slice::from_ref(&quiet));
+        assert_eq!(
+            app.alerts.take_changes(),
+            [
+                Change::Made(quiet.clone()),
+                Change::Record(rule),
+                Change::Record(quiet)
+            ]
+        );
+    }
+
+    #[test]
+    fn r_without_a_selected_channel_asks_for_one() {
+        let mut app = app();
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('R'));
+        assert_eq!(app.notice.as_deref(), Some("select a channel first: ↑ ↓"));
     }
 
     #[test]

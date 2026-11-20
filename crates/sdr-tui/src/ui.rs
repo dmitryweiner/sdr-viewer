@@ -35,11 +35,12 @@ const BAND_KEYS: [(&str, &str); 7] = [
     ("Space", "pause"),
 ];
 
-const CHANNEL_KEYS: [(&str, &str); 5] = [
+const CHANNEL_KEYS: [(&str, &str); 6] = [
     ("↑, ↓", "select a channel (PgUp, PgDn, Home, End)"),
     ("+, -", "fewer, more seconds to a column"),
     ("Enter", "tune to the selected channel"),
-    ("!", "alert on the selected channel"),
+    ("!", "alert on the selected channel (!), or no more"),
+    ("R, R", "its alert records (!R); R once: no more"),
     ("X, X", "let go of the silent channels the app made"),
 ];
 
@@ -64,7 +65,7 @@ const LOG_KEYS: [(&str, &str); 7] = [
     ("s", "sort by time, level, duration, frequency"),
     ("Enter", "tune to the selected event"),
     ("r", "save the selected event's IQ samples"),
-    ("!", "alert on the selected event's band"),
+    ("!", "alert on the selected event's band, or no more"),
     ("X, X", "erase the ended events, in the database too"),
 ];
 
@@ -111,7 +112,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Screen::Spectrum => {
             crate::spectrum_ui::draw(frame, &app.spectrum, app.input.as_deref(), body);
         }
-        Screen::Channels => crate::channels_ui::draw(frame, &app.channels, &app.source, body),
+        Screen::Channels => {
+            crate::channels_ui::draw(frame, &app.channels, &app.alerts, &app.source, body)
+        }
         Screen::Density => {
             let (view, map) = (&app.spectrum, app.density.as_ref());
             crate::density_ui::draw(frame, view, map, app.input.as_deref(), body);
@@ -566,10 +569,44 @@ mod tests {
         app.channels.refresh_periods();
         let text = render_text(&app, 80, 24);
         let lines: Vec<&str> = text.lines().collect();
-        assert!(lines[3].starts_with("LPD 17"), "{text}");
-        assert!(lines[3].ends_with("▂····  5.00 s  5.7%   4 s"), "{text}");
+        assert!(lines[3].starts_with("   LPD 17"), "{text}");
+        assert!(lines[3].ends_with("▂····  5.00 s  5.5%   4 s"), "{text}");
         // What is on without a rhythm has none.
-        assert!(lines[5].ends_with("█           24%   now"), "{text}");
+        assert!(lines[5].ends_with("█           26%   now"), "{text}");
+    }
+
+    #[test]
+    fn the_strip_marks_a_channel_with_an_alert_and_one_that_records() {
+        use crate::alerts::AlertsView;
+        use sdr_detect::Rule;
+        let mut app = app_on_the_channels();
+        let rule = |name: &str, center_hz: f64, width_hz: f64, record| Rule {
+            name: name.into(),
+            low_hz: center_hz - width_hz / 2.0,
+            high_hz: center_hz + width_hz / 2.0,
+            min_duration: std::time::Duration::ZERO,
+            min_above_db: 10.0,
+            record,
+        };
+        app.alerts = AlertsView::new(
+            vec![
+                rule("gate", 433.475e6, 25e3, true),
+                rule("far", 144.8e6, 25e3, false),
+                // A wider band than a channel's is no channel's rule.
+                rule("ISM", 433.92e6, 1.74e6, true),
+            ],
+            true,
+        );
+        let terminal = render(&app, 80, 24);
+        let text = render_text(&app, 80, 24);
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines[2].starts_with("!  a name too"), "{text}");
+        assert!(lines[3].starts_with("!R LPD 17"), "{text}");
+        assert!(lines[4].starts_with("   433.700 MHz"), "{text}");
+        let buffer = terminal.backend().buffer();
+        for (x, y) in [(0, 2), (0, 3), (1, 3)] {
+            assert_eq!(buffer[(x, y)].style().fg, Some(Color::Red), "({x}, {y})");
+        }
     }
 
     #[test]
@@ -624,8 +661,15 @@ mod tests {
         insta::assert_snapshot!(terminal.backend());
         let buffer = terminal.backend().buffer();
         // The second row is selected; the fourth is on now; the first is
-        // not in the received band.
-        let style = |y: u16| buffer[(0, y)].style();
+        // not in the received band. The names begin after the alerts'
+        // marks, which the selection takes in.
+        assert!(
+            buffer[(0, 3)]
+                .style()
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
+        let style = |y: u16| buffer[(3, y)].style();
         assert!(style(3).add_modifier.contains(Modifier::REVERSED));
         assert!(!style(4).add_modifier.contains(Modifier::REVERSED));
         assert!(style(5).add_modifier.contains(Modifier::BOLD));
@@ -636,31 +680,31 @@ mod tests {
     fn rows_are_aligned_in_time_and_tell_share_and_silence() {
         let text = render_text(&app_on_the_channels(), 80, 24);
         let rows: Vec<&str> = text.lines().collect();
-        assert_eq!(rows[1], " 4 channels · 1 s a column · the last 47 s");
-        // 47 columns: seconds 13 to 59.
+        assert_eq!(rows[1], " 4 channels · 1 s a column · the last 44 s");
+        // 44 columns: seconds 16 to 59, after the alerts' marks.
         // A 0.3 s burst every 5 s, the last at 55.2 s.
         assert!(
-            rows[3].starts_with("LPD 17       ··▂····▂····▂····"),
+            rows[3].starts_with("   LPD 17       ····▂····▂····▂····"),
             "{text}"
         );
         // No period is told before one is worked out.
-        assert!(rows[3].ends_with("▂····          5.7%   4 s"), "{text}");
+        assert!(rows[3].ends_with("▂····          5.5%   4 s"), "{text}");
         // On from 10 s to 30 s.
         assert!(
-            rows[4].starts_with("433.700 MHz  █████████████████····"),
+            rows[4].starts_with("   433.700 MHz  ██████████████····"),
             "{text}"
         );
-        assert!(rows[4].ends_with("  36%  30 s"), "{text}");
+        assert!(rows[4].ends_with("  32%  30 s"), "{text}");
         // On since 48.5 s and still.
         assert!(
-            rows[5].ends_with("·▄███████████           24%   now"),
+            rows[5].ends_with("·▄███████████           26%   now"),
             "{text}"
         );
         // Never heard here.
-        assert!(rows[2].starts_with("a name too l ·····"), "{text}");
+        assert!(rows[2].starts_with("   a name too l ·····"), "{text}");
         assert!(rows[2].ends_with("····            0%     —"), "{text}");
         assert!(
-            rows[22].contains("−47 s") && rows[22].ends_with("now"),
+            rows[22].contains("−44 s") && rows[22].ends_with("now"),
             "{text}"
         );
         // The hidden channel took its event and has no row.

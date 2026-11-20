@@ -8,6 +8,7 @@ use std::time::Duration;
 use sdr_core::units::format_hz;
 use sdr_core::{Iq, Source, SpectrumFrame};
 use sdr_detect::{Alert, Channel, Event, Rule};
+use sdr_tui::alerts::AlertsView;
 use sdr_tui::channels::ChannelsView;
 use sdr_tui::{App, Screen, SourceState, ui};
 
@@ -30,6 +31,8 @@ pub fn run(
     let mut app = App::new(info.clone());
     app.screen = screen;
     app.channels = ChannelsView::new(channels);
+    // The strip marks the channels that have one.
+    app.alerts = AlertsView::new(rules.clone(), false);
     let mut pipeline = Pipeline::new(info.sample_rate);
     pipeline.watch_density(screen == Screen::Density);
     let ruled = !rules.is_empty();
@@ -349,13 +352,22 @@ mod tests {
             width_hz: 25e3,
             hidden: false,
         }];
+        // An alert on it, which records.
+        let alert = Rule {
+            name: "carrier".into(),
+            low_hz: 433.4875e6,
+            high_hz: 433.5125e6,
+            min_duration: Duration::ZERO,
+            min_above_db: 10.0,
+            record: true,
+        };
         let text = run(
             generator,
             (100, 30),
             5.0,
             Screen::Channels,
             mine,
-            Vec::new(),
+            vec![alert],
         )
         .unwrap();
         let screen: Vec<&str> = text.lines().take(30).collect();
@@ -364,11 +376,11 @@ mod tests {
             "{text}"
         );
         // On all the time, and on at the end.
-        assert!(screen[2].starts_with("the carrier"), "{text}");
+        assert!(screen[2].starts_with("!R the carrier"), "{text}");
         assert!(screen[2].contains("█████"), "{text}");
         assert!(screen[2].ends_with("100%   now"), "{text}");
         // 0.3 s of every 2.04: at 0, 2.04 and 4.08 s.
-        assert!(screen[3].starts_with("434.200 MHz"), "{text}");
+        assert!(screen[3].starts_with("   434.200 MHz"), "{text}");
         assert!(screen[3].contains("▂·▂·▂"), "{text}");
     }
 

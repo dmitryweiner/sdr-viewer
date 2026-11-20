@@ -68,6 +68,17 @@ impl Pipeline {
         self.alerts.add(rule);
     }
 
+    /// Lets go of the rules of `band`'s band.
+    pub fn remove_rules(&mut self, band: &Rule) {
+        self.alerts.remove(band);
+    }
+
+    /// The rules of `band`'s band record as it does, or not, from their
+    /// next alerts on.
+    pub fn set_record(&mut self, band: &Rule) {
+        self.alerts.set_record(band);
+    }
+
     /// Whether the density goes out with every screen frame.
     pub fn watch_density(&mut self, watched: bool) {
         self.density_watched = watched;

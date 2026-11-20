@@ -8,8 +8,8 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{Sender, SyncSender, channel};
 use std::thread::JoinHandle;
 
-use sdr_detect::Rule;
 use sdr_store::alerts::AlertsFile;
+use sdr_tui::alerts::Change;
 
 use crate::reader::Update;
 use crate::writer;
@@ -41,13 +41,27 @@ const LOUDNESS: f64 = 0.5;
 /// Each beep rises and falls over this long, or it clicks.
 const RAMP_S: f64 = 0.005;
 
-/// Starts the thread that adds the rules sent to it — those made with
-/// `!` — to the file at `path`, until the sender is gone. A failure is
-/// told to the interface once; after it nothing more is written.
-pub fn save(path: PathBuf, updates: SyncSender<Update>) -> (Sender<Vec<Rule>>, JoinHandle<()>) {
+/// Carries the changes out on the file at `path`, in their order: one
+/// write each, as they come from keys.
+fn write(path: &Path, changes: &[Change]) -> Result<(), String> {
+    for change in changes {
+        match change {
+            Change::Made(rule) => sdr_store::alerts::add(path, std::slice::from_ref(rule)),
+            Change::Removed(band) => sdr_store::alerts::remove(path, band),
+            Change::Record(band) => sdr_store::alerts::record(path, band),
+        }?;
+    }
+    Ok(())
+}
+
+/// Starts the thread that carries out on the file at `path` the changes
+/// sent to it — the rules made with `!`, removed with it, and `R` —
+/// until the sender is gone. A failure is told to the interface once;
+/// after it nothing more is written.
+pub fn save(path: PathBuf, updates: SyncSender<Update>) -> (Sender<Vec<Change>>, JoinHandle<()>) {
     let (new, rx) = channel();
     let saver = std::thread::spawn(move || {
-        let write = |rules: &[Rule]| sdr_store::alerts::add(&path, rules).map(|_| ());
+        let write = |changes: &[Change]| write(&path, changes);
         if let Err(message) = writer::run(rx, write) {
             let _ = updates.send(Update::Notice(format!(
                 "the alerts file is not changed: {message}"
@@ -145,6 +159,7 @@ pub fn start_tone(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sdr_detect::Rule;
     use std::sync::mpsc::sync_channel;
 
     #[test]
@@ -167,7 +182,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rules_made_go_to_the_end_of_the_file_and_a_failure_is_told_once() {
+    fn the_changes_reach_the_file_in_their_order_and_a_failure_is_told_once() {
         let dir =
             std::env::temp_dir().join(format!("sdr-viewer-alerts-save-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -180,18 +195,28 @@ mod tests {
             min_above_db: 10.0,
             record: false,
         };
+        let recording = Rule {
+            record: true,
+            ..rule(433.46875e6)
+        };
         let (updates, told) = sync_channel(4);
         let (new, saver) = save(path.clone(), updates);
-        new.send(vec![rule(433.46875e6)]).unwrap();
+        new.send(vec![
+            Change::Made(rule(433.46875e6)),
+            Change::Made(rule(433.5e6)),
+            Change::Record(recording.clone()),
+        ])
+        .unwrap();
+        new.send(vec![Change::Removed(rule(433.5e6))]).unwrap();
         drop(new);
         saver.join().unwrap();
-        assert_eq!(load(&path, false).unwrap().rules, [rule(433.46875e6)]);
+        assert_eq!(load(&path, false).unwrap().rules, [recording]);
         assert_eq!(told.try_iter().count(), 0);
         // A file that no longer reads is not touched.
         std::fs::write(&path, "[[alert]]\n").unwrap();
         let (updates, told) = sync_channel(4);
         let (new, saver) = save(path.clone(), updates);
-        new.send(vec![rule(433.5e6)]).unwrap();
+        new.send(vec![Change::Made(rule(433.5e6))]).unwrap();
         drop(new);
         saver.join().unwrap();
         match told.try_iter().collect::<Vec<_>>().as_slice() {
