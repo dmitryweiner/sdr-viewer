@@ -206,9 +206,15 @@ it meanwhile: at most 100 packets, the first ones — after that it drops
 what it hears (`ToPhone queue is full, drop packet` in its log), so a
 gap there is not silence.
 
-The node's own row has a tick about every minute: that is `meshtasticd`
-handing the app the node's own telemetry over the API, not a
-transmission (on the air it sends its node info, every 3 h by default).
+The node never hears itself. On its own row a tick (in its colour) is a
+packet of its own it queued for the air — its node info, a reply, a
+text another client sent through it — as `meshtasticd` tells the app;
+its acknowledgements go untold. A dim `•` is what `meshtasticd` handed
+the app alone, over the API — the node's own telemetry, about every
+minute: it was not on the air. The node's card adds its own count of
+what it sent on the air, acknowledgements too, which it tells every 15
+minutes. `meshtasticd` serves one client at a time: a phone app on the
+node's API and the pulse take turns.
 Packets on a channel the node has no key for count too: their header is
 in the clear. The selected node's card names its id, hardware and role,
 and tells its last packet: what it was, to whom, on which channel (or the

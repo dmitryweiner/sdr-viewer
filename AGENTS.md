@@ -19,17 +19,14 @@ Phases of the plan (its section 14 has the detail):
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
 | 3 Detector and log | done, and found working on the air on the device by the user (2026-11-13): the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples |
 | 4 Accumulators | done: the spectral density (screen 4) and the channel strip (screen 2) were tried by the user on the air on the device and approved (2026-11-14) — with what that trial asked for: the detector's stuck events fixed, the receiver's spike kept off the strip, `X` twice on the strip and on the log, the band's name in the spectrum's header. Periodicity (screen 3, and the period in the strip's rows), built as the user decided (the plan's section 12), was tried by them on the air and "works well" (2026-11-15); its tab was then moved right after the channels', which it reads (it was screen 4, the density 3) |
-| 5 Meshtastic | started (2026-11-15): `meshtasticd` runs on the device's LoRa radio and the node is set up (`docs/hardware.md`, section 6); the user's decisions for the app are in the plan's section 12. Built: the client (`sdr-mesh`) and the pulse (`--mesh`, screen 6), tried by the user on the device (2026-11-15); what that trial asked for is built (the plan's section 12: the reminder to start `meshtasticd`, the axis on top with the time of day, the pulse stepping at once, no dots where the app was not listening, `s` `a` `m`; PR #32, merged into #31's branch) and the user found it "working great" (2026-11-20). On `main` (PR #31) |
+| 5 Meshtastic | started (2026-11-15): `meshtasticd` runs on the device's LoRa radio and the node is set up (`docs/hardware.md`, section 6); the user's decisions for the app are in the plan's section 12. Built: the client (`sdr-mesh`) and the pulse (`--mesh`, screen 6), tried by the user on the device (2026-11-15); what that trial asked for is built (the plan's section 12: the reminder to start `meshtasticd`, the axis on top with the time of day, the pulse stepping at once, no dots where the app was not listening, `s` `a` `m`; PR #32, merged into #31's branch) and the user found it "working great" (2026-11-20). On `main` (PR #31). The node's own row as the user decided (2026-11-20): what the node hands the app alone is a dim mark, not heard; what it sends of its own a tick in its colour, its own count of it in the card (PR #34, the dim marks seen by the user on the device, the ticks not yet) |
 | 6–8 | not started |
 
-Next: the node's own row of the pulse — `meshtasticd` hands a connected
-client its device telemetry every minute, over the API, not on the air,
-and the pulse draws it as the node's ticks ("telemetry to all"), which
-the user took for transmissions (2026-11-20; the plan's known limits of
-the pulse); then the mesh's packets in the database, then texts,
-telemetry and positions (the plan's section 14). How each of the three
-looks is the user's decision of 2026-11-20 (the plan's section 12); SDR
-and LoRa stay apart (asked again that day: never together).
+Next: the user tries the node's own row on the device (PR #34); then
+the mesh's packets in the database, then texts, telemetry and positions
+(the plan's section 14). How each of them looks is the user's decision
+of 2026-11-20 (the plan's section 12); SDR and LoRa stay apart (asked
+again that day: never together).
 
 ## Commands
 
@@ -133,9 +130,12 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-15 `sdr-viewer` there is the build of PR #32's branch
-  (the pulse as its first trial changed it; with `meshtasticd` down it
-  names `sudo /home/dmw/sdr-viewer-check/lora.sh on`); PR #31's (the
+  Since 2026-11-20 `sdr-viewer` there is PR #34's build (the node's own
+  row: its `--snapshot --screen 6 -- --mesh` there showed the node's
+  minute telemetry as `•` and `→ this app`, not heard); PR #32's (the
+  pulse as its first trial changed it; with `meshtasticd` down it
+  names `sudo /home/dmw/sdr-viewer-check/lora.sh on`) is
+  `sdr-viewer.before-own-row`; PR #31's (the
   pulse as first tried) is `sdr-viewer.before-trial`; PR #29's (periodicity on `3`, no mesh) is
   `sdr-viewer.before-mesh`; PR #26's (`main` before periodicity) is
   `sdr-viewer.before-period`, and `sdr-viewer.before-x` is older still. With the
@@ -221,7 +221,9 @@ a crate is added in the phase that needs it):
   worked out as the firmware does), `session` (`Session`: the request
   for the configuration, the heartbeat, `FromRadio` → `MeshUpdate`s),
   `update` (the plain types the interface gets: `MeshUpdate`, `Ready`,
-  `Node`, `NodeUser`, `Packet`, `Content`), `client` (`run`: connect,
+  `Node`, `NodeUser`, `Packet` — `app_only`: made by the node for its
+  clients alone — `Content`, `LocalStats`, `Sent`: a packet of its own
+  queued for the air), `client` (`run`: connect,
   read, heartbeat a minute, connect again after 5 s; `tcp`).
 - `sdr-tui` — `app` (state, keys and the `Command`s they ask of the
   source; no drawing), `ui` (frame of the interface, `render_text`),
@@ -237,7 +239,8 @@ a crate is added in the phase that needs it):
   (`Bursts`: when a channel was on; the envelope of a range of `DELAYS`,
   its `Analysis`, the channel's `Period`), `period_ui`, `mesh`
   (`MeshView`: the link, what the node told, a `NodeRow` per node with
-  the times of its packets of the last day, when the app was listening,
+  the times of its packets of the last day — of the node itself, what it
+  sent and handed the app alone, and its `TxCount` — when the app was listening,
   the order and what is shown, the selection, the time scale of the wall
   clock and its marks), `mesh_ui`.
   Snapshot tests in
@@ -354,6 +357,13 @@ a crate is added in the phase that needs it):
   minute a column), so the whole pulse steps at once; the times the app
   was connected (from `Ready` to `Lost`, by the view's clock) are
   remembered, and a column it was not listening in gets no dots.
+- What the node makes for its clients alone (`Packet::app_only`: its
+  own, without `hop_start`) was never on the air: it is a mark of its own
+  on the node's row, never a tick, and never counts as heard.
+- The node never hears itself: its own packets with `hop_start` are
+  copies of what it sent, and with its queue statuses (`MeshUpdate::Sent`)
+  they are its ticks, one per packet number; its local stats' count is
+  in its card.
 - The pulse's sort, `a` (heard in the last 15 m) and `m` (afresh from
   now) only choose what is shown: no node, packet or name is forgotten.
   The node itself is always the first row.
@@ -432,4 +442,9 @@ measure on the device, the Mac's numbers do not scale.
   worked against `--mesh=192.168.1.246` and failed on the device itself:
   there "localhost" is ::1 first and `meshtasticd` listens on IPv4 only
   (`client::tcp` now tries every address). Run the device's own case.
+- **`meshtasticd` serves one API client.** A new connection closes the
+  one before (its log: "Force close previous TCP connection"): a
+  `--snapshot --mesh=192.168.1.246` from the Mac takes the user's own
+  pulse, or their phone app, off the node. Ask before a live check while
+  the user may be using it.
 - **zsh**: `"$H:path"` applies a modifier to `$H`; write `"${H}:path"`.

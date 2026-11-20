@@ -7,7 +7,12 @@ use crate::frame::{self, Deframer};
 use crate::lora::{self, Radio};
 use crate::proto::config::device_config::Role;
 use crate::proto::{self, PortNum, from_radio, mesh_packet, to_radio};
-use crate::update::{Content, MeshUpdate, Node, NodeUser, Packet, Ready};
+use crate::update::{Content, LocalStats, MeshUpdate, Node, NodeUser, Packet, Ready, Sent};
+
+/// What the node kept for a client that was not connected comes right
+/// after its configuration. A queue status has no time of its own, so
+/// those of the first seconds after it are dropped: the node keeps two.
+const KEPT_S: u64 = 2;
 
 /// What the node has told so far in this connection.
 #[derive(Debug)]
@@ -19,6 +24,8 @@ pub struct Session {
     firmware: String,
     lora: Option<proto::config::LoRaConfig>,
     channels: Vec<(u32, String)>,
+    /// When the node said it was done, by the app's clock.
+    ready_at: Option<u64>,
 }
 
 impl Session {
@@ -30,6 +37,7 @@ impl Session {
             firmware: String::new(),
             lora: None,
             channels: Vec::new(),
+            ready_at: None,
         }
     }
 
@@ -72,9 +80,21 @@ impl Session {
             }
             Channel(channel) => self.on_channel(channel),
             ConfigCompleteId(id) if id == self.config_id => {
+                self.ready_at = Some(now);
                 return Some(MeshUpdate::Ready(self.ready()?));
             }
-            Packet(packet) => return Some(MeshUpdate::Packet(self::packet(packet, now))),
+            // Without a packet's number it answers a heartbeat; a result
+            // other than 0 is a packet that was not queued.
+            QueueStatus(status) if status.mesh_packet_id != 0 && status.res == 0 => {
+                let ready = self.ready_at?;
+                return (now >= ready + KEPT_S).then_some(MeshUpdate::Sent(Sent {
+                    at: now,
+                    id: status.mesh_packet_id,
+                }));
+            }
+            Packet(packet) => {
+                return Some(MeshUpdate::Packet(self::packet(packet, now, self.me)));
+            }
             _ => {}
         }
         None
@@ -140,7 +160,8 @@ fn user(user: proto::User) -> NodeUser {
     }
 }
 
-fn packet(packet: proto::MeshPacket, received: u64) -> Packet {
+/// `me`: the node's own number, once it has told it.
+fn packet(packet: proto::MeshPacket, received: u64, me: Option<u32>) -> Packet {
     let content = match packet.payload_variant {
         Some(mesh_packet::PayloadVariant::Decoded(data)) => content(data),
         _ => Content::Encrypted,
@@ -164,6 +185,7 @@ fn packet(packet: proto::MeshPacket, received: u64) -> Packet {
         hop_start: packet.hop_start,
         relay: (packet.relay_node & 0xff) as u8,
         via_mqtt: packet.via_mqtt,
+        app_only: Some(packet.from) == me && packet.hop_start == 0,
         content,
     }
 }
@@ -173,6 +195,15 @@ fn content(data: proto::Data) -> Content {
         && let Ok(who) = proto::User::decode(&data.payload[..])
     {
         return Content::User(user(who));
+    }
+    if data.portnum == PortNum::TelemetryApp as i32
+        && let Ok(telemetry) = proto::Telemetry::decode(&data.payload[..])
+        && let Some(proto::telemetry::Variant::LocalStats(stats)) = telemetry.variant
+    {
+        return Content::LocalStats(LocalStats {
+            sent: stats.num_packets_tx,
+            uptime_s: stats.uptime_seconds,
+        });
     }
     Content::Other {
         port: data.portnum,
@@ -408,6 +439,92 @@ mod tests {
         assert_eq!(packets[2].received, 1500);
         assert_eq!(packets[3].content, Content::Encrypted);
         assert_eq!((packets[3].channel, packets[3].hops), (0x8b, None));
+    }
+
+    #[test]
+    fn what_the_node_made_for_its_clients_alone_is_told_apart() {
+        let mut session = Session::new(77);
+        let mut stream = config_stream(77);
+        // Its device telemetry of every minute: never sent, so the hop
+        // count it starts with was never set.
+        let mut minute = packet(data(PortNum::TelemetryApp, vec![]));
+        (minute.from, minute.hop_start, minute.hop_limit) = (0x015b_8900, 0, 3);
+        (minute.rx_snr, minute.rx_rssi, minute.relay_node) = (0.0, 0, 0);
+        // What it sent on the air, handed over too: the hops are set.
+        let mut sent = minute.clone();
+        sent.hop_start = 3;
+        // Another node's, from firmware that does not tell its hops.
+        let mut old = packet(data(PortNum::TelemetryApp, vec![]));
+        old.hop_start = 0;
+        for packet in [minute, sent, old] {
+            stream.extend(framed(from_radio::PayloadVariant::Packet(packet)));
+        }
+        let app_only: Vec<bool> = session
+            .on_bytes(&stream, 2000)
+            .iter()
+            .filter_map(|u| match u {
+                MeshUpdate::Packet(p) => Some(p.app_only),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(app_only, [true, false, false]);
+    }
+
+    fn queue_status(id: u32, res: i32) -> Vec<u8> {
+        framed(from_radio::PayloadVariant::QueueStatus(
+            proto::QueueStatus {
+                res,
+                free: 15,
+                maxlen: 16,
+                mesh_packet_id: id,
+            },
+        ))
+    }
+
+    #[test]
+    fn the_node_queueing_a_packet_of_its_own_for_the_air_is_told() {
+        let mut session = Session::new(77);
+        // Before the node is done telling, nothing is ours.
+        assert_eq!(session.on_bytes(&queue_status(0x10, 0), 999), []);
+        session.on_bytes(&config_stream(77), 1000);
+        // Kept while no client was connected and handed over at once:
+        // when it was, nobody knows.
+        assert_eq!(session.on_bytes(&queue_status(0x11, 0), 1001), []);
+        let mut stream = queue_status(0x22, 0);
+        // The answer to a heartbeat, and a packet that could not be queued.
+        stream.extend(queue_status(0, 0));
+        stream.extend(queue_status(0x33, 32));
+        assert_eq!(
+            session.on_bytes(&stream, 1060),
+            [MeshUpdate::Sent(Sent { at: 1060, id: 0x22 })]
+        );
+    }
+
+    #[test]
+    fn the_nodes_local_stats_count_what_it_sent() {
+        let mut session = Session::new(77);
+        let stats = proto::Telemetry {
+            time: 0,
+            variant: Some(proto::telemetry::Variant::LocalStats(proto::LocalStats {
+                uptime_seconds: 975,
+                num_packets_tx: 3,
+                num_packets_rx: 26,
+                ..proto::LocalStats::default()
+            })),
+        };
+        let mut minute = packet(data(PortNum::TelemetryApp, stats.encode_to_vec()));
+        minute.from = 0x015b_8900;
+        let updates = session.on_bytes(&framed(from_radio::PayloadVariant::Packet(minute)), 2000);
+        let [MeshUpdate::Packet(packet)] = &updates[..] else {
+            panic!("{updates:?}");
+        };
+        assert_eq!(
+            packet.content,
+            Content::LocalStats(LocalStats {
+                sent: 3,
+                uptime_s: 975
+            })
+        );
     }
 
     #[test]

@@ -327,6 +327,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use sdr_core::SourceInfo;
+    use sdr_mesh::update::MeshUpdate;
 
     fn app() -> App {
         let mut app = App::new(SourceInfo {
@@ -1102,6 +1103,53 @@ mod tests {
         app.mesh.move_selection(1);
         app.mesh.move_selection(1);
         insta::assert_snapshot!(render(&app, 160, 45).backend());
+    }
+
+    #[test]
+    fn the_nodes_own_row_tells_what_it_sent_and_what_it_handed_the_app_alone() {
+        use crate::mesh::tests::app_only;
+        use sdr_mesh::update::{Content, LocalStats, Sent};
+        let mut app = mesh_app();
+        // Its device telemetry of every minute since 9:30:10.
+        for at in (34_210..36_000).step_by(60) {
+            app.on_mesh(MeshUpdate::Packet(app_only(at)));
+        }
+        // Its counts: up since 9:30, one sent by 9:31:15, three by 9:46:15.
+        for (at, sent, uptime_s) in [(34_275, 1, 75), (35_175, 3, 975)] {
+            let mut stats = app_only(at);
+            stats.content = Content::LocalStats(LocalStats { sent, uptime_s });
+            app.on_mesh(MeshUpdate::Packet(stats));
+        }
+        // Packets of its own queued for the air at 9:40 and 9:59:30.
+        for (at, id) in [(34_800, 0x10), (35_970, 0x11)] {
+            app.on_mesh(MeshUpdate::Sent(Sent { at, id }));
+        }
+        app.mesh.move_selection(1);
+        insta::assert_snapshot!(render(&app, 160, 45).backend());
+        let text = render_text(&app, 160, 45);
+        let own = text.lines().find(|line| line.starts_with("8900")).unwrap();
+        assert!(own.contains("••••"), "{own}");
+        assert!(
+            text.contains(" · 2 sent in this run · 32 to this app only"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "sent by its own count: 2 from 09:31 to 09:46, 3 since it started at 09:30"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("last: one of its own, queued for the air · 30 s ago"),
+            "{text}"
+        );
+        // Once it handed the app something newer, that is the last.
+        app.on_mesh(MeshUpdate::Packet(app_only(35_990)));
+        let text = render_text(&app, 160, 45);
+        assert!(
+            text.contains("last: telemetry to this app only, not on the air · 10 s ago"),
+            "{text}"
+        );
     }
 
     #[test]

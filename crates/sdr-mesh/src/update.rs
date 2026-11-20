@@ -17,6 +17,9 @@ pub enum MeshUpdate {
     Node(Node),
     /// A packet the node heard.
     Packet(Packet),
+    /// The node has queued a packet of its own for the air: what it tells
+    /// of itself, its replies. Its acknowledgements go without a word.
+    Sent(Sent),
     /// The connection is gone, and why; it is tried again.
     Lost(String),
 }
@@ -79,7 +82,32 @@ pub struct Packet {
     /// when not known.
     pub relay: u8,
     pub via_mqtt: bool,
+    /// The node made it for its clients alone and never sent it on the
+    /// air: its device telemetry every minute, its local stats every 15
+    /// (firmware 2.7.26, `DeviceTelemetry.cpp`). Told by the hops it
+    /// starts with, which the node sets on what it transmits only.
+    pub app_only: bool,
     pub content: Content,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sent {
+    /// When the app was told, Unix seconds by the app's clock: the node
+    /// does not date it.
+    pub at: u64,
+    /// The packet's number: a copy of the packet may follow.
+    pub id: u32,
+}
+
+/// What the node counts of itself, for its clients alone, every 15
+/// minutes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LocalStats {
+    /// Packets it has sent on the air since it started, acknowledgements
+    /// and relays too.
+    pub sent: u32,
+    /// Seconds since it started.
+    pub uptime_s: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -88,6 +116,8 @@ pub enum Content {
     Encrypted,
     /// A node telling who it is.
     User(NodeUser),
+    /// The node's own counts.
+    LocalStats(LocalStats),
     /// Anything else, by its port: the number and a short name ("text
     /// message", "telemetry", "position").
     Other { port: i32, name: String },

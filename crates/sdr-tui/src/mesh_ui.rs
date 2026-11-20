@@ -1,5 +1,7 @@
 //! Drawing the Meshtastic pulse: one row per node, its names on the left,
-//! a tick for each packet heard from it in the middle — all rows on one
+//! a tick for each packet heard from it in the middle (on the node's own
+//! row, what it sent, and a dim mark for what it handed this app alone,
+//! never on the air) — all rows on one
 //! time axis of the wall clock, now at the right — and on the right how
 //! long ago it was heard, with the SNR, RSSI and hops of its last packet.
 //! The axis and the columns' names are on top; under the rows, what the
@@ -27,6 +29,8 @@ const FIGURES: u16 = 25;
 
 const HEARD: Color = Color::Rgb(90, 200, 120);
 const OWN: Color = Color::Cyan;
+/// What the node handed this app alone: dim, not a tick of the air.
+const APP_ONLY: Color = Color::Rgb(90, 120, 140);
 
 pub(crate) fn draw(frame: &mut Frame, view: &MeshView, area: Rect) {
     let rows = view.rows();
@@ -34,7 +38,11 @@ pub(crate) fn draw(frame: &mut Frame, view: &MeshView, area: Rect) {
         .into_iter()
         .flatten()
         .collect();
-    let card = if view.selected().is_some() { 2 } else { 0 };
+    let card = match view.selected() {
+        Some(row) if is_own(view, row) => 3,
+        Some(_) => 2,
+        None => 0,
+    };
     let [header, axis, list, notes_area, card_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -70,6 +78,8 @@ pub(crate) fn draw(frame: &mut Frame, view: &MeshView, area: Rect) {
         };
         let ticks = Ticks {
             cells: view.cells(row, columns),
+            sent: view.sent_cells(row, columns),
+            app_only: view.app_only_cells(row, columns),
             listened: &listened,
         };
         draw_row(frame, view, row, selected == Some(y), &ticks, area);
@@ -79,9 +89,12 @@ pub(crate) fn draw(frame: &mut Frame, view: &MeshView, area: Rect) {
     }
 }
 
-/// A row's packets per column, and the columns the app was listening in.
+/// A row's packets per column, what the node itself sent, what it handed
+/// this app alone, and the columns the app was listening in.
 struct Ticks<'a> {
     cells: Vec<u32>,
+    sent: Vec<u32>,
+    app_only: Vec<u32>,
     listened: &'a [bool],
 }
 
@@ -189,8 +202,7 @@ fn draw_row(
     ticks: &Ticks,
     area: Rect,
 ) {
-    let own = view.ready.as_ref().is_some_and(|ready| ready.me == row.num);
-    let mut style = match (own, row.packets) {
+    let mut style = match (is_own(view, row), row.packets) {
         (true, _) => Style::new().fg(OWN).add_modifier(Modifier::BOLD),
         (false, 0) => Style::new().fg(Color::DarkGray),
         (false, _) => Style::new(),
@@ -220,13 +232,21 @@ fn draw_row(
             ..area
         },
     );
-    for (column, (&count, &listened)) in ticks.cells.iter().zip(ticks.listened).enumerate() {
+    let columns = (ticks.cells.iter().zip(&ticks.sent))
+        .zip(&ticks.app_only)
+        .zip(ticks.listened);
+    for (column, (((&heard, &sent), &app_only), &listened)) in columns.enumerate() {
         let at = &mut frame.buffer_mut()[(area.x + LABEL + column as u16, area.y)];
-        if count > 0 {
+        if let Some((count, colour)) = [(heard, HEARD), (sent, OWN)]
+            .into_iter()
+            .find(|&(count, _)| count > 0)
+        {
             // One packet is half a cell; three or more fill it.
             let eighths = (2 + 2 * count as usize).min(8);
             at.set_symbol(BARS[eighths])
-                .set_style(Style::new().fg(HEARD));
+                .set_style(Style::new().fg(colour));
+        } else if app_only > 0 {
+            at.set_symbol("•").set_style(Style::new().fg(APP_ONLY));
         } else if listened {
             at.set_symbol("·")
                 .set_style(Style::new().fg(Color::DarkGray));
@@ -303,19 +323,71 @@ fn draw_card(frame: &mut Frame, view: &MeshView, row: &NodeRow, area: Rect) {
         who.push(Span::raw(row.id()).bold());
         who.push(dim(" · has not told who it is".into()));
     }
-    let heard = match row.packets {
-        0 => " · not heard in this run".to_string(),
-        1 => " · 1 packet in this run".to_string(),
-        n => format!(" · {n} packets in this run"),
+    let own = is_own(view, row);
+    if own {
+        // It never hears itself.
+        if row.sent > 0 {
+            who.push(dim(format!(" · {} sent in this run", row.sent)));
+        }
+    } else {
+        who.push(dim(match row.packets {
+            0 => " · not heard in this run".to_string(),
+            1 => " · 1 packet in this run".to_string(),
+            n => format!(" · {n} packets in this run"),
+        }));
+    }
+    if row.app_only > 0 {
+        who.push(dim(format!(" · {} to this app only", row.app_only)));
+    }
+    let received = row.last.as_ref().map(|packet| packet.received);
+    let last = match (row.last_sent, &row.last) {
+        (Some(sent), _) if Some(sent) > received => {
+            let ago = Duration::from_secs(view.now().saturating_sub(sent));
+            Line::from(vec![
+                dim(" last: ".into()),
+                Span::raw("one of its own").bold(),
+                dim(format!(", queued for the air · {} ago", format_ago(ago))),
+            ])
+        }
+        (_, Some(packet)) => packet_line(view, packet),
+        _ => Line::from(dim(" Its packets will show here.".into())),
     };
-    who.push(dim(heard));
-    let last = row.last.as_ref().map_or_else(
-        || Line::from(dim(" Its packets will show here.".into())),
-        |packet| packet_line(view, packet),
-    );
-    let [first, second] = Layout::vertical([Constraint::Length(1); 2]).areas(area);
-    frame.render_widget(Line::from(who), first);
-    frame.render_widget(last, second);
+    let mut lines = vec![Line::from(who)];
+    if own {
+        lines.push(count_line(view, row));
+    }
+    lines.push(last);
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// The node's own count of what it sent on the air, acknowledgements too.
+fn count_line(view: &MeshView, row: &NodeRow) -> Line<'static> {
+    let dim = |text: String| Span::raw(text).dark_gray();
+    let Some(count) = row.tx_count else {
+        return Line::from(dim(
+            " Its own count of what it sends comes every 15 minutes.".into(),
+        ));
+    };
+    let mut spans = vec![dim(" sent by its own count: ".into())];
+    if let Some((sent, from)) = count.since_last {
+        spans.push(Span::raw(sent.to_string()).bold());
+        spans.push(dim(format!(
+            " from {} to {}, ",
+            view.time_of_day(from),
+            view.time_of_day(count.at)
+        )));
+    }
+    spans.push(Span::raw(count.since_start.to_string()).bold());
+    spans.push(dim(format!(
+        " since it started at {}",
+        view.time_of_day(count.started)
+    )));
+    Line::from(spans)
+}
+
+/// Is `row` the node itself?
+fn is_own(view: &MeshView, row: &NodeRow) -> bool {
+    view.ready.as_ref().is_some_and(|ready| ready.me == row.num)
 }
 
 fn packet_line(view: &MeshView, packet: &Packet) -> Line<'static> {
@@ -323,6 +395,7 @@ fn packet_line(view: &MeshView, packet: &Packet) -> Line<'static> {
     let kind = match &packet.content {
         Content::Encrypted => "encrypted".to_string(),
         Content::User(_) => "node info".to_string(),
+        Content::LocalStats(_) => "local stats".to_string(),
         Content::Other { name, .. } => name.clone(),
     };
     let me = view.ready.as_ref().map(|ready| ready.me);
@@ -336,11 +409,24 @@ fn packet_line(view: &MeshView, packet: &Packet) -> Line<'static> {
             .and_then(|row| row.user.as_ref().map(|user| user.short_name.clone()))
             .unwrap_or_else(|| format!("!{to:08x}")),
     };
+    let ago = Duration::from_secs(view.now().saturating_sub(packet.received));
+    if packet.app_only {
+        return Line::from(vec![
+            dim(" last: ".into()),
+            Span::raw(kind).bold(),
+            dim(" to this app only, not on the air".into()),
+            dim(format!(" · {} ago", format_ago(ago))),
+        ]);
+    }
     let mut spans = vec![
         dim(" last: ".into()),
         Span::raw(kind).bold(),
         dim(format!(" to {to} · {}", view.channel_name(packet))),
     ];
+    if Some(packet.from) == me {
+        spans.push(dim(format!(" · sent on the air · {} ago", format_ago(ago))));
+        return Line::from(spans);
+    }
     if packet.snr != 0.0 || packet.rssi != 0 {
         spans.push(dim(" · SNR ".into()));
         spans.push(Span::raw(format!("{:.2} dB", packet.snr)));
@@ -368,7 +454,6 @@ fn packet_line(view: &MeshView, packet: &Packet) -> Line<'static> {
     if packet.via_mqtt {
         spans.push(dim(" · via MQTT".into()));
     }
-    let ago = Duration::from_secs(view.now().saturating_sub(packet.received));
     spans.push(dim(format!(" · {} ago", format_ago(ago))));
     Line::from(spans)
 }
