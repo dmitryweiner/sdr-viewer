@@ -410,7 +410,10 @@ a crate is added in the phase that needs it):
   `testdata/lpd433.cu8` first.
 - `ui` snapshots change only on purpose: review `cargo insta review` (or
   `INSTA_UPDATE=always cargo test` and read the diff) before committing.
-- Each feature gets its own branch and a pull request.
+- Each feature gets its own branch and a pull request. A change of the
+  documentation alone (README, `AGENTS.md`, `plans/`, `docs/`) needs
+  neither: it is committed and pushed to `main` directly (the user's
+  word, 2026-11-20).
 
 ## What costs what
 
