@@ -319,11 +319,14 @@ The first useful version comes after phase 3.
 | Phase order | As in section 8: the signal log (phase 3) before Meshtastic (phase 5) |
 | Meshtastic | Through `meshtasticd` (the default, no objections) |
 | Defective USB hub | The user's device needs its hub at 12 Mbit/s for the keyboard and at 480 for the RTL-SDR (`docs/hardware.md`). Until the mainboard is replaced: a "reception without the keyboard" mode that switches the hub for the time of reception; control over SSH or Bluetooth |
-| SDR and LoRa together | Never: the user listens to one or the other, so the app need not receive from the RTL-SDR while it talks to `meshtasticd` over a radio of its own. (It was first thought that the board leaves no choice — GPIO 7, the SDR's power, is SPI4's clock — but the LoRa radio is on SPI1: `docs/hardware.md`, sections 4 and 6) |
+| SDR and LoRa together | Never: the user listens to one or the other, so the app need not receive from the RTL-SDR while it talks to `meshtasticd` over a radio of its own. (It was first thought that the board leaves no choice — GPIO 7, the SDR's power, is SPI4's clock — but the LoRa radio is on SPI1: `docs/hardware.md`, sections 4 and 6). Asked again once it was known that the two share neither power nor bus, so both could run in one go (`--rtlsdr … --mesh`, `meshtasticd` left running): still never, the user's answer of 2026-11-20 — `sdr-viewer-rx.sh` keeps stopping `meshtasticd` for the time of reception |
 | Mesh network | Haifa: region US, preset MediumFast, frequency slot 70 = 919.375 MHz, max hops 7. Goes into the default bookmarks; the app still reads the frequency from `meshtasticd` |
 | `meshtasticd` on the device | The user's decisions (2026-11-15): we set it up (done: `docs/hardware.md`, section 6), it is not started at boot, and the node's role is `CLIENT_MUTE` — it relays nothing and sends only its own node info. The channel keys are the node's: what `meshtasticd` can decrypt is what the app reads, nothing is configured in the app |
 | The pulse after its first trial | The user's asks (2026-11-15, the first look on the device): the app reminds that `meshtasticd` must be started, with the command; what the time column is should be plain, and the pulse should visibly move; keys to start the list afresh (as if scanning anew), to sort by hops (0 first) and to show only the active nodes. As built: the columns' names and the axis are on top, the axis with the time of day; columns begin on round times, so the whole pulse steps at once, and a column can be 10 or 30 s; columns the app was not listening in have no dots (`meshtasticd`'s kept packets show there — at most 100, then it drops packets, as its log showed from 14:29 to 14:44 that day); `s` sorts by hops, `a` shows only the nodes heard in the last 15 minutes (a node that is on tells its position that often by default), `m` starts the list afresh from now — a filter, nothing is forgotten. While the daemon does not answer, the pulse gives the `lora.sh` beside the app, or `systemctl` |
 | The Meshtastic pulse (5.6) | The user's decisions (2026-11-15): the app talks to `meshtasticd` with `--mesh` and no SDR — no IQ source at all, not even the generator; the hub stays at 12M, so the keyboard works. `sdr-viewer-rx.sh` stops a running `meshtasticd` for the time of reception and starts it again after. Besides the pulse of 5.6 the screen shows the text of messages on the channels the node can read, telemetry (battery, channel utilisation, airtime), positions and the distance to them (ours from GPS, once there is one); packets are kept in the database, like events, for 7 days |
+| The node's own row of the pulse | The user's decision (2026-11-20): the node's own packets that only the app gets — the device telemetry `meshtasticd` hands a connected client every minute, its local stats every 15 — are a dim mark of their own on its row, not a tick of the air; the card says they went to this app only, not on the air, and they count neither in "heard" nor among the packets. What the node sends on the air (its node info, every 3 h) stays a tick. Not taken: hiding them; the row as the channel's utilisation (which that telemetry carries: the third pull request) |
+| The mesh's packets in the database | The user's decision (2026-11-20): every packet is kept with its header (time, from, to, channel, SNR, RSSI, hops, relay, kind) and its decoded payload as bytes, so the texts, telemetry and positions of the week show as soon as the app reads them; in the same `events.db`, and with `--mesh` the database is on by default, as with the RTL-SDR. Not taken: the header alone; a file of its own |
+| Texts, telemetry and positions on the pulse | The user's decision (2026-11-20): the selected node's card gives its last text, battery, channel utilisation, position and the distance to it; under the list of nodes a feed of the latest texts of every channel the node reads. Not taken: the card alone; a key switching the screen between the pulse and the messages |
 | Language | UI in English; docs, README and code comments in English (the shared conventions in `~/projects/CLAUDE.md`) |
 | aarch64 build | Static musl binary built on GitHub's native arm64 runner instead of `cross` |
 | Weak one-frame events | The detector's threshold stays at 8 dB and everything it finds goes into the database; the log hides the weak ones with a filter (minimum level above the floor) whose threshold the user changes from the log screen |
@@ -366,18 +369,10 @@ They do not block the start; until answered, the default holds.
    the first version.*
 5. **License.** The repository has GPLv3, which is compatible with GPL
    dependencies (`rtl_433`, `librtlsdr`). *Default: stay on GPLv3.*
-6. **SDR and LoRa together.** The user asked (2026-11-15) whether, as
-   the two share neither power nor bus, both could run in one go. They
-   can: the app already shows both (`--rtlsdr … --mesh`), and
-   `sdr-viewer-rx.sh` would simply leave `meshtasticd` running, so the
-   mesh's record has no holes. The keyboard still drops while the SDR
-   receives (the hub), and the node's own transmissions (node info) go
-   out centimetres from the SDR's antenna — a moment of overload near
-   919 MHz. *Default: not together (section 12), until the user says.*
 
 ## 14. Progress
 
-As of 2026-11-15.
+As of 2026-11-20.
 
 | # | Phase | State |
 |---|---|---|
@@ -460,7 +455,9 @@ three pull requests):
   `telemetry.device_telemetry_enabled`, false by default and not set by
   us. The card calls them "telemetry to all", and the user took the
   ticks for transmissions (2026-11-20). What the node sends on the air
-  as `CLIENT_MUTE` is its node info, every 3 h by default.
+  as `CLIENT_MUTE` is its node info, every 3 h by default. Decided
+  (section 12, 2026-11-20): what only the app gets becomes a dim mark
+  of its own, the next pull request.
 - The frequency in the header is worked out from the region, preset and
   slot the node tells (the firmware's own arithmetic, 2.7.26); the
   region table is the firmware's.
