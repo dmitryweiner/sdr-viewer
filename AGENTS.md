@@ -29,8 +29,8 @@ speaker (PR #38, merged); (2) `!` on the channel strip and the log,
 which appends a rule (PR #39, merged); (3) recording the event's own
 band, decimated, with the limit (PR #40; its 4 at once approved by the
 user); (4) `!` again on the band of a rule removes it from the file,
-and the strip marks the channels that have one (the user's ask after
-#39).
+`R` twice makes it record and once stops it, and the strip marks the
+channels that have one `!` or `!R` (the user's asks after #39).
 Open questions are in the plan's section 13. SDR and LoRa stay apart
 (asked again on 2026-11-20: never together).
 
@@ -239,7 +239,8 @@ a crate is added in the phase that needs it):
   for the screen), `channel` (`Channel`; `Channels`: which channel an
   event is in, and making one where it is in none), `alert` (`Rule`: a
   band, a duration, a level; `Alerts`: the events going on held against
-  the rules, an `Alert` once per event and rule). The detector numbers
+  the rules, an `Alert` once per event and rule, with its rule's band;
+  a band's rules removed, or made to record). The detector numbers
   its open events (`open_numbered`) for that.
 - `sdr-store` — `Store`: the SQLite event database (`rusqlite`, SQLite
   compiled in), `sessions` and `events`, the layout's version in
@@ -249,9 +250,12 @@ a crate is added in the phase that needs it):
   and `MeshHistory`, what they hold of a time; `sigmf`: a recording as a `.sigmf-data` + `.sigmf-meta`
   pair (the JSON is written by hand); `channels`: the channels file
   (TOML read with the `toml` crate, additions written by hand to the end
-  of the text as it is); `alerts`: the alerts file (`HEADER` with the
-  example, `parse`, `parse_file` with `record_limit_mb` (`AlertsFile`),
-  `load`, `make`, `append` and `add` — every key written); `sigmf::Meta`
+  of the text as it is; `tables` and `without`, a text's tables and the
+  text without some, for both files); `alerts`: the alerts file
+  (`HEADER` with the example, `parse`, `parse_file` with
+  `record_limit_mb` (`AlertsFile`), `load`, `make`, `append` and `add`
+  — every key written; `remove_band` and `remove`, `set_record` and
+  `record`, a band's rules); `sigmf::Meta`
   and `write_meta`, for samples written elsewhere as they come.
 - `sdr-rtl` — `RtlSource`: the RTL-SDR through `rtl-sdr-rs` (pure Rust on
   `nusb`), queued transfers, gain along the tuner's own steps, retuning.
@@ -271,9 +275,10 @@ a crate is added in the phase that needs it):
   read, heartbeat a minute, connect again after 5 s; `tcp`).
 - `sdr-tui` — `app` (state, keys and the `Command`s they ask of the
   source; no drawing), `ui` (frame of the interface, `render_text`),
-  `alerts` (`AlertsView`: the rules, those made with `!` for the file,
-  a band's second rule refused; the alerts by rule, the latest, its
-  brightness and whether a tone is due, in stream time),
+  `alerts` (`AlertsView`: the rules, a channel's by its band
+  (`rule_on`), what `!` and `R` changed of them for the file (`Change`);
+  the alerts by rule, the latest, its brightness and whether a tone is
+  due, in stream time),
   `spectrum` (the spectrum screen's state and arithmetic: columns, scale,
   zoom, palette), `spectrum_ui` (drawing it), `log` (the signal log's
   state: the last 10 000 events, the level filter, the order, a held
@@ -359,9 +364,11 @@ a crate is added in the phase that needs it):
   narrows and writes them. No recording is ever deleted: at the limit
   no new one is made (`Update::RecordingsFull`).
 - The alerts file is the user's, like the channels file: the app makes
-  it when it is missing, reads it at the start and only appends (the
-  rules made with `!`, by a thread of its own, re-reading the disk
-  first); a file that does not parse is refused and never written.
+  it when it is missing, reads it at the start, and changes it in three
+  ways only, by a thread of its own that re-reads the disk first: a rule
+  made with `!` appended, the rules of a band removed with `!` again, a
+  band's rules' `record` set with `R`; everything else stays byte for
+  byte. A file that does not parse is refused and never written.
 - Only the writer threads touch the database after start-up — the
   events' and the mesh's, each with a connection of its own (WAL; SQLite
   makes one wait for the other); the reader hands events over an
