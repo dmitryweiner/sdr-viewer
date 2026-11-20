@@ -8,6 +8,8 @@ mod density_ui;
 pub mod fragment;
 pub mod log;
 mod log_ui;
+pub mod mesh;
+mod mesh_ui;
 pub mod period;
 mod period_ui;
 pub mod spectrum;

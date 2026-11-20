@@ -45,6 +45,8 @@ pub enum Update {
     /// How often each frequency was at each level, with every frame
     /// while the interface watches it.
     Density(DensityMap),
+    /// From the mesh's thread, not the reader's.
+    Mesh(sdr_mesh::update::MeshUpdate),
 }
 
 /// What the store is told, in the order it happened.

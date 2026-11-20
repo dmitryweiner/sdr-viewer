@@ -322,6 +322,7 @@ The first useful version comes after phase 3.
 | SDR and LoRa together | Never: the user listens to one or the other, so the app need not receive from the RTL-SDR while it talks to `meshtasticd` over a radio of its own. (It was first thought that the board leaves no choice — GPIO 7, the SDR's power, is SPI4's clock — but the LoRa radio is on SPI1: `docs/hardware.md`, sections 4 and 6) |
 | Mesh network | Haifa: region US, preset MediumFast, frequency slot 70 = 919.375 MHz, max hops 7. Goes into the default bookmarks; the app still reads the frequency from `meshtasticd` |
 | `meshtasticd` on the device | The user's decisions (2026-11-15): we set it up (done: `docs/hardware.md`, section 6), it is not started at boot, and the node's role is `CLIENT_MUTE` — it relays nothing and sends only its own node info. The channel keys are the node's: what `meshtasticd` can decrypt is what the app reads, nothing is configured in the app |
+| The pulse after its first trial | The user's asks (2026-11-15, the first look on the device): the app reminds that `meshtasticd` must be started, with the command; what the time column is should be plain, and the pulse should visibly move; keys to start the list afresh (as if scanning anew), to sort by hops (0 first) and to show only the active nodes. As built: the columns' names and the axis are on top, the axis with the time of day; columns begin on round times, so the whole pulse steps at once, and a column can be 10 or 30 s; columns the app was not listening in have no dots (`meshtasticd`'s kept packets show there — at most 100, then it drops packets, as its log showed from 14:29 to 14:44 that day); `s` sorts by hops, `a` shows only the nodes heard in the last 15 minutes (a node that is on tells its position that often by default), `m` starts the list afresh from now — a filter, nothing is forgotten. While the daemon does not answer, the pulse gives the `lora.sh` beside the app, or `systemctl` |
 | The Meshtastic pulse (5.6) | The user's decisions (2026-11-15): the app talks to `meshtasticd` with `--mesh` and no SDR — no IQ source at all, not even the generator; the hub stays at 12M, so the keyboard works. `sdr-viewer-rx.sh` stops a running `meshtasticd` for the time of reception and starts it again after. Besides the pulse of 5.6 the screen shows the text of messages on the channels the node can read, telemetry (battery, channel utilisation, airtime), positions and the distance to them (ours from GPS, once there is one); packets are kept in the database, like events, for 7 days |
 | Language | UI in English; docs, README and code comments in English (the shared conventions in `~/projects/CLAUDE.md`) |
 | aarch64 build | Static musl binary built on GitHub's native arm64 runner instead of `cross` |
@@ -365,6 +366,14 @@ They do not block the start; until answered, the default holds.
    the first version.*
 5. **License.** The repository has GPLv3, which is compatible with GPL
    dependencies (`rtl_433`, `librtlsdr`). *Default: stay on GPLv3.*
+6. **SDR and LoRa together.** The user asked (2026-11-15) whether, as
+   the two share neither power nor bus, both could run in one go. They
+   can: the app already shows both (`--rtlsdr … --mesh`), and
+   `sdr-viewer-rx.sh` would simply leave `meshtasticd` running, so the
+   mesh's record has no holes. The keyboard still drops while the SDR
+   receives (the hub), and the node's own transmissions (node info) go
+   out centimetres from the SDR's antenna — a moment of overload near
+   919 MHz. *Default: not together (section 12), until the user says.*
 
 ## 14. Progress
 
@@ -377,7 +386,7 @@ As of 2026-11-15.
 | 2 | Spectrum and waterfall | Done on the generator, recordings and the RTL-SDR: bars with max hold, waterfall, a scale that follows the noise floor, cursor, tuning (`f`, `[` `]`, Enter), gain, zoom, pause, `--snapshot` |
 | 3 | Detector and log | Done; the user ran it on the air on the device on 2026-11-13 and found it working. Built: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. The spectrum shows the detector's threshold as a line and the dB above the floor in its header. The last 30 s of samples are held in a ring buffer; the log shows the picture of the selected event made of them, and `r` saves them as SigMF. The detector has regression tests on a piece of real air (`testdata/`). The status line tells overload (`clip`) and lost samples. |
 | 4 | Accumulators | Done: the spectral density (screen 5.3) and the channel strip (5.2) — their decisions are in section 12 — were tried on the air and approved by the user on 2026-11-14, together with `X` twice on the strip and the log and the band's name in the header. Periodicity (5.4), built the same day (its decision is in section 12), finds on the device's LPD433 recording that the hopper comes back to each channel every 2.92 s; the user tried it on the air on 2026-11-15 ("works well") and asked for its tab to come right after the strip's |
-| 5 | Meshtastic | Started 2026-11-15: `meshtasticd` runs on the device's LoRa radio and the node is set up (section 12). Planned order, each its own pull request: the client and the pulse (`--mesh`, screen 5.6 with the nodes, their packets, SNR and hops); then the packets in the database; then texts, telemetry and positions |
+| 5 | Meshtastic | Started 2026-11-15: `meshtasticd` runs on the device's LoRa radio and the node is set up (section 12). Planned order, each its own pull request: the client and the pulse (`--mesh`, screen 5.6 with the nodes, their packets, SNR and hops) — built and tried by the user on the device (2026-11-15), then changed as that trial asked (section 12) and found "working great" (2026-11-20); then the packets in the database; then texts, telemetry and positions |
 | 6–8 | | Not started |
 
 Known limits of the channel strip as built:
@@ -421,6 +430,42 @@ Known limits of the channel strip as built:
 - On the air the user tried it on 2026-11-14 with a handheld radio beside
   the receiver (PMR446), found the two kinds of sticking that were then
   fixed, and approved the result by eye; nothing was measured there.
+
+Known limits of the Meshtastic pulse as built (5.6, the first of its
+three pull requests):
+
+- Only this run's packets are ticks; of earlier ones the node's database
+  gives each node's last time heard, its SNR and hops — the history comes
+  with the database, the next pull request.
+- What a packet says is not read yet but for node info (the name):
+  texts, telemetry and positions are the third pull request. Its kind
+  ("telemetry", "position", "encrypted") is told.
+- `meshtasticd` hands a client the packets it kept while none was
+  connected — up to 100 (`MaxMessageQueue`) — at the next connection;
+  once 100 wait it drops the new ones, so of a long absence only the
+  first 100 packets are seen. Their times are the node's; the pulse
+  draws no dots where the app was not listening.
+- Many packets on the user's air are on channels the node has no key for
+  (on 2026-11-15 mostly hash 0x18, then 0x80, 0xc0, 0x99): their senders
+  are rows by number, without names, until they send node info on a
+  channel the node reads. Adding a channel's key is the node's setting.
+- The relay of a packet is known by the last byte of its number only;
+  it is named when one known node alone ends in it.
+- The node's own packets (its telemetry, its node info) are ticks on its
+  own row, and measure nothing. Most are not on the air: while a client
+  is connected `meshtasticd` hands it the node's device telemetry every
+  minute, and its local stats every 15 (firmware 2.7.26,
+  `DeviceTelemetry.cpp`, `sendToPhoneIntervalMs`, not a setting); to the
+  mesh it sends device telemetry only with
+  `telemetry.device_telemetry_enabled`, false by default and not set by
+  us. The card calls them "telemetry to all", and the user took the
+  ticks for transmissions (2026-11-20). What the node sends on the air
+  as `CLIENT_MUTE` is its node info, every 3 h by default.
+- The frequency in the header is worked out from the region, preset and
+  slot the node tells (the firmware's own arithmetic, 2.7.26); the
+  region table is the firmware's.
+- Times are the node's clock and the app's: from another machine
+  (`--mesh=HOST`) a clock that is off moves the ticks.
 
 Known limits of the periodicity as built:
 

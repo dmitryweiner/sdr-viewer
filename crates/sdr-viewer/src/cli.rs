@@ -52,7 +52,7 @@ pub struct Args {
 
     /// The screen a snapshot prints, by its digit: 1 the spectrum, 2 the
     /// channel strip, 3 the periodicity of the channel that repeats most
-    /// surely, 4 the density.
+    /// surely, 4 the density, 6 the Meshtastic pulse (with --mesh).
     #[arg(long, value_name = "DIGIT", default_value = "1", requires = "snapshot", value_parser = parse_screen_arg)]
     pub screen: Screen,
 
@@ -94,6 +94,23 @@ pub struct Args {
     /// ~/.local/share.
     #[arg(long, value_name = "DIR")]
     pub iq_dir: Option<PathBuf>,
+
+    /// Listen to meshtasticd's API (port 4403) too: on this machine, or
+    /// at --mesh=HOST[:PORT]. Without a recording or --rtlsdr there is no
+    /// receiver at all, only the mesh.
+    #[arg(
+        long,
+        value_name = "HOST[:PORT]",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "localhost"
+    )]
+    pub mesh: Option<String>,
+}
+
+/// Whether there is to be a source of samples: not for the mesh alone.
+pub fn wants_source(args: &Args) -> bool {
+    args.mesh.is_none() || args.file.is_some() || args.rtlsdr
 }
 
 /// The longest --iq-buffer: 10 minutes are 2.9 GB at 2.4 MS/s.
@@ -167,8 +184,9 @@ fn parse_screen_arg(text: &str) -> Result<Screen, String> {
         "2" => Ok(Screen::Channels),
         "3" => Ok(Screen::Periodicity),
         "4" => Ok(Screen::Density),
+        "6" => Ok(Screen::Mesh),
         _ => Err(format!(
-            "no snapshot of screen {text:?}: 1 (spectrum), 2 (channels), 3 (periodicity) or 4 (density)"
+            "no snapshot of screen {text:?}: 1 (spectrum), 2 (channels), 3 (periodicity), 4 (density) or 6 (mesh)"
         )),
     }
 }
@@ -415,6 +433,22 @@ mod tests {
         let source = open_source(&args(&["--rate", "1M", "--center", "144.8M"]), true).unwrap();
         assert_eq!(source.info().sample_rate, 1_000_000);
         assert_eq!(source.info().center_hz, 144_800_000.0);
+    }
+
+    #[test]
+    fn the_mesh_alone_wants_no_source() {
+        assert_eq!(args(&["--mesh"]).mesh.as_deref(), Some("localhost"));
+        assert!(!wants_source(&args(&["--mesh"])));
+        // The address takes an equals sign: a file after --mesh is a file.
+        let both = args(&["--mesh", "capture.cu8"]);
+        assert_eq!(both.mesh.as_deref(), Some("localhost"));
+        assert!(wants_source(&both));
+        let remote = args(&["--mesh=192.168.1.246", "--rtlsdr"]);
+        assert_eq!(remote.mesh.as_deref(), Some("192.168.1.246"));
+        assert!(wants_source(&remote));
+        assert!(wants_source(&args(&[])));
+        let pulse = args(&["--mesh", "--snapshot", "80x24", "--screen", "6"]);
+        assert_eq!(pulse.screen, Screen::Mesh);
     }
 
     #[test]

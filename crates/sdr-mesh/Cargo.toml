@@ -1,0 +1,16 @@
+[package]
+name = "sdr-mesh"
+description = "A client of meshtasticd's TCP API: the mesh's nodes and packets."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+prost = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }
+protox = { workspace = true }
+
+[lints]
+workspace = true

@@ -182,6 +182,59 @@ samples: time runs across, from 50 ms before the event to 50 ms after it
 event and at least 40 kHz; `▲` marks where the event begins and ends. It
 needs the samples to be still held (see below), like saving.
 
+The Meshtastic pulse (`6`) answers "is my mesh network alive?". It
+talks to `meshtasticd` over its API (TCP port 4403) — `--mesh` on the
+same machine, `--mesh=HOST[:PORT]` on another; the app transmits nothing
+itself. **Start `meshtasticd` first**: on the uConsole it does not start
+at boot, and `sudo ~/sdr-viewer-check/lora.sh on` powers the LoRa radio
+and starts it (`off` stops it). While the daemon does not answer, the
+pulse says so and gives the command that starts it (the `lora.sh`
+beside the app, or `systemctl`), and connects by itself once it is up.
+
+One row per node the daemon knows or that was heard in this run — the
+node itself first, then the last heard — with its short and long name, a
+tick for each of its packets on one time axis of the wall clock, and on
+the right how long ago it was last heard (`heard`), and the SNR, RSSI
+and hops of its last packet. The axis is on top: what a column stands
+for (a minute at first), the time of day, and now at the right edge. The
+columns begin on whole minutes (or whatever a column stands for), so at
+a minute a column the whole pulse steps left once a minute; `+` makes a
+column 30 or 10 s, and it moves faster. A dot is a column the app was
+listening in and heard nothing from that node; where there is no dot
+the app was not connected. Ticks there are what `meshtasticd` kept for
+it meanwhile: at most 100 packets, the first ones — after that it drops
+what it hears (`ToPhone queue is full, drop packet` in its log), so a
+gap there is not silence.
+
+The node's own row has a tick about every minute: that is `meshtasticd`
+handing the app the node's own telemetry over the API, not a
+transmission (on the air it sends its node info, every 3 h by default).
+Packets on a channel the node has no key for count too: their header is
+in the clear. The selected node's card names its id, hardware and role,
+and tells its last packet: what it was, to whom, on which channel (or the
+channel's hash, without a key), how it arrived and which node relayed it
+last.
+
+| Key | What |
+|---|---|
+| `↑` `↓` `PgUp` `PgDn` `Home` `End` | select a node (`Esc` lets go) |
+| `+` `-` | less, more time to a column: 10 s, 30 s, 1 m, 5 m, 15 m, 1 h |
+| `s` | sort by the last heard, or by hops: the fewest first (0 is heard directly), the unknown last |
+| `a` | only the nodes heard in the last 15 minutes, or all |
+| `m` | start the list afresh: only the nodes heard from now on, and their packets, as if the app had started now (nothing is forgotten; names stay known) |
+
+The node itself stays on top whatever is chosen; under the rows a line
+tells what the list shows when it is not everything.
+
+`--mesh` alone opens no receiver at all — on the uConsole the SDR and the
+LoRa radio are not used together — and the screens of the receiver say
+so; with a recording or `--rtlsdr` both run.
+
+```sh
+sdr-viewer --mesh                                      # meshtasticd on this machine
+sdr-viewer --mesh=192.168.1.246 --snapshot 160x45 --screen 6 --secs 20
+```
+
 ### Saving an event's samples
 
 The app holds the last 30 s of samples in memory (`--iq-buffer SECS`;
@@ -243,7 +296,9 @@ cargo run --release -- capture.cu8 --rate 2.4M --center 433.92M --snapshot 160x4
 `--screen 2` prints the channel strip instead of the spectrum, `--screen 3`
 the periodicity of the channel that repeats most surely, `--screen 4` the
 density; `--channels FILE` gives a snapshot its channels (it adds none to
-the file).
+the file). `--screen 6` with `--mesh` prints the Meshtastic pulse after
+`--secs` of the node's talk, and the packets heard; it fails when
+`meshtasticd` does not answer.
 
 On the uConsole: take the static `aarch64` binary from the CI artifact
 `sdr-viewer-aarch64`. The first run on a device is the

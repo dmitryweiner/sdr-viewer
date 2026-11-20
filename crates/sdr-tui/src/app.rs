@@ -4,10 +4,12 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use sdr_core::units::parse_hz;
 use sdr_core::{GainChange, SourceInfo, SpectrumFrame};
 use sdr_detect::{DensityMap, Event, Levels};
+use sdr_mesh::update::MeshUpdate;
 
 use crate::channels::ChannelsView;
 use crate::fragment::{Fragment, Picture};
 use crate::log::LogView;
+use crate::mesh::{Link, MeshView};
 use crate::period::{DELAYS, USUAL};
 use crate::spectrum::SpectrumView;
 
@@ -103,6 +105,8 @@ pub enum SourceState {
     /// A recording played to its end.
     Ended,
     Failed(String),
+    /// No source in this run: only the mesh was asked for.
+    Off,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -157,6 +161,8 @@ pub struct App {
     pub spectrum: SpectrumView,
     pub log: LogView,
     pub channels: ChannelsView,
+    /// The Meshtastic pulse, `Link::Off` without `--mesh`.
+    pub mesh: MeshView,
     /// The range of delays chosen on the periodicity screen, of
     /// `period::DELAYS`; until one is, the range follows the channel.
     pub delays: Option<usize>,
@@ -196,6 +202,7 @@ impl App {
             spectrum: SpectrumView::default(),
             log: LogView::default(),
             channels: ChannelsView::default(),
+            mesh: MeshView::new(Link::Off),
             delays: None,
             density: None,
             commands: Vec::new(),
@@ -241,6 +248,15 @@ impl App {
     pub fn on_open_events(&mut self, open: Vec<Event>) {
         self.channels.set_open(&open);
         self.log.set_open(open);
+    }
+
+    pub fn on_mesh(&mut self, update: MeshUpdate) {
+        self.mesh.on_update(update);
+    }
+
+    /// The time of day, Unix seconds: the mesh's packets are on it.
+    pub fn set_wall_clock(&mut self, unix_s: u64) {
+        self.mesh.set_now(unix_s);
     }
 
     /// Takes the density as of the latest frame; like the spectrum, the
@@ -312,6 +328,9 @@ impl App {
             {
                 self.channels.release();
             }
+            KeyCode::Esc if self.screen == Screen::Mesh && self.mesh.selected().is_some() => {
+                self.mesh.release();
+            }
             KeyCode::Esc if self.spectrum.cursor.is_some() => self.spectrum.cursor = None,
             KeyCode::Esc => self.quit = true,
             KeyCode::Char('?') => self.help = !self.help,
@@ -325,6 +344,7 @@ impl App {
             _ if self.screen == Screen::Periodicity => self.on_period_key(key),
             _ if self.screen == Screen::Density => self.on_density_key(key),
             _ if self.screen == Screen::Log => self.on_log_key(key),
+            _ if self.screen == Screen::Mesh => self.on_mesh_key(key),
             _ => {}
         }
     }
@@ -396,6 +416,23 @@ impl App {
                 }
             },
             KeyCode::Enter => self.tune_to_selected_channel(),
+            _ => {}
+        }
+    }
+
+    fn on_mesh_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Up => self.mesh.move_selection(-1),
+            KeyCode::Down => self.mesh.move_selection(1),
+            KeyCode::PageUp => self.mesh.move_selection(-LOG_PAGE),
+            KeyCode::PageDown => self.mesh.move_selection(LOG_PAGE),
+            KeyCode::Home => self.mesh.move_selection(isize::MIN),
+            KeyCode::End => self.mesh.move_selection(isize::MAX),
+            KeyCode::Char('+' | '=') => self.mesh.zoom_in(),
+            KeyCode::Char('-') => self.mesh.zoom_out(),
+            KeyCode::Char('s') => self.mesh.next_order(),
+            KeyCode::Char('a') => self.mesh.toggle_active(),
+            KeyCode::Char('m') => self.mesh.start_afresh(),
             _ => {}
         }
     }
@@ -739,6 +776,44 @@ mod tests {
         let center = app.channels.selected().unwrap().center_hz;
         assert_eq!(app.commands, [Command::Tune(center)]);
         assert_eq!(app.screen, Screen::Spectrum);
+    }
+
+    #[test]
+    fn mesh_keys_select_a_node_and_change_the_time_scale() {
+        use crate::mesh::tests::{GATE, ME, view};
+        let mut app = app();
+        app.mesh = view();
+        press(&mut app, KeyCode::Char('6'));
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.mesh.selected().map(|row| row.num), Some(ME));
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.mesh.selected().map(|row| row.num), Some(GATE));
+        press(&mut app, KeyCode::End);
+        press(&mut app, KeyCode::Home);
+        assert_eq!(app.mesh.selected_row(), Some(0));
+        press(&mut app, KeyCode::Char('-'));
+        assert_eq!(app.mesh.seconds_per_column(), 300);
+        press(&mut app, KeyCode::Char('+'));
+        assert_eq!(app.mesh.seconds_per_column(), 60);
+        // Neither the strip's scale nor the spectrum's zoom moved.
+        assert_eq!(app.channels.seconds_per_column(), 1);
+        assert_eq!(app.spectrum.magnification(), 1);
+        press(&mut app, KeyCode::Esc);
+        assert!(app.mesh.selected().is_none() && !app.quit);
+        press(&mut app, KeyCode::Char('s'));
+        assert_eq!(app.mesh.order(), crate::mesh::Order::Hops);
+        press(&mut app, KeyCode::Char('a'));
+        assert!(app.mesh.active_only());
+        press(&mut app, KeyCode::Char('m'));
+        assert_eq!(app.mesh.since(), Some(app.mesh.now()));
+        // None of them asked anything of the receiver: no gain, no tuning.
+        assert!(app.commands.is_empty());
+        // The wall clock moves the pulse along.
+        app.set_wall_clock(40_000);
+        assert_eq!(app.mesh.now(), 40_000);
+        app.on_mesh(MeshUpdate::Lost("refused".into()));
+        assert_eq!(app.mesh.link, Link::Lost("refused".into()));
+        assert!(app.commands.is_empty());
     }
 
     #[test]
