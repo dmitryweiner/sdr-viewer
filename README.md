@@ -206,6 +206,9 @@ it meanwhile: at most 100 packets, the first ones — after that it drops
 what it hears (`ToPhone queue is full, drop packet` in its log), so a
 gap there is not silence.
 
+The node's own row has a tick about every minute: that is `meshtasticd`
+handing the app the node's own telemetry over the API, not a
+transmission (on the air it sends its node info, every 3 h by default).
 Packets on a channel the node has no key for count too: their header is
 in the clear. The selected node's card names its id, hardware and role,
 and tells its last packet: what it was, to whom, on which channel (or the

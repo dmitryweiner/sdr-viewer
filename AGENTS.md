@@ -19,12 +19,16 @@ Phases of the plan (its section 14 has the detail):
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
 | 3 Detector and log | done, and found working on the air on the device by the user (2026-11-13): the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples |
 | 4 Accumulators | done: the spectral density (screen 4) and the channel strip (screen 2) were tried by the user on the air on the device and approved (2026-11-14) — with what that trial asked for: the detector's stuck events fixed, the receiver's spike kept off the strip, `X` twice on the strip and on the log, the band's name in the spectrum's header. Periodicity (screen 3, and the period in the strip's rows), built as the user decided (the plan's section 12), was tried by them on the air and "works well" (2026-11-15); its tab was then moved right after the channels', which it reads (it was screen 4, the density 3) |
-| 5 Meshtastic | started (2026-11-15): `meshtasticd` runs on the device's LoRa radio and the node is set up (`docs/hardware.md`, section 6); the user's decisions for the app are in the plan's section 12. Built: the client (`sdr-mesh`) and the pulse (`--mesh`, screen 6), tried by the user on the device (2026-11-15); what that trial asked for is built (the plan's section 12: the reminder to start `meshtasticd`, the axis on top with the time of day, the pulse stepping at once, no dots where the app was not listening, `s` `a` `m`) and waits for their next look |
+| 5 Meshtastic | started (2026-11-15): `meshtasticd` runs on the device's LoRa radio and the node is set up (`docs/hardware.md`, section 6); the user's decisions for the app are in the plan's section 12. Built: the client (`sdr-mesh`) and the pulse (`--mesh`, screen 6), tried by the user on the device (2026-11-15); what that trial asked for is built (the plan's section 12: the reminder to start `meshtasticd`, the axis on top with the time of day, the pulse stepping at once, no dots where the app was not listening, `s` `a` `m`; PR #32, merged into #31's branch) and the user found it "working great" (2026-11-20). On `main` once #31 is merged |
 | 6–8 | not started |
 
-Next: the user's look at the pulse as their trial changed it; then the
-mesh's packets in the database, then texts, telemetry and positions (the
-plan's section 14).
+Next: the node's own row of the pulse — `meshtasticd` hands a connected
+client its device telemetry every minute, over the API, not on the air,
+and the pulse draws it as the node's ticks ("telemetry to all"), which
+the user took for transmissions (2026-11-20; the plan's known limits of
+the pulse); then the mesh's packets in the database, then texts,
+telemetry and positions (the plan's section 14). Still the user's to
+decide: SDR and LoRa together (the plan's section 13).
 
 ## Commands
 
