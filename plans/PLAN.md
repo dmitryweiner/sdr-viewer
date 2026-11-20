@@ -430,7 +430,11 @@ Known limits of the alerts' recordings as built:
   recorded until the limit, a retune or the end of the stream.
 - The samples come through the 8-bit ring: narrowed by 48, the steps of
   8 bits are a floor 17 dB lower than in the whole band (−68.5 dBFS with
-  the generator, whose own noise is below one step).
+  the generator, whose own noise is below one step). The generator's
+  carrier, quantised without noise to shake it, has products all over
+  the band: one lands 18 kHz below its burst at −76.7 dBFS in the
+  burst's recording (the downconverter itself leaves that carrier at
+  −193 dB). The RTL-SDR's samples are 8 bits from the start.
 - Each event in another channel is a recording of its own: a rule that
   records over a hopper's whole band makes a file for every hop.
 - With `--iq-buffer 0` nothing is recorded (the status line says so
