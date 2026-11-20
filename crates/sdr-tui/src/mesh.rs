@@ -8,7 +8,7 @@
 
 use std::collections::VecDeque;
 
-use sdr_mesh::update::{Content, MeshUpdate, Node, NodeUser, Packet, Ready};
+use sdr_mesh::update::{Content, LocalStats, MeshUpdate, Node, NodeUser, Packet, Ready};
 
 /// Seconds to a column of the pulse.
 pub const SCALES: [u64; 6] = [10, 30, 60, 300, 900, 3600];
@@ -25,6 +25,10 @@ pub const HISTORY_S: u64 = 24 * 3600;
 
 /// And at most so many of them.
 const MAX_TICKS: usize = 10_000;
+
+/// The numbers of the node's last packets sent, so that one told twice
+/// (queued, then its copy) is one.
+const SENT_IDS: usize = 32;
 
 /// The clock's marks on the axis are this far apart, the first of these
 /// that is a whole number of columns, and enough of them.
@@ -77,6 +81,29 @@ pub struct NodeRow {
     app_only_times: VecDeque<u64>,
     /// How many of those.
     pub app_only: u64,
+    /// When the node itself queued packets of its own for the air, or
+    /// handed over a copy of one; the numbers of the last of them.
+    sent_times: VecDeque<u64>,
+    sent_ids: VecDeque<u32>,
+    /// How many, and the last.
+    pub sent: u64,
+    pub last_sent: Option<u64>,
+    /// The node's own count of what it sent, the last time it told it.
+    pub tx_count: Option<TxCount>,
+}
+
+/// What the node counts of its own transmissions, in its local stats.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TxCount {
+    /// When it counted, and when it had started: Unix seconds.
+    pub at: u64,
+    pub started: u64,
+    /// Packets sent on the air since it started, acknowledgements too.
+    pub since_start: u32,
+    /// How many since its count before, and when that was: none before a
+    /// second count, nor after it started again.
+    pub since_last: Option<(u32, u64)>,
+    uptime_s: u32,
 }
 
 impl NodeRow {
@@ -93,7 +120,40 @@ impl NodeRow {
             packets: 0,
             app_only_times: VecDeque::new(),
             app_only: 0,
+            sent_times: VecDeque::new(),
+            sent_ids: VecDeque::new(),
+            sent: 0,
+            last_sent: None,
+            tx_count: None,
         }
+    }
+
+    /// A packet the node itself sent: one, however often it is told.
+    fn note_sent(&mut self, at: u64, id: u32) {
+        if self.sent_ids.contains(&id) {
+            return;
+        }
+        if self.sent_ids.len() == SENT_IDS {
+            self.sent_ids.pop_front();
+        }
+        self.sent_ids.push_back(id);
+        keep(&mut self.sent_times, at);
+        self.sent += 1;
+        self.last_sent = self.last_sent.max(Some(at));
+    }
+
+    fn count_tx(&mut self, at: u64, stats: LocalStats) {
+        let since_last = self
+            .tx_count
+            .filter(|count| stats.uptime_s > count.uptime_s && stats.sent >= count.since_start)
+            .map(|count| (stats.sent - count.since_start, count.at));
+        self.tx_count = Some(TxCount {
+            at,
+            started: at.saturating_sub(u64::from(stats.uptime_s)),
+            since_start: stats.sent,
+            since_last,
+            uptime_s: stats.uptime_s,
+        });
     }
 
     /// "!bfb54553" when it has not told its own id.
@@ -163,6 +223,11 @@ impl MeshView {
             }
             MeshUpdate::Node(node) => self.on_node(node),
             MeshUpdate::Packet(packet) => self.on_packet(packet),
+            MeshUpdate::Sent(sent) => {
+                if let Some(me) = self.ready.as_ref().map(|ready| ready.me) {
+                    self.row_mut(me).note_sent(sent.at, sent.id);
+                }
+            }
         }
     }
 
@@ -180,27 +245,36 @@ impl MeshView {
     }
 
     fn on_packet(&mut self, packet: Packet) {
+        let own = self
+            .ready
+            .as_ref()
+            .is_some_and(|ready| ready.me == packet.from);
         let row = self.row_mut(packet.from);
-        if packet.app_only {
-            keep(&mut row.app_only_times, packet.received);
-            row.app_only += 1;
-            row.last = Some(packet);
-            return;
-        }
         if let Content::User(user) = &packet.content {
             row.user = Some(user.clone());
         }
-        row.last_heard = row.last_heard.max(Some(packet.received));
-        // The node's own packets are not received: nothing is measured.
-        if packet.snr != 0.0 || packet.rssi != 0 {
-            row.snr = Some(packet.snr);
-            row.rssi = Some(packet.rssi);
+        if packet.app_only {
+            keep(&mut row.app_only_times, packet.received);
+            row.app_only += 1;
+            if let Content::LocalStats(stats) = packet.content {
+                row.count_tx(packet.received, stats);
+            }
+        } else if own {
+            // A copy of what the node sent: nothing was received.
+            row.note_sent(packet.received, packet.id);
+        } else {
+            row.last_heard = row.last_heard.max(Some(packet.received));
+            // Via MQTT nothing is measured.
+            if packet.snr != 0.0 || packet.rssi != 0 {
+                row.snr = Some(packet.snr);
+                row.rssi = Some(packet.rssi);
+            }
+            if packet.hops.is_some() {
+                row.hops = packet.hops;
+            }
+            keep(&mut row.times, packet.received);
+            row.packets += 1;
         }
-        if packet.hops.is_some() {
-            row.hops = packet.hops;
-        }
-        keep(&mut row.times, packet.received);
-        row.packets += 1;
         row.last = Some(packet);
     }
 
@@ -281,6 +355,11 @@ impl MeshView {
     /// The same of what the node handed this app only.
     pub fn app_only_cells(&self, row: &NodeRow, columns: usize) -> Vec<u32> {
         self.count(&row.app_only_times, columns)
+    }
+
+    /// The same of what the node itself sent.
+    pub fn sent_cells(&self, row: &NodeRow, columns: usize) -> Vec<u32> {
+        self.count(&row.sent_times, columns)
     }
 
     fn count(&self, times: &VecDeque<u64>, columns: usize) -> Vec<u32> {
@@ -479,7 +558,7 @@ fn keep(times: &mut VecDeque<u64>, time: u64) {
 pub(crate) mod tests {
     use super::*;
     use sdr_mesh::lora::Radio;
-    use sdr_mesh::update::BROADCAST;
+    use sdr_mesh::update::{BROADCAST, LocalStats, Sent};
 
     pub(crate) const ME: u32 = 0x015b_8900;
     pub(crate) const GATE: u32 = 0xbfb5_4553;
@@ -634,41 +713,96 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_nodes_own_packets_measure_nothing() {
+    fn a_nodes_own_packets_measure_nothing_and_are_never_heard() {
         let mut view = view();
         let mut own = packet(ME, 35_990, telemetry());
-        (own.snr, own.rssi, own.hops) = (0.0, 0, None);
+        (own.snr, own.rssi, own.hops) = (0.0, 0, Some(0));
         view.on_update(MeshUpdate::Packet(own));
         let me = view.rows()[0];
         assert_eq!((me.snr, me.rssi, me.hops), (None, None, None));
-        assert_eq!(me.packets, 1);
+        // A copy of what it sent.
+        assert_eq!((me.packets, me.sent), (0, 1));
+        assert_eq!(me.last_heard, Some(36_000));
+        assert_eq!(view.heard(), 2);
     }
 
     #[test]
     fn what_only_the_app_got_is_no_packet_heard_and_has_marks_of_its_own() {
         let mut view = view();
-        // Its device telemetry of 9:58:20 and 9:59:20, and what it sent on
-        // the air at 9:59:30.
+        // Its device telemetry of 9:58:20 and 9:59:20.
         for at in [35_900, 35_960] {
             view.on_update(MeshUpdate::Packet(app_only(at)));
         }
         let me = view.rows()[0].clone();
-        assert_eq!((me.packets, me.app_only), (0, 2));
+        assert_eq!((me.packets, me.sent, me.app_only), (0, 0, 2));
         assert_eq!(view.heard(), 2);
         assert_eq!(view.cells(&me, 20), [0; 20]);
         assert_eq!(view.app_only_cells(&me, 20)[17..], [1, 1, 0]);
         // The card tells it as the last.
         assert!(me.last.as_ref().unwrap().app_only);
-        let mut sent = packet(ME, 35_970, telemetry());
-        (sent.snr, sent.rssi, sent.hops) = (0.0, 0, Some(0));
-        view.on_update(MeshUpdate::Packet(sent));
-        let me = view.rows()[0].clone();
-        assert_eq!((me.packets, me.app_only), (1, 2));
-        assert_eq!(view.heard(), 3);
-        assert_eq!(view.cells(&me, 20)[18], 1);
         // Started afresh, the app's own go too.
         view.start_afresh();
         assert_eq!(view.app_only_cells(&me, 20), [0; 20]);
+    }
+
+    #[test]
+    fn what_the_node_sent_is_a_mark_of_its_own_once_a_packet() {
+        let mut view = view();
+        // Queued at 9:59:30 and its copy right after; then the copy of one
+        // whose queue status the app was not told.
+        view.on_update(MeshUpdate::Sent(Sent {
+            at: 35_970,
+            id: 0x77,
+        }));
+        let mut copy = packet(ME, 35_971, telemetry());
+        copy.id = 0x77;
+        view.on_update(MeshUpdate::Packet(copy));
+        view.on_update(MeshUpdate::Sent(Sent {
+            at: 35_972,
+            id: 0x77,
+        }));
+        let mut untold = packet(ME, 35_500, telemetry());
+        untold.id = 0x78;
+        view.on_update(MeshUpdate::Packet(untold));
+        let me = view.rows()[0].clone();
+        assert_eq!((me.sent, me.packets, me.app_only), (2, 0, 0));
+        assert_eq!(me.last_sent, Some(35_970));
+        assert_eq!(view.heard(), 2);
+        let cells = view.sent_cells(&me, 20);
+        assert_eq!((cells[18], cells[10], cells.iter().sum::<u32>()), (1, 1, 2));
+        assert_eq!(view.cells(&me, 20), [0; 20]);
+    }
+
+    #[test]
+    fn the_nodes_own_count_tells_what_it_sent_since_the_count_before() {
+        let mut view = view();
+        let stats = |at, sent, uptime_s| {
+            let mut minute = app_only(at);
+            minute.content = Content::LocalStats(LocalStats { sent, uptime_s });
+            MeshUpdate::Packet(minute)
+        };
+        assert_eq!(view.rows()[0].tx_count, None);
+        // Up since 9:30:00, 75 s at 9:31:15: one sent so far.
+        view.on_update(stats(34_275, 1, 75));
+        let count = view.rows()[0].tx_count.unwrap();
+        assert_eq!(
+            (count.at, count.started, count.since_start, count.since_last),
+            (34_275, 34_200, 1, None)
+        );
+        view.on_update(stats(35_175, 3, 975));
+        let count = view.rows()[0].tx_count.unwrap();
+        assert_eq!(
+            (count.since_start, count.since_last),
+            (3, Some((2, 34_275)))
+        );
+        // Started again: nothing to compare with.
+        view.on_update(stats(35_900, 1, 60));
+        let count = view.rows()[0].tx_count.unwrap();
+        assert_eq!(
+            (count.started, count.since_start, count.since_last),
+            (35_840, 1, None)
+        );
+        assert_eq!(view.rows()[0].app_only, 3);
     }
 
     #[test]
