@@ -1,5 +1,5 @@
-//! The alerts: the rules there are, those made with `!` for the file,
-//! and what the rules gave, for the status line — the rule that gave the
+//! The alerts: the rules there are, what `!` and `R` changed of them for
+//! the file, and what the rules gave, for the status line — the rule that gave the
 //! latest, how many it gave, and whether a tone is due.
 
 use std::time::Duration;
@@ -25,6 +25,17 @@ struct Given {
     toned: Option<Duration>,
 }
 
+/// A change of the rules made here, for the alerts file.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Change {
+    /// A rule made with `!`: add it.
+    Made(Rule),
+    /// `!` again: remove the rules of this one's band.
+    Removed(Rule),
+    /// `R`: the rules of this one's band record as it does, or not.
+    Record(Rule),
+}
+
 /// What the status line tells of the alerts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Told {
@@ -41,7 +52,7 @@ pub struct AlertsView {
     /// A file keeps the rules made here.
     kept: bool,
     /// Made here and not yet handed to the file.
-    new: Vec<Rule>,
+    changes: Vec<Change>,
     given: Vec<Given>,
     /// The latest alert's rule (an index into `given`) and its time.
     latest: Option<(usize, Duration)>,
@@ -67,6 +78,22 @@ impl AlertsView {
         &self.rules
     }
 
+    /// The rule of a channel's band: `width_hz` around `center_hz`.
+    pub fn rule_on(&self, center_hz: f64, width_hz: f64) -> Option<&Rule> {
+        let (low_hz, high_hz) = (center_hz - width_hz / 2.0, center_hz + width_hz / 2.0);
+        self.rules
+            .iter()
+            .find(|rule| rule.has_band(low_hz, high_hz))
+    }
+
+    /// How a change is told: kept in the file, or for this run alone.
+    fn as_kept(&self, what: &str, in_file: &str) -> String {
+        match self.kept {
+            true => format!("{what}{in_file}"),
+            false => format!("{what} for this run: there is no alerts file"),
+        }
+    }
+
     /// Takes in a rule made here, and says so; one for a band that has a
     /// rule already is refused, naming that rule.
     pub fn add(&mut self, rule: Rule) -> Result<String, String> {
@@ -76,18 +103,54 @@ impl AlertsView {
                 there.name
             ));
         }
-        let told = match self.kept {
-            true => format!("alert on {} added to the alerts file", rule.name),
-            false => format!(
-                "alert on {} for this run: there is no alerts file",
-                rule.name
-            ),
-        };
+        let told = self.as_kept(
+            &format!("alert on {}", rule.name),
+            " added to the alerts file",
+        );
         if self.kept {
-            self.new.push(rule.clone());
+            self.changes.push(Change::Made(rule.clone()));
         }
         self.rules.push(rule);
         Ok(told)
+    }
+
+    /// Lets go of the rules of `band`'s band, and says so by the name of
+    /// the first.
+    pub fn remove(&mut self, band: &Rule) -> String {
+        let name = self.name_on(band);
+        self.rules.retain(|rule| !rule.same_band(band));
+        if self.kept {
+            self.changes.push(Change::Removed(band.clone()));
+        }
+        self.as_kept(&format!("alert on {name} removed"), " from the alerts file")
+    }
+
+    /// Makes the rules of `band`'s band record as it does, or not, and
+    /// says so.
+    pub fn set_record(&mut self, band: &Rule) -> String {
+        let name = self.name_on(band);
+        for rule in self.rules.iter_mut().filter(|rule| rule.same_band(band)) {
+            rule.record = band.record;
+        }
+        if self.kept {
+            self.changes.push(Change::Record(band.clone()));
+        }
+        match band.record {
+            true => self.as_kept(
+                &format!("alert on {name} records"),
+                ": record = true in the alerts file",
+            ),
+            false => self.as_kept(
+                &format!("alert on {name} records no more"),
+                ": record = false in the alerts file",
+            ),
+        }
+    }
+
+    /// The name of the first rule of `band`'s band, or its own.
+    fn name_on(&self, band: &Rule) -> String {
+        let rule = self.rules.iter().find(|rule| rule.same_band(band));
+        rule.unwrap_or(band).name.clone()
     }
 
     /// The alerts' recordings have reached their limit: told from now on.
@@ -95,9 +158,9 @@ impl AlertsView {
         self.full = true;
     }
 
-    /// The rules made since the last call: for the file.
-    pub fn take_new(&mut self) -> Vec<Rule> {
-        std::mem::take(&mut self.new)
+    /// The changes made since the last call, in order: for the file.
+    pub fn take_changes(&mut self) -> Vec<Change> {
+        std::mem::take(&mut self.changes)
     }
 
     /// The stream's time, as of the latest frame: what an alert's
@@ -219,8 +282,75 @@ mod tests {
             Err("an alert watches that band already: LPD 17".into())
         );
         assert_eq!(view.rules().len(), 2);
-        assert_eq!(view.take_new(), [rule("LPD 17", 433.46875e6)]);
-        assert!(view.take_new().is_empty());
+        assert_eq!(
+            view.take_changes(),
+            [Change::Made(rule("LPD 17", 433.46875e6))]
+        );
+        assert!(view.take_changes().is_empty());
+    }
+
+    #[test]
+    fn a_band_s_rule_is_found_by_the_channel_s_centre_and_width() {
+        let view = AlertsView::new(vec![rule("LPD 17", 433.46875e6)], true);
+        let found = view.rule_on(433.475e6, 12.5e3);
+        assert_eq!(found.map(|rule| rule.name.as_str()), Some("LPD 17"));
+        assert_eq!(view.rule_on(433.475e6, 25e3), None);
+        assert_eq!(view.rule_on(433.5e6, 12.5e3), None);
+    }
+
+    #[test]
+    fn a_band_s_rules_record_and_go_and_the_file_gets_it_all_in_order() {
+        let mut view = AlertsView::new(vec![rule("gate", 433.9e6)], true);
+        view.add(rule("LPD 17", 433.46875e6)).unwrap();
+        let recording = Rule {
+            record: true,
+            ..rule("LPD 17", 433.46875e6)
+        };
+        assert_eq!(
+            view.set_record(&recording),
+            "alert on LPD 17 records: record = true in the alerts file"
+        );
+        assert!(view.rule_on(433.475e6, 12.5e3).unwrap().record);
+        let quiet = rule("LPD 17", 433.46875e6);
+        assert_eq!(
+            view.set_record(&quiet),
+            "alert on LPD 17 records no more: record = false in the alerts file"
+        );
+        // By its band, under whatever name.
+        assert_eq!(
+            view.remove(&rule("433.475 MHz", 433.46875e6)),
+            "alert on LPD 17 removed from the alerts file"
+        );
+        assert_eq!(view.rule_on(433.475e6, 12.5e3), None);
+        assert_eq!(view.rules(), [rule("gate", 433.9e6)]);
+        assert_eq!(
+            view.take_changes(),
+            [
+                Change::Made(quiet.clone()),
+                Change::Record(recording),
+                Change::Record(quiet.clone()),
+                Change::Removed(rule("433.475 MHz", 433.46875e6)),
+            ]
+        );
+    }
+
+    #[test]
+    fn without_a_file_a_band_s_rules_record_and_go_for_this_run() {
+        let mut view = AlertsView::new(vec![rule("gate", 433.9e6)], false);
+        let recording = Rule {
+            record: true,
+            ..rule("gate", 433.9e6)
+        };
+        assert_eq!(
+            view.set_record(&recording),
+            "alert on gate records for this run: there is no alerts file"
+        );
+        assert_eq!(
+            view.remove(&recording),
+            "alert on gate removed for this run: there is no alerts file"
+        );
+        assert!(view.rules().is_empty());
+        assert!(view.take_changes().is_empty());
     }
 
     #[test]
@@ -231,7 +361,7 @@ mod tests {
             Ok("alert on LPD 17 for this run: there is no alerts file".into())
         );
         assert_eq!(view.rules().len(), 1);
-        assert!(view.take_new().is_empty());
+        assert!(view.take_changes().is_empty());
     }
 
     #[test]

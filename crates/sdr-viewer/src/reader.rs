@@ -241,6 +241,15 @@ pub fn run(
                     pipeline.add_rule(rule);
                     Ok(None)
                 }
+                // A recording going on goes on to its end.
+                Command::RemoveRule(band) => {
+                    pipeline.remove_rules(&band);
+                    Ok(None)
+                }
+                Command::RecordRule(band) => {
+                    pipeline.set_record(&band);
+                    Ok(None)
+                }
             };
             // The answer to a key press must not get lost: wait for room.
             let _ = match done {
@@ -751,6 +760,41 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_band_s_rules_removed_give_no_alerts() {
+        let (tx, rx) = sync_channel(1);
+        let (command_tx, command_rx) = channel();
+        let (over_tx, over_rx) = channel();
+        let rule = Rule {
+            name: "burst".into(),
+            low_hz: 434.19e6,
+            high_hz: 434.21e6,
+            min_duration: Duration::from_millis(100),
+            min_above_db: 20.0,
+            record: false,
+        };
+        let band = Rule {
+            name: "434.200 MHz".into(),
+            record: true,
+            ..rule.clone()
+        };
+        command_tx.send(Command::AddRule(rule)).unwrap();
+        command_tx.send(Command::RecordRule(band.clone())).unwrap();
+        command_tx.send(Command::RemoveRule(band)).unwrap();
+        let source = Announced(demo(), over_tx);
+        let reader = std::thread::spawn(move || {
+            let stop = Arc::new(AtomicBool::new(false));
+            run(source, tx, command_rx, stop, Sinks::default());
+        });
+        over_rx.recv().unwrap();
+        let got: Vec<Update> = rx.iter().collect();
+        reader.join().unwrap();
+        assert!(
+            !got.iter().any(|update| matches!(update, Update::Alerts(_))),
+            "{got:?}"
+        );
     }
 
     fn last_status(source: impl Source) -> SourceStatus {

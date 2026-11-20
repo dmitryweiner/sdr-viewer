@@ -32,8 +32,12 @@ const SAME_HZ: f64 = 1.0;
 impl Rule {
     /// Whether `other` watches the same band, whatever else it asks.
     pub fn same_band(&self, other: &Rule) -> bool {
-        (self.low_hz - other.low_hz).abs() < SAME_HZ
-            && (self.high_hz - other.high_hz).abs() < SAME_HZ
+        self.has_band(other.low_hz, other.high_hz)
+    }
+
+    /// Whether its band is this one.
+    pub fn has_band(&self, low_hz: f64, high_hz: f64) -> bool {
+        (self.low_hz - low_hz).abs() < SAME_HZ && (self.high_hz - high_hz).abs() < SAME_HZ
     }
 
     pub fn is_met_by(&self, event: &Event) -> bool {
@@ -93,6 +97,36 @@ impl Alerts {
     /// Holds the events against `rule` too, from the next check on.
     pub fn add(&mut self, rule: Rule) {
         self.rules.push(rule);
+    }
+
+    /// Lets go of every rule of `band`'s band, whatever else they ask;
+    /// says how many. The others go on as they were: an event that gave
+    /// one of theirs gives it no more.
+    pub fn remove(&mut self, band: &Rule) -> usize {
+        // Each rule's index from now on, none for those that go.
+        let mut kept = 0;
+        let mut index = Vec::with_capacity(self.rules.len());
+        for rule in &self.rules {
+            if rule.same_band(band) {
+                index.push(None);
+            } else {
+                index.push(Some(kept));
+                kept += 1;
+            }
+        }
+        let removed = self.rules.len() - kept;
+        self.rules.retain(|rule| !rule.same_band(band));
+        self.given = (self.given.iter())
+            .filter_map(|&(number, rule)| index[rule].map(|rule| (number, rule)))
+            .collect();
+        removed
+    }
+
+    /// Makes every rule of `band`'s band record, or not, as `band` does,
+    /// from their next alerts on; says how many.
+    pub fn set_record(&mut self, band: &Rule) -> usize {
+        let rules = self.rules.iter_mut().filter(|rule| rule.same_band(band));
+        rules.map(|rule| rule.record = band.record).count()
     }
 
     /// Holds the events going on, with their detector's numbers, against
@@ -266,5 +300,61 @@ mod tests {
         let mut given = 0;
         alerts.check(&open, |_| given += 1);
         assert_eq!((alerts.rules(), given), (&[rule()][..], 1));
+    }
+
+    #[test]
+    fn a_band_s_rules_removed_give_no_more_alerts_and_the_others_go_on_as_they_were() {
+        let wide = Rule {
+            name: "ISM".into(),
+            low_hz: 433.05e6,
+            high_hz: 434.79e6,
+            min_duration: Duration::ZERO,
+            min_above_db: DEFAULT_MIN_ABOVE_DB,
+            record: false,
+        };
+        let twin = Rule {
+            name: "keyfob too".into(),
+            ..rule()
+        };
+        let mut alerts = Alerts::new(vec![rule(), wide.clone(), twin]);
+        let mut given = Vec::new();
+        let long = |center_hz| event(center_hz, ms(1500), 25.0);
+        alerts.check(&[(1, long(433.95e6))], |alert| given.push(alert.rule));
+        assert_eq!(given, ["keyfob", "ISM", "keyfob too"]);
+        given.clear();
+        // Both rules of the band go, by its band alone.
+        let band = Rule {
+            name: "whatever".into(),
+            record: true,
+            ..rule()
+        };
+        assert_eq!(alerts.remove(&band), 2);
+        assert_eq!(alerts.rules(), [wide]);
+        // The wide rule's alert for the event going on was given already.
+        alerts.check(&[(1, long(433.95e6))], |alert| given.push(alert.rule));
+        assert!(given.is_empty(), "{given:?}");
+        alerts.check(&[(1, long(433.95e6)), (2, long(433.96e6))], |alert| {
+            given.push(format!("{} {}", alert.rule, alert.number));
+        });
+        assert_eq!(given, ["ISM 2"]);
+        assert_eq!(alerts.remove(&band), 0);
+    }
+
+    #[test]
+    fn a_band_s_rules_record_from_their_next_alert_and_an_event_going_on_gives_none_again() {
+        let mut alerts = Alerts::new(vec![rule()]);
+        let mut given = Vec::new();
+        let long = |center_hz| event(center_hz, ms(1500), 25.0);
+        alerts.check(&[(1, long(433.95e6))], |alert| given.push(alert.record));
+        let band = Rule {
+            record: true,
+            ..rule()
+        };
+        assert_eq!(alerts.set_record(&band), 1);
+        assert!(alerts.rules()[0].record);
+        alerts.check(&[(1, long(433.95e6)), (2, long(433.92e6))], |alert| {
+            given.push(alert.record);
+        });
+        assert_eq!(given, [false, true]);
     }
 }

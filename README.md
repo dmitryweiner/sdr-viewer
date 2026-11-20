@@ -71,12 +71,13 @@ still leaves the lowest bar. On the right: the channel's period when it
 repeats for sure (see the periodicity screen below), the share of the
 shown time the channel was busy, and how long it has been quiet (`now`
 while a signal is on). A channel outside the band being received is
-dimmed.
+dimmed. Before the name, `!` marks a channel with an alert on its band,
+`!R` one whose alert records (see "Alerts").
 
 ```
-LPD 17       ····▂····▂····▂····▂····▂····▂····▂····  5.00 s  6.0%   4 s
-433.700 MHz  ·····████████████████████··············           36%  30 s
-434.100 MHz  ···························▄███████████           21%   now
+!R LPD 17       ····▂····▂····▂····▂····▂····▂····▂····  5.00 s  6.0%   4 s
+   433.700 MHz  ·····████████████████████··············           36%  30 s
+   434.100 MHz  ···························▄███████████           21%   now
 ```
 
 | Key | What |
@@ -84,6 +85,8 @@ LPD 17       ····▂····▂····▂····▂····▂····▂�
 | `↑` `↓` `PgUp` `PgDn` `Home` `End` | select a channel (`Esc` lets go) |
 | `+` `-` | fewer, more seconds to a column: 1, 10, 60, 300 |
 | `Enter` | tune to the selected channel and show the spectrum |
+| `!` | an alert on the selected channel; again, none (see "Alerts") |
+| `R` `R` | its alert records (it asks once); `R` once, it records no more |
 | `X` `X` | let go of the channels the app made (it asks once): from the strip and from the file; those with a name or `hide` stay, and so do those with a signal on at that moment |
 
 The last 4 hours of this run are remembered.
@@ -176,6 +179,7 @@ began, how long it lasted, where, how wide, how strong:
 | `s` | sort by time, level, duration, frequency |
 | `Enter` | tune to the selected event and show the spectrum |
 | `r` | save the selected event's IQ samples |
+| `!` | an alert on the selected event's band; again, none (see "Alerts") |
 | `X` `X` | erase the log (it asks once): every ended event, those of earlier runs too, and with a database from the database as well; the events on now stay |
 
 The picture of the selected event is a small spectrogram made of its
@@ -334,11 +338,21 @@ sdr-viewer ~/.local/share/sdr-viewer/iq/alerts/20261120T143012.250Z_433.475MHz.s
 name, or its frequency); in the log, for the selected event's band (at
 least 10 kHz wide). It holds at once, and goes to the end of the file
 with every key written, ready to be changed: `min_ms = 0`, `min_db = 10`,
-`record = false`. A band that has a rule already gets no second one.
+`record = false`. `!` again on a band that has a rule removes it — every
+rule of exactly that band, from the file too, whatever its keys say.
 
-The app reads the file when it starts and only ever adds to its end:
-what you wrote stays as it is. Edit it while the app is not running, or
-your changes hold only from the next start. A rule that does not read —
+On the strip, `R` twice on a channel with a rule makes it record
+(`record = true` in the file: the line changed, or added); `R` once on
+one that records stops it at once. A recording going on then goes on to
+its end; one asked for begins with the rule's next alert, not with a
+signal that is on already. The strip marks the channels whose band has a
+rule with a red `!` before the name, `!R` when it records; a rule over a
+wider band (the whole ISM band, say) marks none.
+
+Apart from what `!` and `R` do — a rule's `[[alert]]` table added or
+removed, its `record` line set — the app never changes the file: what
+you wrote stays as it is, byte for byte, comments too. Edit it while the
+app is not running, or your changes hold only from the next start. A rule that does not read —
 a key mistyped too — stops the app at the start with what is wrong.
 
 ### The event database

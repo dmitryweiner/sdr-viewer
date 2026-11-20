@@ -1,7 +1,8 @@
 //! The alerts file: TOML the user writes, one `[[alert]]` rule each. The
 //! app reads it at the start; one that does not exist yet is made with an
-//! example in its comments. The app only adds to its end — the rules
-//! made with `!` — and never rewrites what is there.
+//! example in its comments. The app adds to its end the rules made with
+//! `!`; `!` again removes a band's rules, and `R` sets their `record` —
+//! everything else stays as it is, byte for byte.
 
 use std::fmt::Write;
 use std::path::Path;
@@ -11,6 +12,8 @@ use sdr_core::units::format_hz;
 use sdr_detect::Rule;
 use sdr_detect::alert::DEFAULT_MIN_ABOVE_DB;
 use toml::{Table, Value};
+
+use crate::channels::{blank_or_comment, is_header_of, tables, without};
 
 /// What a new file is.
 pub const HEADER: &str = "\
@@ -38,7 +41,8 @@ pub const HEADER: &str = "\
 # narrow one), from 1 s before it to 1 s after it, as a SigMF pair in
 # alerts/ beside the samples r saves in the log.
 # ! on the channel strip or the log adds a rule for the selected channel
-# or event to the end of this file.
+# or event to the end of this file, and removes it when pressed again.
+# R twice on the strip makes the channel's rule record; R once, no more.
 ";
 
 /// The keys a rule may have.
@@ -222,6 +226,114 @@ pub fn add(path: &Path, new: &[Rule]) -> Result<usize, String> {
         crate::channels::replace(path, &text)?;
     }
     Ok(added)
+}
+
+/// Whether a table of a file's text is a rule of `band`'s band.
+fn is_rule_of(table: &[&str], band: &Rule) -> Result<bool, String> {
+    if !is_header_of(table[0], "alert") {
+        return Ok(false);
+    }
+    let rule = parse(&table.concat())?.into_iter().next();
+    Ok(rule.is_some_and(|rule| rule.same_band(band)))
+}
+
+/// `text` without its rules of `band`'s band, whatever else they ask,
+/// and how many went. Everything else stays byte for byte; the comment
+/// lines that end a removed rule stay too, as they are most likely about
+/// the next one.
+pub fn remove_band(text: &str, band: &Rule) -> Result<(String, usize), String> {
+    parse(text)?;
+    let (out, removed) = without(text, |table| is_rule_of(table, band))?;
+    parse(&out)?;
+    Ok((out, removed))
+}
+
+/// `text` with its rules of `band`'s band recording, or not, as `band`
+/// does, and how many changed: the value of a rule's `record` changes,
+/// or a rule without one gets it after its keys. Everything else stays
+/// byte for byte.
+pub fn set_record(text: &str, band: &Rule) -> Result<(String, usize), String> {
+    let rules = parse(text)?;
+    let mut out = String::new();
+    let mut changed = 0;
+    let mut rules = rules.iter();
+    for table in tables(text) {
+        // The file's rules come in the order of their tables.
+        let rule = is_header_of(table[0], "alert")
+            .then(|| rules.next())
+            .flatten();
+        if rule.is_some_and(|rule| rule.same_band(band) && rule.record != band.record) {
+            changed += 1;
+            out += &with_record(&table, band.record);
+        } else {
+            out.extend(table.iter().copied());
+        }
+    }
+    parse(&out)?;
+    Ok((out, changed))
+}
+
+/// A rule's table with `record = value`.
+fn with_record(table: &[&str], value: bool) -> String {
+    let is_record = |line: &str| {
+        !blank_or_comment(line)
+            && line
+                .split_once('=')
+                .is_some_and(|(key, _)| key.trim() == "record")
+    };
+    let line = table.iter().position(|line| is_record(line));
+    if let Some(at) = line {
+        let (key, old) = table[at].split_once('=').expect("a key's line");
+        let rest = old.trim_start();
+        let spaces = &old[..old.len() - rest.len()];
+        // It reads, so it is one of the two.
+        let after = rest.strip_prefix("true").or(rest.strip_prefix("false"));
+        let line = format!("{key}={spaces}{value}{}", after.unwrap_or_default());
+        return [&table[..at], &[line.as_str()], &table[at + 1..]]
+            .concat()
+            .concat();
+    }
+    // After its last key, before the blank and comment lines that end it.
+    let tail = (table.iter().rev())
+        .take_while(|line| blank_or_comment(line))
+        .count();
+    let (keys, tail) = table.split_at(table.len() - tail);
+    let mut out = keys.concat();
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    let _ = writeln!(out, "record = {value}");
+    out + &tail.concat()
+}
+
+/// Carries `edit` out on the file at `path` as it is on the disk now; no
+/// file is nothing to do. The new text replaces the old in one step.
+fn change(
+    path: &Path,
+    edit: impl FnOnce(&str) -> Result<(String, usize), String>,
+) -> Result<usize, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(err.to_string()),
+    };
+    let (text, changed) = edit(&text)?;
+    if changed > 0 {
+        crate::channels::replace(path, &text)?;
+    }
+    Ok(changed)
+}
+
+/// Removes the rules of `band`'s band from the file at `path` (see
+/// [`remove_band`]); says how many went.
+pub fn remove(path: &Path, band: &Rule) -> Result<usize, String> {
+    change(path, |text| remove_band(text, band))
+}
+
+/// Makes the rules of `band`'s band in the file at `path` record, or
+/// not, as `band` does (see [`set_record`]); says how many changed.
+pub fn record(path: &Path, band: &Rule) -> Result<usize, String> {
+    change(path, |text| set_record(text, band))
 }
 
 /// What the file at `path` says; no rules when there is no file.
@@ -431,6 +543,131 @@ width_khz = 12.5
         assert_eq!(append(MINE, &[made(), made(), gate]).unwrap().1, 1);
         // A file that does not read is not added to.
         assert!(append("[[alert]]\n", &[made()]).is_err());
+    }
+
+    /// The user's gate, the channel's rule with recording asked for, and a
+    /// bell after a comment about it.
+    const THREE: &str = "\
+# my alerts
+[[alert]]
+name = \"gate\"  # the gate
+from_mhz = 433.9
+to_mhz = 434
+
+[[alert]]
+name = \"LPD 17\"
+freq_mhz = 433.475
+width_khz = 12.5
+record = true
+
+# the bell
+[[alert]]
+freq_mhz = 434.5
+width_khz = 25
+";
+
+    #[test]
+    fn a_band_s_rule_goes_from_the_text_and_everything_else_stays_byte_for_byte() {
+        let (text, removed) = remove_band(THREE, &made()).unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(
+            text,
+            "\
+# my alerts
+[[alert]]
+name = \"gate\"  # the gate
+from_mhz = 433.9
+to_mhz = 434
+
+# the bell
+[[alert]]
+freq_mhz = 434.5
+width_khz = 25
+"
+        );
+        // The last rule, and the first: what is before it stays.
+        let bell = Rule {
+            low_hz: 434.4875e6,
+            high_hz: 434.5125e6,
+            ..made()
+        };
+        let (text, _) = remove_band(&text, &bell).unwrap();
+        assert_eq!(
+            text,
+            "# my alerts\n[[alert]]\nname = \"gate\"  # the gate\nfrom_mhz = 433.9\nto_mhz = 434\n\n# the bell\n"
+        );
+        let gate = Rule {
+            low_hz: 433.9e6,
+            high_hz: 434.0e6,
+            ..made()
+        };
+        assert_eq!(
+            remove_band(&text, &gate).unwrap(),
+            ("# my alerts\n# the bell\n".into(), 1)
+        );
+        // A band without a rule is nothing to do.
+        assert_eq!(remove_band(MINE, &made()), Ok((MINE.into(), 0)));
+        assert!(remove_band("[[alert]]\n", &made()).is_err());
+    }
+
+    #[test]
+    fn a_band_s_rule_records_or_not_with_its_line_changed_or_one_added() {
+        let quiet = Rule {
+            record: false,
+            ..made()
+        };
+        let (text, changed) = set_record(THREE, &quiet).unwrap();
+        assert_eq!(changed, 1);
+        assert_eq!(text, THREE.replace("record = true", "record = false"));
+        // Already so: nothing to do.
+        assert_eq!(set_record(THREE, &made_recording()), Ok((THREE.into(), 0)));
+        // The gate has no `record`: it goes after its keys, before the
+        // blank line.
+        let gate = Rule {
+            low_hz: 433.9e6,
+            high_hz: 434.0e6,
+            ..made_recording()
+        };
+        let (text, _) = set_record(THREE, &gate).unwrap();
+        assert_eq!(
+            text,
+            THREE.replace("to_mhz = 434\n", "to_mhz = 434\nrecord = true\n")
+        );
+        assert!(parse(&text).unwrap()[0].record);
+        // Written closely, or with a comment: only the value changes.
+        let own = "[[alert]]\nfreq_mhz = 433.475\nwidth_khz = 12.5\nrecord=false # not yet\n";
+        assert_eq!(
+            set_record(own, &made_recording()).unwrap().0,
+            own.replace("record=false", "record=true")
+        );
+        // `record_limit_mb` is not a rule's `record`.
+        let limited = format!("record_limit_mb = 10\n{own}");
+        let (text, _) = set_record(&limited, &made_recording()).unwrap();
+        assert!(text.starts_with("record_limit_mb = 10\n"), "{text}");
+        assert!(parse(&text).unwrap()[0].record);
+        assert_eq!(set_record(MINE, &made()), Ok((MINE.into(), 0)));
+    }
+
+    fn made_recording() -> Rule {
+        Rule {
+            record: true,
+            ..made()
+        }
+    }
+
+    #[test]
+    fn a_file_s_rule_records_and_goes_on_the_disk_and_a_file_not_there_is_left_so() {
+        let dir = TempDir::new("change");
+        let path = dir.0.join("sdr-viewer/alerts.toml");
+        assert_eq!(record(&path, &made_recording()), Ok(0));
+        assert_eq!(remove(&path, &made()), Ok(0));
+        assert!(!path.exists());
+        add(&path, &[made()]).unwrap();
+        assert_eq!(record(&path, &made_recording()), Ok(1));
+        assert!(load(&path).unwrap().rules[0].record);
+        assert_eq!(remove(&path, &made()), Ok(1));
+        // Back to the example alone.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), HEADER);
     }
 
     /// A directory of its own per test, removed when dropped.
