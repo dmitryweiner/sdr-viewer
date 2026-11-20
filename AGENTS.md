@@ -19,17 +19,14 @@ Phases of the plan (its section 14 has the detail):
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
 | 3 Detector and log | done, and found working on the air on the device by the user (2026-11-13): the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples |
 | 4 Accumulators | done: the spectral density (screen 4) and the channel strip (screen 2) were tried by the user on the air on the device and approved (2026-11-14) — with what that trial asked for: the detector's stuck events fixed, the receiver's spike kept off the strip, `X` twice on the strip and on the log, the band's name in the spectrum's header. Periodicity (screen 3, and the period in the strip's rows), built as the user decided (the plan's section 12), was tried by them on the air and "works well" (2026-11-15); its tab was then moved right after the channels', which it reads (it was screen 4, the density 3) |
-| 5 Meshtastic | started (2026-11-15): `meshtasticd` runs on the device's LoRa radio and the node is set up (`docs/hardware.md`, section 6); the user's decisions for the app are in the plan's section 12. Built: the client (`sdr-mesh`) and the pulse (`--mesh`, screen 6), tried by the user on the device (2026-11-15); what that trial asked for is built (the plan's section 12: the reminder to start `meshtasticd`, the axis on top with the time of day, the pulse stepping at once, no dots where the app was not listening, `s` `a` `m`; PR #32, merged into #31's branch) and the user found it "working great" (2026-11-20). On `main` (PR #31) |
+| 5 Meshtastic | started (2026-11-15): `meshtasticd` runs on the device's LoRa radio and the node is set up (`docs/hardware.md`, section 6); the user's decisions for the app are in the plan's section 12. Built: the client (`sdr-mesh`) and the pulse (`--mesh`, screen 6), tried by the user on the device (2026-11-15); what that trial asked for is built (the plan's section 12: the reminder to start `meshtasticd`, the axis on top with the time of day, the pulse stepping at once, no dots where the app was not listening, `s` `a` `m`; PR #32, merged into #31's branch) and the user found it "working great" (2026-11-20). On `main` (PR #31). The node's own row as the user decided (2026-11-20): what the node hands the app alone is a dim mark, not heard (PR #34, not tried on the device yet) |
 | 6–8 | not started |
 
-Next: the node's own row of the pulse — `meshtasticd` hands a connected
-client its device telemetry every minute, over the API, not on the air,
-and the pulse draws it as the node's ticks ("telemetry to all"), which
-the user took for transmissions (2026-11-20; the plan's known limits of
-the pulse); then the mesh's packets in the database, then texts,
-telemetry and positions (the plan's section 14). How each of the three
-looks is the user's decision of 2026-11-20 (the plan's section 12); SDR
-and LoRa stay apart (asked again that day: never together).
+Next: the user tries the node's own row on the device (PR #34); then
+the mesh's packets in the database, then texts, telemetry and positions
+(the plan's section 14). How each of them looks is the user's decision
+of 2026-11-20 (the plan's section 12); SDR and LoRa stay apart (asked
+again that day: never together).
 
 ## Commands
 
@@ -221,7 +218,8 @@ a crate is added in the phase that needs it):
   worked out as the firmware does), `session` (`Session`: the request
   for the configuration, the heartbeat, `FromRadio` → `MeshUpdate`s),
   `update` (the plain types the interface gets: `MeshUpdate`, `Ready`,
-  `Node`, `NodeUser`, `Packet`, `Content`), `client` (`run`: connect,
+  `Node`, `NodeUser`, `Packet` — `app_only`: made by the node for its
+  clients alone — `Content`), `client` (`run`: connect,
   read, heartbeat a minute, connect again after 5 s; `tcp`).
 - `sdr-tui` — `app` (state, keys and the `Command`s they ask of the
   source; no drawing), `ui` (frame of the interface, `render_text`),
@@ -354,6 +352,9 @@ a crate is added in the phase that needs it):
   minute a column), so the whole pulse steps at once; the times the app
   was connected (from `Ready` to `Lost`, by the view's clock) are
   remembered, and a column it was not listening in gets no dots.
+- What the node makes for its clients alone (`Packet::app_only`: its
+  own, without `hop_start`) was never on the air: it is a mark of its own
+  on the node's row, never a tick, and never counts as heard.
 - The pulse's sort, `a` (heard in the last 15 m) and `m` (afresh from
   now) only choose what is shown: no node, packet or name is forgotten.
   The node itself is always the first row.

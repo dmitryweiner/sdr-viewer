@@ -1,5 +1,6 @@
 //! Drawing the Meshtastic pulse: one row per node, its names on the left,
-//! a tick for each packet heard from it in the middle — all rows on one
+//! a tick for each packet heard from it in the middle (a dim mark for what
+//! the node handed this app alone, never on the air) — all rows on one
 //! time axis of the wall clock, now at the right — and on the right how
 //! long ago it was heard, with the SNR, RSSI and hops of its last packet.
 //! The axis and the columns' names are on top; under the rows, what the
@@ -27,6 +28,8 @@ const FIGURES: u16 = 25;
 
 const HEARD: Color = Color::Rgb(90, 200, 120);
 const OWN: Color = Color::Cyan;
+/// What the node handed this app alone: dim, not a tick of the air.
+const APP_ONLY: Color = Color::Rgb(90, 120, 140);
 
 pub(crate) fn draw(frame: &mut Frame, view: &MeshView, area: Rect) {
     let rows = view.rows();
@@ -70,6 +73,7 @@ pub(crate) fn draw(frame: &mut Frame, view: &MeshView, area: Rect) {
         };
         let ticks = Ticks {
             cells: view.cells(row, columns),
+            app_only: view.app_only_cells(row, columns),
             listened: &listened,
         };
         draw_row(frame, view, row, selected == Some(y), &ticks, area);
@@ -79,9 +83,11 @@ pub(crate) fn draw(frame: &mut Frame, view: &MeshView, area: Rect) {
     }
 }
 
-/// A row's packets per column, and the columns the app was listening in.
+/// A row's packets per column, what the node handed this app alone, and
+/// the columns the app was listening in.
 struct Ticks<'a> {
     cells: Vec<u32>,
+    app_only: Vec<u32>,
     listened: &'a [bool],
 }
 
@@ -220,13 +226,16 @@ fn draw_row(
             ..area
         },
     );
-    for (column, (&count, &listened)) in ticks.cells.iter().zip(ticks.listened).enumerate() {
+    let columns = ticks.cells.iter().zip(&ticks.app_only).zip(ticks.listened);
+    for (column, ((&count, &app_only), &listened)) in columns.enumerate() {
         let at = &mut frame.buffer_mut()[(area.x + LABEL + column as u16, area.y)];
         if count > 0 {
             // One packet is half a cell; three or more fill it.
             let eighths = (2 + 2 * count as usize).min(8);
             at.set_symbol(BARS[eighths])
                 .set_style(Style::new().fg(HEARD));
+        } else if app_only > 0 {
+            at.set_symbol("•").set_style(Style::new().fg(APP_ONLY));
         } else if listened {
             at.set_symbol("·")
                 .set_style(Style::new().fg(Color::DarkGray));
@@ -309,6 +318,9 @@ fn draw_card(frame: &mut Frame, view: &MeshView, row: &NodeRow, area: Rect) {
         n => format!(" · {n} packets in this run"),
     };
     who.push(dim(heard));
+    if row.app_only > 0 {
+        who.push(dim(format!(" · {} to this app only", row.app_only)));
+    }
     let last = row.last.as_ref().map_or_else(
         || Line::from(dim(" Its packets will show here.".into())),
         |packet| packet_line(view, packet),
@@ -336,6 +348,15 @@ fn packet_line(view: &MeshView, packet: &Packet) -> Line<'static> {
             .and_then(|row| row.user.as_ref().map(|user| user.short_name.clone()))
             .unwrap_or_else(|| format!("!{to:08x}")),
     };
+    let ago = Duration::from_secs(view.now().saturating_sub(packet.received));
+    if packet.app_only {
+        return Line::from(vec![
+            dim(" last: ".into()),
+            Span::raw(kind).bold(),
+            dim(" to this app only, not on the air".into()),
+            dim(format!(" · {} ago", format_ago(ago))),
+        ]);
+    }
     let mut spans = vec![
         dim(" last: ".into()),
         Span::raw(kind).bold(),
@@ -368,7 +389,6 @@ fn packet_line(view: &MeshView, packet: &Packet) -> Line<'static> {
     if packet.via_mqtt {
         spans.push(dim(" · via MQTT".into()));
     }
-    let ago = Duration::from_secs(view.now().saturating_sub(packet.received));
     spans.push(dim(format!(" · {} ago", format_ago(ago))));
     Line::from(spans)
 }

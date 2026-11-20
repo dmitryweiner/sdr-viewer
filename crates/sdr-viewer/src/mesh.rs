@@ -145,7 +145,9 @@ fn describe(view: &MeshView, packet: &Packet) -> String {
                 .to_string()
         })
         .unwrap_or_default();
-    let to = if packet.to == BROADCAST {
+    let to = if packet.app_only {
+        "this app".to_string()
+    } else if packet.to == BROADCAST {
         "all".to_string()
     } else {
         format!("!{:08x}", packet.to)
@@ -171,6 +173,32 @@ fn describe(view: &MeshView, packet: &Packet) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_the_node_hands_the_app_alone_is_not_to_all() {
+        let mut minute = Packet {
+            received: 36_000,
+            from: 0x015b_8900,
+            to: BROADCAST,
+            channel: 0,
+            id: 1,
+            snr: 0.0,
+            rssi: 0,
+            hops: None,
+            hop_start: 0,
+            relay: 0,
+            via_mqtt: false,
+            app_only: true,
+            content: Content::Other {
+                port: 67,
+                name: "telemetry".into(),
+            },
+        };
+        let view = MeshView::new(Link::Off);
+        assert!(describe(&view, &minute).contains("!015b8900 → this app "));
+        minute.app_only = false;
+        assert!(describe(&view, &minute).contains("!015b8900 → all "));
+    }
 
     #[test]
     fn the_command_that_starts_meshtasticd_is_the_lora_script_beside_the_app() {

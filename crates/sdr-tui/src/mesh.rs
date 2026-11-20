@@ -1,5 +1,6 @@
 //! The Meshtastic pulse's state: the nodes `meshtasticd` knows and the
-//! packets heard from each in this run, on a time axis of the wall clock
+//! packets heard from each in this run (and what the node handed this app
+//! alone), on a time axis of the wall clock
 //! (Unix seconds) whose columns begin on whole minutes (or whatever a
 //! column stands for), so that the whole pulse steps at once; when the app
 //! was listening; the order, what is shown, the selection and the time
@@ -65,12 +66,17 @@ pub struct NodeRow {
     pub snr: Option<f32>,
     pub rssi: Option<i32>,
     pub hops: Option<u32>,
-    /// The last packet heard from it in this run.
+    /// Its last packet in this run, heard or for this app only.
     pub last: Option<Packet>,
     /// When its packets of this run arrived, oldest first.
     times: VecDeque<u64>,
     /// How many packets this run has heard from it.
     pub packets: u64,
+    /// When the node handed this app what it made for its clients alone
+    /// (`Packet::app_only`): no packet heard, never on the air.
+    app_only_times: VecDeque<u64>,
+    /// How many of those.
+    pub app_only: u64,
 }
 
 impl NodeRow {
@@ -85,6 +91,8 @@ impl NodeRow {
             last: None,
             times: VecDeque::new(),
             packets: 0,
+            app_only_times: VecDeque::new(),
+            app_only: 0,
         }
     }
 
@@ -173,6 +181,12 @@ impl MeshView {
 
     fn on_packet(&mut self, packet: Packet) {
         let row = self.row_mut(packet.from);
+        if packet.app_only {
+            keep(&mut row.app_only_times, packet.received);
+            row.app_only += 1;
+            row.last = Some(packet);
+            return;
+        }
         if let Content::User(user) = &packet.content {
             row.user = Some(user.clone());
         }
@@ -185,15 +199,7 @@ impl MeshView {
         if packet.hops.is_some() {
             row.hops = packet.hops;
         }
-        row.times.push_back(packet.received);
-        while row.times.len() > MAX_TICKS
-            || row
-                .times
-                .front()
-                .is_some_and(|&t| t + HISTORY_S < packet.received)
-        {
-            row.times.pop_front();
-        }
+        keep(&mut row.times, packet.received);
         row.packets += 1;
         row.last = Some(packet);
     }
@@ -265,14 +271,23 @@ impl MeshView {
         self.nodes.len()
     }
 
-    /// Packets of `row` per column, `columns` of them up to the one now is
-    /// in, the oldest first; none from before the list was started afresh.
+    /// Packets heard from `row` per column, `columns` of them up to the
+    /// one now is in, the oldest first; none from before the list was
+    /// started afresh.
     pub fn cells(&self, row: &NodeRow, columns: usize) -> Vec<u32> {
+        self.count(&row.times, columns)
+    }
+
+    /// The same of what the node handed this app only.
+    pub fn app_only_cells(&self, row: &NodeRow, columns: usize) -> Vec<u32> {
+        self.count(&row.app_only_times, columns)
+    }
+
+    fn count(&self, times: &VecDeque<u64>, columns: usize) -> Vec<u32> {
         let scale = self.seconds_per_column();
         let from = self.since.unwrap_or(0);
         let mut cells = vec![0; columns];
-        for &time in row
-            .times
+        for &time in times
             .iter()
             .filter(|&&time| (from..=self.now).contains(&time))
         {
@@ -451,6 +466,15 @@ impl MeshView {
     }
 }
 
+/// Adds `time` to a row's times, and lets go of what is older than the
+/// history or beyond its count.
+fn keep(times: &mut VecDeque<u64>, time: u64) {
+    times.push_back(time);
+    while times.len() > MAX_TICKS || times.front().is_some_and(|&t| t + HISTORY_S < time) {
+        times.pop_front();
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -498,8 +522,18 @@ pub(crate) mod tests {
             hop_start: 5,
             relay: 0x6c,
             via_mqtt: false,
+            app_only: false,
             content,
         }
+    }
+
+    /// The node's device telemetry of every minute, as `meshtasticd`
+    /// hands it to the app: not received, never sent.
+    pub(crate) fn app_only(received: u64) -> Packet {
+        let mut minute = packet(ME, received, telemetry());
+        (minute.snr, minute.rssi, minute.hops) = (0.0, 0, None);
+        (minute.hop_start, minute.relay, minute.app_only) = (0, 0, true);
+        minute
     }
 
     pub(crate) fn telemetry() -> Content {
@@ -608,6 +642,33 @@ pub(crate) mod tests {
         let me = view.rows()[0];
         assert_eq!((me.snr, me.rssi, me.hops), (None, None, None));
         assert_eq!(me.packets, 1);
+    }
+
+    #[test]
+    fn what_only_the_app_got_is_no_packet_heard_and_has_marks_of_its_own() {
+        let mut view = view();
+        // Its device telemetry of 9:58:20 and 9:59:20, and what it sent on
+        // the air at 9:59:30.
+        for at in [35_900, 35_960] {
+            view.on_update(MeshUpdate::Packet(app_only(at)));
+        }
+        let me = view.rows()[0].clone();
+        assert_eq!((me.packets, me.app_only), (0, 2));
+        assert_eq!(view.heard(), 2);
+        assert_eq!(view.cells(&me, 20), [0; 20]);
+        assert_eq!(view.app_only_cells(&me, 20)[17..], [1, 1, 0]);
+        // The card tells it as the last.
+        assert!(me.last.as_ref().unwrap().app_only);
+        let mut sent = packet(ME, 35_970, telemetry());
+        (sent.snr, sent.rssi, sent.hops) = (0.0, 0, Some(0));
+        view.on_update(MeshUpdate::Packet(sent));
+        let me = view.rows()[0].clone();
+        assert_eq!((me.packets, me.app_only), (1, 2));
+        assert_eq!(view.heard(), 3);
+        assert_eq!(view.cells(&me, 20)[18], 1);
+        // Started afresh, the app's own go too.
+        view.start_afresh();
+        assert_eq!(view.app_only_cells(&me, 20), [0; 20]);
     }
 
     #[test]

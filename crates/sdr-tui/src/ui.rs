@@ -327,6 +327,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use sdr_core::SourceInfo;
+    use sdr_mesh::update::MeshUpdate;
 
     fn app() -> App {
         let mut app = App::new(SourceInfo {
@@ -1102,6 +1103,28 @@ mod tests {
         app.mesh.move_selection(1);
         app.mesh.move_selection(1);
         insta::assert_snapshot!(render(&app, 160, 45).backend());
+    }
+
+    #[test]
+    fn what_the_node_hands_the_app_alone_is_a_mark_of_its_own_and_the_card_says_so() {
+        let mut app = mesh_app();
+        // Its device telemetry of every minute since 9:30:10.
+        for at in (34_210..36_000).step_by(60) {
+            app.on_mesh(MeshUpdate::Packet(crate::mesh::tests::app_only(at)));
+        }
+        app.mesh.move_selection(1);
+        insta::assert_snapshot!(render(&app, 160, 45).backend());
+        let text = render_text(&app, 160, 45);
+        let own = text.lines().find(|line| line.starts_with("8900")).unwrap();
+        assert!(own.contains("••••"), "{own}");
+        assert!(
+            text.contains("not heard in this run · 30 to this app only"),
+            "{text}"
+        );
+        assert!(
+            text.contains("last: telemetry to this app only, not on the air · 50 s ago"),
+            "{text}"
+        );
     }
 
     #[test]

@@ -79,6 +79,11 @@ pub struct Packet {
     /// when not known.
     pub relay: u8,
     pub via_mqtt: bool,
+    /// The node made it for its clients alone and never sent it on the
+    /// air: its device telemetry every minute, its local stats every 15
+    /// (firmware 2.7.26, `DeviceTelemetry.cpp`). Told by the hops it
+    /// starts with, which the node sets on what it transmits only.
+    pub app_only: bool,
     pub content: Content,
 }
 

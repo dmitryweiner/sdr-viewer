@@ -74,7 +74,9 @@ impl Session {
             ConfigCompleteId(id) if id == self.config_id => {
                 return Some(MeshUpdate::Ready(self.ready()?));
             }
-            Packet(packet) => return Some(MeshUpdate::Packet(self::packet(packet, now))),
+            Packet(packet) => {
+                return Some(MeshUpdate::Packet(self::packet(packet, now, self.me)));
+            }
             _ => {}
         }
         None
@@ -140,7 +142,8 @@ fn user(user: proto::User) -> NodeUser {
     }
 }
 
-fn packet(packet: proto::MeshPacket, received: u64) -> Packet {
+/// `me`: the node's own number, once it has told it.
+fn packet(packet: proto::MeshPacket, received: u64, me: Option<u32>) -> Packet {
     let content = match packet.payload_variant {
         Some(mesh_packet::PayloadVariant::Decoded(data)) => content(data),
         _ => Content::Encrypted,
@@ -164,6 +167,7 @@ fn packet(packet: proto::MeshPacket, received: u64) -> Packet {
         hop_start: packet.hop_start,
         relay: (packet.relay_node & 0xff) as u8,
         via_mqtt: packet.via_mqtt,
+        app_only: Some(packet.from) == me && packet.hop_start == 0,
         content,
     }
 }
@@ -408,6 +412,35 @@ mod tests {
         assert_eq!(packets[2].received, 1500);
         assert_eq!(packets[3].content, Content::Encrypted);
         assert_eq!((packets[3].channel, packets[3].hops), (0x8b, None));
+    }
+
+    #[test]
+    fn what_the_node_made_for_its_clients_alone_is_told_apart() {
+        let mut session = Session::new(77);
+        let mut stream = config_stream(77);
+        // Its device telemetry of every minute: never sent, so the hop
+        // count it starts with was never set.
+        let mut minute = packet(data(PortNum::TelemetryApp, vec![]));
+        (minute.from, minute.hop_start, minute.hop_limit) = (0x015b_8900, 0, 3);
+        (minute.rx_snr, minute.rx_rssi, minute.relay_node) = (0.0, 0, 0);
+        // What it sent on the air, handed over too: the hops are set.
+        let mut sent = minute.clone();
+        sent.hop_start = 3;
+        // Another node's, from firmware that does not tell its hops.
+        let mut old = packet(data(PortNum::TelemetryApp, vec![]));
+        old.hop_start = 0;
+        for packet in [minute, sent, old] {
+            stream.extend(framed(from_radio::PayloadVariant::Packet(packet)));
+        }
+        let app_only: Vec<bool> = session
+            .on_bytes(&stream, 2000)
+            .iter()
+            .filter_map(|u| match u {
+                MeshUpdate::Packet(p) => Some(p.app_only),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(app_only, [true, false, false]);
     }
 
     #[test]
