@@ -131,14 +131,18 @@ touching USB.
   no data and reset the hub.
 - A new binary: download the PR's `sdr-viewer-aarch64` artifact
   (`gh run download RUN -n sdr-viewer-aarch64`) and `scp` it to
-  `~/sdr-viewer-check/sdr-viewer`. `smoke.py` there is PR #15's (arrow
-  keys). The user has run phase 3, the density and the channel strip on
+  `~/sdr-viewer-check/sdr-viewer`. `smoke.py` there is PR #38's (with
+  `--words`). The user has run phase 3, the density and the channel strip on
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-20 `sdr-viewer` there is PR #36's build with `X` twice
-  on the pulse and the selected node's feed (its first run brings
-  `events.db` to layout 3); its first commit's (texts, telemetry and
+  Since 2026-11-20 `sdr-viewer` there is PR #38's build (alerts: its
+  first run with `--rtlsdr` makes `~/.config/sdr-viewer/alerts.toml`
+  with the example; with the generator and a rule on its burst it showed
+  `! burst ×1` and `aplay` played without a word against it); PR #36's,
+  with `X` twice on the pulse and the selected node's feed (its first
+  run brings `events.db` to layout 3), is `sdr-viewer.before-alerts`;
+  its first commit's (texts, telemetry and
   positions) is `sdr-viewer.before-erase`, PR #35's (the mesh's
   database: its first run with `--mesh` or `--rtlsdr` brings the user's
   `events.db` up to layout 2, which the older builds below then refuse —
@@ -460,6 +464,7 @@ Measured on the dev Mac (Apple Silicon), release build:
 | The detector's fix of PR #24 on the CM4 (the recording looped, 160×45, 15 s, before and after) | nothing measurable: spectrum 38 → 36 and 35%, channel strip 22 → 19% |
 | The density on the CM4 (the recording looped, 160×45, 15 s, main's build and PR #22's side by side, twice) | gathering it costs nothing measurable: spectrum (`--keys 1`) 37 and 34% before, 35 and 36% with it. The density screen (`--keys 3`) **33 and 34%** of a core, 0.6 MB/s to the terminal against the spectrum's 0.9 |
 | Periodicity on the CM4 (the recording looped, 160×45, 15 s, PR #26's build and PR #28's side by side; 80 channels) | keeping bursts and working out one channel's period a frame costs nothing measurable: strip (`--keys 2`) 24 → 25% of a core, spectrum (`--keys 1`) 36 → 37%. The periodicity screen with a channel selected (`--keys $'4\x1b[B\x1b[B\x1b[B'`) **20%**, 11 kB/s to the terminal. On the Mac (generator, 12 s): spectrum 16%, strip 12%, periodicity 12% |
+| Alerts on the CM4 (`capture-433.cu8` looped, 160×45, 15 s, `smoke.py --keys 1`, twice each; a rule over the whole ISM band, met ~60 times a second: 608 alerts in 10 s) | 38 → **41%** of a core both times: the open events held against the rules 100 times a second, and `aplay` twice. Without rules nothing is checked |
 | `sdr-mesh`'s protobuf types (`build.rs`: `protox` + `prost-build`, ~10 500 lines of Rust) | ~10 s on a clean debug build of the crate; nothing on later builds unless `proto/` changes |
 | The Meshtastic pulse on the Mac (`smoke.py --keys $'6\x1b[B\x1b[B-+?1' --secs 8 -- --mesh=192.168.1.246`, the device's node over the LAN) | 0% of one core, 23 KiB to the terminal in 8 s |
 | The Meshtastic pulse on the CM4 (`smoke.py --keys 6`, and with two downs, 160×45, 15 s, `-- --mesh=127.0.0.1`; 17 nodes) | **0%** of a core (0.05 s in 15 s), 16–17 KiB to the terminal |
