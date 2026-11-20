@@ -2,7 +2,10 @@
 //! event detector with fast frames and the screen with their averages.
 
 use sdr_core::{Iq, SourceInfo, SpectrumFrame};
-use sdr_detect::{Density, DensityConfig, DensityMap, Detector, DetectorConfig, Event, Levels};
+use sdr_detect::{
+    Alert, Alerts, Density, DensityConfig, DensityMap, Detector, DetectorConfig, Event, Levels,
+    Rule,
+};
 use sdr_dsp::{Analyzer, AnalyzerConfig, FrameAverager};
 
 /// Bins per spectrum frame: ~1.2 kHz each at 2.4 MS/s, and more than twice
@@ -27,6 +30,8 @@ pub enum Output {
     /// How often each frequency was at each level, as of the frame just
     /// given; only while it is watched.
     Density(DensityMap),
+    /// An event going on has met a rule, in the frame just taken in.
+    Alert(Alert),
 }
 
 pub struct Pipeline {
@@ -37,6 +42,9 @@ pub struct Pipeline {
     /// that shows it opens on what happened before.
     density: Density,
     density_watched: bool,
+    /// The events going on are held against the rules with every
+    /// detector frame, so an alert comes the moment a rule is met.
+    alerts: Alerts,
 }
 
 impl Pipeline {
@@ -51,7 +59,13 @@ impl Pipeline {
             detector: Detector::new(DetectorConfig::default()),
             density: Density::new(DensityConfig::default()),
             density_watched: false,
+            alerts: Alerts::default(),
         }
+    }
+
+    /// Holds the events against `rule` too, from the next frame on.
+    pub fn add_rule(&mut self, rule: Rule) {
+        self.alerts.add(rule);
     }
 
     /// Whether the density goes out with every screen frame.
@@ -71,9 +85,14 @@ impl Pipeline {
             detector,
             density,
             density_watched,
+            alerts,
         } = self;
         analyzer.push(samples, info, |frame| {
             detector.push(&frame, |event| out(Output::Event(event)));
+            if !alerts.rules().is_empty() {
+                let open = detector.open_numbered();
+                alerts.check(&open, |alert| out(Output::Alert(alert)));
+            }
             density.push(&frame);
             if let Some(frame) = averager.push(&frame) {
                 out(Output::Frame(frame, detector.levels()));
@@ -121,6 +140,7 @@ mod tests {
             }
             Output::Event(event) => events.push(event),
             Output::Density(_) => panic!("nobody watches the density"),
+            Output::Alert(alert) => panic!("there are no rules: {alert:?}"),
         });
         // Every screen frame comes with the detector's floor under it:
         // where the band is quiet, the frame's own level.
@@ -236,7 +256,7 @@ mod tests {
         pipeline.push(&buf, &info, |output| match output {
             Output::Frame(..) => frames += 1,
             Output::Density(map) => maps.push(map),
-            Output::Event(_) => {}
+            Output::Event(_) | Output::Alert(_) => {}
         });
         assert_eq!(maps.len(), frames);
         let map = maps.last().unwrap();
@@ -259,6 +279,43 @@ mod tests {
         });
         // The burst is off now, and what it left is forgotten.
         assert_eq!(maps.last().unwrap().above(bin(434.2e6), -30.0), 0.0);
+    }
+
+    #[test]
+    fn a_rule_gives_its_alert_in_the_frame_an_event_meets_it() {
+        let mut generator = Generator::new(GeneratorConfig::demo());
+        let info = generator.info();
+        let mut pipeline = Pipeline::new(info.sample_rate);
+        let rule = |name: &str, center_hz: f64, min_ms: u64| Rule {
+            name: name.into(),
+            low_hz: center_hz - 10e3,
+            high_hz: center_hz + 10e3,
+            min_duration: Duration::from_millis(min_ms),
+            min_above_db: 20.0,
+        };
+        for rule in [
+            rule("carrier", 433.5e6, 500),
+            rule("burst", 434.2e6, 100),
+            rule("nothing there", 434.0e6, 0),
+            // The burst is on for 0.3 s.
+            rule("longer than the burst", 434.2e6, 400),
+        ] {
+            pipeline.add_rule(rule);
+        }
+        let mut alerts = Vec::new();
+        let mut buf = vec![Iq::new(0.0, 0.0); 2_400_000];
+        generator.read(&mut buf).unwrap();
+        pipeline.push(&buf, &info, |output| {
+            if let Output::Alert(alert) = output {
+                alerts.push((alert.rule.clone(), alert.time().as_secs_f64()));
+            }
+        });
+        // With the end of the detector's frame that met the rule: 10.24 ms each.
+        assert_eq!(alerts.len(), 2, "{alerts:?}");
+        assert_eq!(alerts[0].0, "burst");
+        assert!((0.1..0.1 + 0.0103).contains(&alerts[0].1), "{alerts:?}");
+        assert_eq!(alerts[1].0, "carrier");
+        assert!((0.5..0.5 + 0.0103).contains(&alerts[1].1), "{alerts:?}");
     }
 
     #[test]

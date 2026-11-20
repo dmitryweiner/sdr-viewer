@@ -244,12 +244,27 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         left.extend(health(app));
     }
     let left = Line::from(left);
-    let right = help_and_quit();
+    let right = alert_and_help(app);
     let right_width = u16::try_from(right.width()).unwrap_or(u16::MAX);
     let [left_area, right_area] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(right_width)]).areas(area);
     frame.render_widget(left, left_area);
     frame.render_widget(right, right_area);
+}
+
+/// The latest alert, if there was one, before the keys of help and quit.
+fn alert_and_help(app: &App) -> Line<'static> {
+    let mut line = help_and_quit();
+    if let Some(told) = app.alerts.told() {
+        let alert = Span::raw(told.text);
+        let alert = if told.bright {
+            alert.white().on_red().bold()
+        } else {
+            alert.red()
+        };
+        line.spans.splice(0..0, [alert, Span::raw("  ")]);
+    }
+    line
 }
 
 fn help_and_quit() -> Line<'static> {
@@ -328,7 +343,9 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use sdr_core::SourceInfo;
+    use sdr_detect::{Alert, Event};
     use sdr_mesh::update::MeshUpdate;
+    use std::time::Duration;
 
     fn app() -> App {
         let mut app = App::new(SourceInfo {
@@ -857,6 +874,39 @@ mod tests {
         // They stay when the stream has ended.
         app.status.state = SourceState::Ended;
         assert!(render_text(&app, 100, 24).contains("ended · clip 13% · lost 0.50 s"));
+    }
+
+    #[test]
+    fn an_alert_is_told_before_the_help_brightly_then_dimly() {
+        let mut app = app();
+        let alert = |secs: f64| Alert {
+            rule: "gate".into(),
+            event: Event {
+                start: Duration::from_secs_f64(secs - 0.5),
+                duration: Duration::from_millis(500),
+                low_hz: 433.9e6,
+                high_hz: 433.91e6,
+                peak_hz: 433.905e6,
+                peak_dbfs: -40.0,
+                above_floor_db: 30.0,
+            },
+        };
+        assert!(app.on_alerts(&[alert(1.0), alert(2.0)]));
+        let text = render_text(&app, 80, 24);
+        let status = text.lines().last().unwrap();
+        assert!(
+            status.ends_with("rx 2.398 MS/s   ! gate ×2  ? help  q quit"),
+            "{status}"
+        );
+        let colours = |app: &App| {
+            let terminal = render(app, 80, 24);
+            let buffer = terminal.backend().buffer();
+            let x = (0..80).find(|&x| buffer[(x, 23)].symbol() == "!").unwrap();
+            (buffer[(x, 23)].fg, buffer[(x, 23)].bg)
+        };
+        assert_eq!(colours(&app), (Color::White, Color::Red));
+        app.alerts.set_now(Duration::from_secs(12));
+        assert_eq!(colours(&app), (Color::Red, Color::Reset));
     }
 
     #[test]

@@ -159,7 +159,7 @@ pub fn forget_made(text: &str, keep: &[Channel]) -> Result<(String, usize), Stri
 }
 
 /// Replaces the file at `path` in one step, so it is never half written.
-fn replace(path: &Path, text: &str) -> Result<(), String> {
+pub(crate) fn replace(path: &Path, text: &str) -> Result<(), String> {
     let io = |err: std::io::Error| err.to_string();
     if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(io)?;

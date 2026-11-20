@@ -91,6 +91,8 @@ struct Blob {
 /// An event that has not ended yet.
 #[derive(Debug, Clone)]
 struct Open {
+    /// Given when it was found, never again in the detector's life.
+    number: u64,
     start: Duration,
     /// The latest frame it was in.
     seen: Duration,
@@ -128,6 +130,8 @@ pub struct Detector {
     config: DetectorConfig,
     floor: NoiseFloor,
     open: Vec<Open>,
+    /// The number the next event found gets.
+    next_number: u64,
     blobs: Vec<Blob>,
     band: Option<Band>,
     /// Time of the latest frame and the distance between the last two.
@@ -141,6 +145,7 @@ impl Detector {
             floor: NoiseFloor::new(config.floor),
             config,
             open: Vec::new(),
+            next_number: 0,
             blobs: Vec::new(),
             band: None,
             time: Duration::ZERO,
@@ -203,8 +208,18 @@ impl Detector {
 
     /// The events still going on, as far as they have got, earliest first.
     pub fn open(&self) -> Vec<Event> {
-        let mut events: Vec<Event> = self.open.iter().map(|open| self.event(open)).collect();
-        events.sort_by_key(|event| event.start);
+        let numbered = self.open_numbered().into_iter();
+        numbered.map(|(_, event)| event).collect()
+    }
+
+    /// The same, each with its number: an event keeps it from its first
+    /// frame to its last, and no other event gets it. Events that join
+    /// go on under the number of the one found first.
+    pub fn open_numbered(&self) -> Vec<(u64, Event)> {
+        let mut events: Vec<(u64, Event)> = (self.open.iter())
+            .map(|open| (open.number, self.event(open)))
+            .collect();
+        events.sort_by_key(|(number, event)| (event.start, *number));
         events
     }
 
@@ -264,11 +279,13 @@ impl Detector {
         };
         let Some(first) = self.open.iter().position(touches) else {
             self.open.push(Open {
+                number: self.next_number,
                 start: time,
                 seen: time,
                 recent: vec![(time, blob.low, blob.high)],
                 strongest: blob,
             });
+            self.next_number += 1;
             return;
         };
         let mut index = first + 1;
@@ -276,6 +293,7 @@ impl Detector {
             if touches(&self.open[index]) {
                 let other = self.open.swap_remove(index);
                 let joined = &mut self.open[first];
+                joined.number = joined.number.min(other.number);
                 joined.start = joined.start.min(other.start);
                 joined.recent.extend(other.recent);
                 if other.strongest.peak_db > joined.strongest.peak_db {
@@ -535,6 +553,56 @@ mod tests {
         assert_eq!(events[0].start, ms(100));
         assert_eq!(events[0].duration, ms(120));
         assert_eq!(events[0].peak_dbfs, -45.0);
+    }
+
+    /// The numbers of the open events after each of `frames` frames.
+    fn numbers(air: &Air, frames: usize) -> Vec<Vec<u64>> {
+        let mut detector = Detector::new(DetectorConfig::default());
+        (0..frames)
+            .map(|index| {
+                detector.push(&air.frame(index), |_| {});
+                let open = detector.open_numbered();
+                assert_eq!(
+                    open.iter()
+                        .map(|(_, event)| event.clone())
+                        .collect::<Vec<_>>(),
+                    detector.open()
+                );
+                open.into_iter().map(|(number, _)| number).collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_open_event_keeps_its_number_and_no_other_ever_has_it() {
+        // Two at once from 0.1 s, then a third after the first has ended.
+        let air = Air::new(&[
+            (10, 5, 300, 2, -40.0),
+            (10, 30, 600, 2, -40.0),
+            (35, 5, 300, 2, -40.0),
+        ]);
+        let numbers = numbers(&air, 40);
+        assert!(numbers[9].is_empty());
+        let (first, second) = (numbers[10][0], numbers[10][1]);
+        assert_ne!(first, second);
+        assert_eq!(numbers[20], [first, second]);
+        // The first ended after its hold: the third is new, at 300 kHz too.
+        assert_eq!(numbers[30], [second]);
+        let third = numbers[35][1];
+        assert!(![first, second].contains(&third), "{numbers:?}");
+    }
+
+    #[test]
+    fn events_joined_go_on_under_the_number_of_the_one_found_first() {
+        let air = Air::new(&[
+            (10, 10, 400, 2, -45.0),
+            (12, 10, 420, 2, -50.0),
+            (15, 1, 400, 22, -60.0),
+        ]);
+        let numbers = numbers(&air, 20);
+        let first = numbers[10][0];
+        assert_eq!(numbers[14].len(), 2);
+        assert_eq!(numbers[15], [first]);
     }
 
     #[test]

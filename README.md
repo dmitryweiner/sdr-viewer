@@ -5,11 +5,11 @@ with the HackerGadgets AIO V2 board. It watches the air through the board's
 RTL-SDR and shows what a person would otherwise miss: when, where and how
 often something was transmitted.
 
-**Status: phase 5 of 8 built** — the spectrum and waterfall
+**Status: phase 5 of 8 built, phase 6 begun** — the spectrum and waterfall
 screen, the channel strip, the spectral density, the periodicity screen and the signal log work on the built-in
 signal generator, on IQ recordings and on an RTL-SDR: tuning, gain and
 zoom from the keyboard, detected events kept in a database, their pictures
-and their samples. The Meshtastic pulse listens to `meshtasticd`: every
+and their samples, alerts on the user's rules. The Meshtastic pulse listens to `meshtasticd`: every
 node's packets on one time axis, their texts, batteries and positions,
 kept in the same database. The panorama and the decoders are still to
 come. See [plans/PLAN.md](plans/PLAN.md) for what comes next.
@@ -279,6 +279,38 @@ from before a retune, or one of an earlier run in the log's history has no
 samples. A source finer than 8 bits (a `.cs16` or `.cf32` recording, the
 generator) is saved in 8.
 
+### Alerts
+
+A rule says what is worth an alert: a band the signal's centre is in, how
+long it must have been on, how far its peak stands above the noise. The
+moment an event meets a rule — while it is still on — the status line
+says so, red: the rule's name and how many alerts it gave
+(`! gate ×3`, or `! gate ×3 of 5` when other rules gave some too), bright
+for 10 s, then dim. A tone, two short beeps, plays through the speaker
+with `aplay` (on the uConsole it is there; elsewhere the status line says
+why there is none): at most once in 10 s a rule, so a rule over a busy
+band does not beep without end. An event gives a rule's alert once,
+however long it goes on.
+
+With `--rtlsdr` the rules are in `sdr-viewer/alerts.toml` under
+`$XDG_CONFIG_HOME` or `~/.config` (`--alerts FILE` elsewhere — and for a
+recording or the generator, which have none otherwise; `--no-alerts`
+reads none). A file that is not there is made, with this example in its
+comments:
+
+```toml
+[[alert]]
+name = "gate"          # optional; without it the alert shows the frequency
+from_mhz = 433.9       # the band the signal's centre must be in;
+to_mhz = 434.0         # or freq_mhz = 433.95 with width_khz = 100
+min_ms = 1000          # optional: on for at least this long (0)
+min_db = 20            # optional: its peak this far above the noise (10)
+```
+
+The app reads the file when it starts and never writes to it. A rule
+that does not read — a key mistyped too — stops the app at the start
+with what is wrong.
+
 ### The event database
 
 With `--rtlsdr` every detected event is also kept in a SQLite file:
@@ -336,7 +368,8 @@ cargo run --release -- capture.cu8 --rate 2.4M --center 433.92M --snapshot 160x4
 `--screen 2` prints the channel strip instead of the spectrum, `--screen 3`
 the periodicity of the channel that repeats most surely, `--screen 4` the
 density; `--channels FILE` gives a snapshot its channels (it adds none to
-the file). `--screen 6` with `--mesh` prints the Meshtastic pulse after
+the file), `--alerts FILE` its rules, and their alerts are listed after
+the events. `--screen 6` with `--mesh` prints the Meshtastic pulse after
 `--secs` of the node's talk, and the packets heard; it fails when
 `meshtasticd` does not answer.
 

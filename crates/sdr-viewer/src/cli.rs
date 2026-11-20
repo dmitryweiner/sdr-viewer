@@ -83,6 +83,18 @@ pub struct Args {
     #[arg(long, conflicts_with = "channels")]
     pub no_channels: bool,
 
+    /// The alerts' rules: a TOML file read at the start, made with an
+    /// example if it is not there. With --rtlsdr it is
+    /// sdr-viewer/alerts.toml under $XDG_CONFIG_HOME or ~/.config anyway;
+    /// a recording or the generator has rules only when this names a
+    /// file. A snapshot reads it and makes nothing.
+    #[arg(long, value_name = "FILE")]
+    pub alerts: Option<PathBuf>,
+
+    /// Read no alerts file, not even with --rtlsdr.
+    #[arg(long, conflicts_with = "alerts")]
+    pub no_alerts: bool,
+
     /// Seconds of samples held in memory, so that an event's samples can
     /// be saved after it was seen: 2 bytes a sample, 144 MB for 30 s at
     /// 2.4 MS/s. 0 holds none.
@@ -141,11 +153,33 @@ pub fn mesh_db_path(args: &Args, env: impl Fn(&str) -> Option<String>) -> Option
 
 /// The channels file, if there is to be one.
 pub fn channels_path(args: &Args, env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
-    if args.no_channels {
+    config_file(
+        args,
+        (&args.channels, args.no_channels),
+        "channels.toml",
+        env,
+    )
+}
+
+/// The alerts file, if there is to be one.
+pub fn alerts_path(args: &Args, env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    config_file(args, (&args.alerts, args.no_alerts), "alerts.toml", env)
+}
+
+/// A file of the user's that the app reads at the start: the one named,
+/// or — for a receiver, outside a snapshot — `name` in the app's
+/// directory of the user's config; none when told so.
+fn config_file(
+    args: &Args,
+    (named, none): (&Option<PathBuf>, bool),
+    name: &str,
+    env: impl Fn(&str) -> Option<String>,
+) -> Option<PathBuf> {
+    if none {
         return None;
     }
-    if args.channels.is_some() || !args.rtlsdr || args.snapshot.is_some() {
-        return args.channels.clone();
+    if named.is_some() || !args.rtlsdr || args.snapshot.is_some() {
+        return named.clone();
     }
     let set = |name: &str| {
         env(name)
@@ -153,7 +187,7 @@ pub fn channels_path(args: &Args, env: impl Fn(&str) -> Option<String>) -> Optio
             .map(PathBuf::from)
     };
     let config = set("XDG_CONFIG_HOME").or_else(|| Some(set("HOME")?.join(".config")))?;
-    Some(config.join("sdr-viewer/channels.toml"))
+    Some(config.join("sdr-viewer").join(name))
 }
 
 /// Where saved samples go, if anywhere.
@@ -385,6 +419,33 @@ mod tests {
     }
 
     #[test]
+    fn the_alerts_file_is_the_users_config_for_a_receiver_or_the_one_named() {
+        let home = [("HOME", "/home/u")];
+        let path = |list: &[&str]| alerts_path(&args(list), env(&home));
+        assert_eq!(path(&[]), None);
+        assert_eq!(path(&["x.cu8"]), None);
+        assert_eq!(
+            path(&["--rtlsdr"]),
+            Some("/home/u/.config/sdr-viewer/alerts.toml".into())
+        );
+        let xdg = [("HOME", "/home/u"), ("XDG_CONFIG_HOME", "/cfg")];
+        assert_eq!(
+            alerts_path(&args(&["--rtlsdr"]), env(&xdg)),
+            Some("/cfg/sdr-viewer/alerts.toml".into())
+        );
+        assert_eq!(
+            path(&["x.cu8", "--alerts", "a.toml"]),
+            Some("a.toml".into())
+        );
+        assert_eq!(path(&["--rtlsdr", "--no-alerts"]), None);
+        // The channels file is another matter.
+        assert_eq!(path(&["--rtlsdr", "--no-channels"]), path(&["--rtlsdr"]));
+        assert_eq!(path(&["--rtlsdr", "--snapshot", "80x24"]), None);
+        let named = ["--snapshot", "80x24", "--alerts", "a.toml"];
+        assert_eq!(path(&named), Some("a.toml".into()));
+    }
+
+    #[test]
     fn the_mesh_is_kept_in_the_users_database_unless_told_otherwise() {
         let home = [("HOME", "/home/dmw")];
         let path = |list: &[&str]| mesh_db_path(&args(list), env(&home));
@@ -496,6 +557,7 @@ mod tests {
         let period = args(&["--snapshot", "80x24", "--screen", "3"]);
         assert_eq!(period.screen, Screen::Periodicity);
         assert!(parse(&["--channels", "x.toml", "--no-channels"]).is_err());
+        assert!(parse(&["--alerts", "x.toml", "--no-alerts"]).is_err());
         assert_eq!(args(&[]).screen, Screen::Spectrum);
         let density = args(&["--snapshot", "80x24", "--screen", "4"]);
         assert_eq!(density.screen, Screen::Density);
