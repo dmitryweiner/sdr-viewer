@@ -78,13 +78,20 @@ impl Recorder {
     /// [`AROUND`] before its event as far as `held` (what the ring has)
     /// goes back — or joins one of its rule going on whose band its
     /// event's centre is in. Says whether it was recorded: not when
-    /// [`AT_ONCE`] recordings run already.
+    /// [`AT_ONCE`] recordings run already. The recording's band is the
+    /// event's, or its rule's when the event is wider: a burst keyed hard
+    /// splashes wide in the first frame, where a rule without a duration
+    /// is met.
     pub fn on_alert(&mut self, alert: &Alert, held: Range<u64>, out: &mut Vec<Step>) -> bool {
         if !alert.record {
             return true;
         }
         let event = &alert.event;
-        let center_hz = event.center_hz();
+        let (low_hz, high_hz) = alert.band;
+        let (center_hz, width_hz) = match event.width_hz() > high_hz - low_hz {
+            true => ((low_hz + high_hz) / 2.0, high_hz - low_hz),
+            false => (event.center_hz(), event.width_hz()),
+        };
         let joined = self.going.iter_mut().find(|going| {
             going.rule == alert.rule && (center_hz - going.center_hz).abs() <= going.width_hz / 2.0
         });
@@ -107,7 +114,7 @@ impl Recorder {
         .min(held.end);
         let id = self.next_id;
         self.next_id += 1;
-        let width_hz = event.width_hz().max(MIN_WIDTH_HZ);
+        let width_hz = width_hz.max(MIN_WIDTH_HZ);
         self.going.push(Going {
             id,
             rule: alert.rule.clone(),
@@ -181,6 +188,8 @@ mod tests {
         Alert {
             rule: rule.into(),
             record: true,
+            // The whole ISM band.
+            band: (433.05e6, 434.79e6),
             number,
             event: Event {
                 start: Duration::from_millis(start_ms),
@@ -251,6 +260,55 @@ mod tests {
             ]
         );
         assert!(!recorder.is_recording());
+    }
+
+    #[test]
+    fn a_recording_takes_no_wider_a_band_than_its_rule_watches() {
+        // A burst keyed hard splashes wide in its first frame, when a
+        // rule without a duration is met: 100 kHz, its centre off.
+        let channel = (433.46875e6, 433.48125e6);
+        let splash = Alert {
+            band: channel,
+            event: Event {
+                low_hz: 433.43e6,
+                high_hz: 433.53e6,
+                ..alert("LPD 17", 1, 1_000, 433.48e6).event
+            },
+            ..alert("LPD 17", 1, 1_000, 433.48e6)
+        };
+        let mut recorder = Recorder::new(RATE);
+        let mut out = Vec::new();
+        recorder.on_alert(&splash, 0..1_500, &mut out);
+        assert!(
+            matches!(
+                out[0],
+                Step::Start {
+                    center_hz: 433.475e6,
+                    width_hz: 12_500.0,
+                    ..
+                }
+            ),
+            "{out:?}"
+        );
+        // One narrower than the rule's band is its own.
+        let narrow = Alert {
+            band: channel,
+            ..alert("LPD 17", 2, 1_000, 433.476e6)
+        };
+        let mut recorder = Recorder::new(RATE);
+        out.clear();
+        recorder.on_alert(&narrow, 0..1_500, &mut out);
+        assert!(
+            matches!(
+                out[0],
+                Step::Start {
+                    center_hz: 433.476e6,
+                    width_hz: 10_000.0,
+                    ..
+                }
+            ),
+            "{out:?}"
+        );
     }
 
     #[test]

@@ -311,9 +311,9 @@ record = true          # optional: record the signal (false)
 ```
 
 A rule with `record = true` records what meets it: the signal's own
-band, not the whole 2.4 MHz — moved to zero and narrowed to at least two
-and a half times the signal's width, 50 kS/s for a narrow one (a 200 kHz
-recording a second against 4.8 MB) — from a second before the event (the
+band, not the whole 2.4 MHz, nor more than the rule's — moved to zero and
+narrowed to at least two and a half times the signal's width, 50 kS/s
+for a narrow one (a 200 kHz recording a second against 4.8 MB) — from a second before the event (the
 samples held in memory, see "Saving an event's samples") to a second
 after it ends. The next alert of the same rule in that band while it
 runs goes into the same recording. The recordings go to `alerts/` in the

@@ -303,6 +303,7 @@ mod tests {
         Alert {
             rule: "gate".into(),
             record: true,
+            band: (434.19e6, 434.21e6),
             number: 1,
             event: Event {
                 start: Duration::from_secs(1),

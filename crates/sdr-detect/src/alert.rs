@@ -52,6 +52,9 @@ pub struct Alert {
     pub rule: String,
     /// The rule asks for the event to be recorded.
     pub record: bool,
+    /// The rule's band, its lowest and highest hertz: a recording takes
+    /// no more of the air than its rule watches.
+    pub band: (f64, f64),
     /// The detector's number for the event: whoever records it follows
     /// it by this until it ends.
     pub number: u64,
@@ -107,6 +110,7 @@ impl Alerts {
                     alert(Alert {
                         rule: rule.name.clone(),
                         record: rule.record,
+                        band: (rule.low_hz, rule.high_hz),
                         number: *number,
                         event: event.clone(),
                     });
@@ -196,6 +200,7 @@ mod tests {
             [Alert {
                 rule: "keyfob".into(),
                 record: false,
+                band: (433.9e6, 434.0e6),
                 number: 7,
                 event: event(433.95e6, ms(1000), 25.0),
             }]

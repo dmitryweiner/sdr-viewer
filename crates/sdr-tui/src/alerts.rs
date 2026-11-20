@@ -178,6 +178,7 @@ mod tests {
         Alert {
             rule: rule.into(),
             record: false,
+            band: (433.9e6, 434.0e6),
             number: 1,
             event: Event {
                 start,
