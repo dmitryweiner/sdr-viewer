@@ -81,6 +81,7 @@ pub fn for_the_pulse(history: MeshHistory, texts: Vec<Packet>) -> History {
         listened: listened.collect(),
         texts,
         told: told.into_iter().map(|(_, update)| update).collect(),
+        erased: history.erased,
     }
 }
 
@@ -347,12 +348,14 @@ mod tests {
                 (0x0bad_cafe, Sent { at: 30_500, id: 1 }),
                 (ME, Sent { at: 35_200, id: 2 }),
             ],
+            erased: Some(20_000),
         };
         let older = vec![packet(3_000)];
         let pulse = for_the_pulse(history, older.clone());
         assert_eq!(pulse.me, Some(ME));
         assert_eq!(pulse.listened, [(30_000, 31_000), (35_000, 35_600)]);
         assert_eq!(pulse.texts, older);
+        assert_eq!(pulse.erased, Some(20_000));
         // What another node queued is not this one's.
         let times: Vec<u64> = pulse
             .told

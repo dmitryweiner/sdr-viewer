@@ -48,12 +48,13 @@ const PERIOD_KEYS: [(&str, &str); 3] = [
     ("Enter", "tune to the selected channel"),
 ];
 
-const MESH_KEYS: [(&str, &str); 5] = [
+const MESH_KEYS: [(&str, &str); 6] = [
     ("↑, ↓", "select a node (PgUp, PgDn, Home, End)"),
     ("+, -", "less, more time to a column"),
     ("s", "sort by the last heard, by the fewest hops"),
     ("a", "only the nodes heard in the last 15 m, or all"),
     ("m", "start the list afresh: only what is heard from now"),
+    ("X, X", "erase every node: those heard again come back"),
 ];
 
 const LOG_KEYS: [(&str, &str); 6] = [
@@ -1141,28 +1142,37 @@ mod tests {
         for line in [
             " battery 80% 3.95 V · channel 12.5% · air 1.5% · 2 m ago",
             " at 32.82000, 34.99000 ±365 m · 1.1 km away · 10 m ago",
-            " text 09:59 to this node: the gate is open",
         ] {
             assert!(text.contains(line), "{line:?} in\n{text}");
         }
-        // The feed is under the list, the newest last.
-        let feed: Vec<&str> = text
-            .lines()
-            .filter(|line| line.starts_with(" 09:5"))
-            .collect();
-        assert_eq!(feed.len(), 2, "{text}");
+        let feed = |text: &str| -> Vec<String> {
+            text.lines()
+                .filter(|line| line.starts_with(" 09:5"))
+                .map(String::from)
+                .collect()
+        };
+        // The feed under the list has the selected node's texts alone.
+        let selected = feed(&text);
+        assert_eq!(selected.len(), 1, "{text}");
         assert!(
-            feed[0].starts_with(" 09:55  !43396f6c → all · MediumFast  shalom all"),
-            "{text}"
-        );
-        assert!(
-            feed[1].starts_with(" 09:59  HG1 → this node · MediumFast  the gate is open"),
+            selected[0].starts_with(" 09:59  HG1 → this node · MediumFast  the gate is open"),
             "{text}"
         );
         // It all fits the smallest screen.
         let small = render_text(&app, MIN_WIDTH, MIN_HEIGHT);
         assert!(small.contains(" 09:59  HG1 → this node"), "{small}");
-        assert!(small.contains(" text 09:59"), "{small}");
+        assert!(small.contains(" at 32.82000"), "{small}");
+        // A node that sent none says so.
+        app.mesh.move_selection(-1);
+        let text = render_text(&app, 160, 45);
+        assert!(feed(&text).is_empty(), "{text}");
+        assert!(text.contains(" No text heard from 8900."), "{text}");
+        // None selected: every channel's, the newest last.
+        app.mesh.release();
+        let all = feed(&render_text(&app, 160, 45));
+        assert_eq!(all.len(), 2);
+        assert!(all[0].starts_with(" 09:55  !43396f6c → all · MediumFast  shalom all"));
+        assert!(all[1].starts_with(" 09:59  HG1 → this node"));
     }
 
     #[test]

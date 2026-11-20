@@ -7,7 +7,7 @@
 //! was listening; the order, what is shown, the selection and the time
 //! scale. No drawing here.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use sdr_mesh::update::{
     Content, DeviceMetrics, LocalStats, MeshUpdate, Node, NodeUser, Packet, Position, Ready,
@@ -111,6 +111,8 @@ pub struct History {
     /// The packets of the last day and the node's own queued, the oldest
     /// first.
     pub told: Vec<MeshUpdate>,
+    /// When the user last erased the nodes.
+    pub erased: Option<u64>,
 }
 
 /// What the node counts of its own transmissions, in its local stats.
@@ -190,10 +192,16 @@ pub struct MeshView {
     pub ready: Option<Ready>,
     /// The node's own number: told by it, or by what earlier runs kept.
     me: Option<u32>,
+    /// Whether what it tells is kept in the database.
+    pub kept: bool,
     /// The command that starts `meshtasticd`, when it is this machine's:
     /// told while it does not answer.
     pub starter: Option<String>,
     nodes: Vec<NodeRow>,
+    /// Who the nodes are that were erased: a node heard again has its name.
+    names: HashMap<u32, NodeUser>,
+    /// When the user last erased the nodes: one heard only before is no row.
+    erased: Option<u64>,
     /// The texts heard, the oldest first.
     texts: VecDeque<Packet>,
     /// When the app was connected: from each `Ready` to the next loss.
@@ -215,8 +223,11 @@ impl MeshView {
             link,
             ready: None,
             me: None,
+            kept: false,
             starter: None,
             nodes: Vec::new(),
+            names: HashMap::new(),
+            erased: None,
             texts: VecDeque::new(),
             listened: Vec::new(),
             order: Order::default(),
@@ -236,6 +247,7 @@ impl MeshView {
             MeshUpdate::Ready(ready) => {
                 self.link = Link::Connected;
                 self.me = Some(ready.me);
+                self.row_mut(ready.me);
                 self.ready = Some(ready);
                 if !matches!(self.listened.last(), Some((_, None))) {
                     self.listened.push((self.now, None));
@@ -260,6 +272,7 @@ impl MeshView {
     /// What earlier runs kept, before the node answers.
     pub fn load_history(&mut self, history: History) {
         self.me = history.me;
+        self.erased = history.erased;
         let listened = history.listened.into_iter();
         let listened = listened.map(|(on, off)| (on, Some(off)));
         self.listened.splice(0..0, listened);
@@ -279,9 +292,29 @@ impl MeshView {
     /// A node of the database: what was heard here stays, unless the node
     /// heard it since.
     fn on_node(&mut self, node: Node) {
+        let before = self
+            .erased
+            .is_some_and(|erased| node.last_heard.is_none_or(|heard| heard < erased));
+        if before && Some(node.num) != self.me {
+            // Heard of only before the nodes were erased: its name is kept,
+            // for when it is heard again.
+            if let Some(user) = node.user {
+                match self.nodes.iter_mut().find(|row| row.num == node.num) {
+                    Some(row) => row.user = Some(user),
+                    None => {
+                        self.names.insert(node.num, user);
+                    }
+                }
+            }
+            return;
+        }
         let row = self.row_mut(node.num);
         if node.user.is_some() {
             row.user = node.user;
+        }
+        if before {
+            // The node itself, before the erasing: only who it is.
+            return;
         }
         if row.times.is_empty() || node.last_heard > row.times.back().copied() {
             row.snr = node.snr;
@@ -364,9 +397,44 @@ impl MeshView {
         shown[shown.len().saturating_sub(count)..].to_vec()
     }
 
-    /// The last text of the node `num` the feed holds.
-    pub fn last_text(&self, num: u32) -> Option<&Packet> {
-        self.texts.iter().rev().find(|text| text.from == num)
+    /// The same of the node `num` alone.
+    pub fn texts_from(&self, num: u32, count: usize) -> Vec<&Packet> {
+        let from = self.since.unwrap_or(0);
+        let shown: Vec<&Packet> = self
+            .texts
+            .iter()
+            .filter(|text| text.from == num && text.received >= from)
+            .collect();
+        shown[shown.len().saturating_sub(count)..].to_vec()
+    }
+
+    /// Forgets every node and all that was heard of them, but who they
+    /// are: one heard again comes back by its name. The node itself stays,
+    /// emptied, and the app listens from now on. Returns how many nodes
+    /// there were.
+    pub fn erase(&mut self) -> usize {
+        let gone = self.nodes.len();
+        for row in self.nodes.drain(..) {
+            if let Some(user) = row.user {
+                self.names.insert(row.num, user);
+            }
+        }
+        if let Some(me) = self.me {
+            self.row_mut(me);
+        }
+        self.texts.clear();
+        self.listened.retain(|&(_, off)| off.is_none());
+        for (on, _) in &mut self.listened {
+            *on = self.now;
+        }
+        self.erased = Some(self.now);
+        self.selected = None;
+        gone
+    }
+
+    /// When the nodes were last erased.
+    pub fn erased(&self) -> Option<u64> {
+        self.erased
     }
 
     /// How far `row` is from the node itself, when both told where.
@@ -386,7 +454,9 @@ impl MeshView {
         let at = match self.nodes.iter().position(|node| node.num == num) {
             Some(at) => at,
             None => {
-                self.nodes.push(NodeRow::new(num));
+                let mut row = NodeRow::new(num);
+                row.user = self.names.get(&num).cloned();
+                self.nodes.push(row);
                 self.nodes.len() - 1
             }
         };
@@ -1214,6 +1284,7 @@ pub(crate) mod tests {
             listened: vec![(32_400, 33_000), (34_800, 35_100)],
             texts: vec![older.clone()],
             told,
+            erased: None,
         });
         assert_eq!(view.me(), Some(ME));
         assert_eq!(view.texts(5), [&older]);
@@ -1347,16 +1418,111 @@ pub(crate) mod tests {
         };
         assert_eq!(said(&view, 5), ["first", "second", "third"]);
         assert_eq!(said(&view, 2), ["second", "third"]);
-        assert_eq!(view.last_text(GATE).unwrap().received, 35_990);
-        assert_eq!(view.last_text(ME), None);
-        // Started afresh, the feed is too; nothing is forgotten.
+        // Those of one node.
+        let of = |num, count| -> Vec<u64> {
+            view.texts_from(num, count)
+                .iter()
+                .map(|packet| packet.received)
+                .collect()
+        };
+        assert_eq!(of(GATE, 5), [35_970, 35_990]);
+        assert_eq!(of(GATE, 1), [35_990]);
+        assert!(of(ME, 5).is_empty());
+        // Started afresh, the feed is too.
         view.start_afresh();
         assert!(view.texts(5).is_empty());
-        assert_eq!(view.last_text(FAR).unwrap().received, 35_900);
+        assert!(view.texts_from(GATE, 5).is_empty());
         for at in 0..MAX_TEXTS as u64 + 5 {
             view.on_update(MeshUpdate::Packet(text(GATE, 36_000 + at, "more")));
         }
         assert_eq!(view.texts(usize::MAX).len(), MAX_TEXTS);
+    }
+
+    #[test]
+    fn erasing_forgets_every_node_and_brings_back_only_those_heard_again() {
+        let mut view = view();
+        view.on_update(MeshUpdate::Packet(packet(
+            GATE,
+            35_990,
+            Content::Text("before".into()),
+        )));
+        view.move_selection(2);
+        assert_eq!(view.erase(), 3);
+        assert_eq!(view.erased(), Some(36_000));
+        // The node itself stays, emptied.
+        let rows: Vec<NodeRow> = view.rows().into_iter().cloned().collect();
+        assert_eq!(rows.iter().map(|row| row.num).collect::<Vec<_>>(), [ME]);
+        assert_eq!(rows[0].user.as_ref().unwrap().short_name, "8900");
+        assert!(rows[0].last.is_none() && rows[0].last_heard.is_none());
+        assert!(view.texts(5).is_empty());
+        assert_eq!((view.selected(), view.known(), view.heard()), (None, 1, 0));
+        // It listens from now on.
+        assert_eq!(view.listened(20)[18..], [false, true]);
+        // The next connection's database: heard before, no row; heard
+        // since, one.
+        for (num, heard) in [(GATE, 35_990), (0x0bad_cafe, 36_010)] {
+            view.on_update(MeshUpdate::Node(Node {
+                num,
+                user: None,
+                last_heard: Some(heard),
+                snr: Some(-3.0),
+                hops_away: Some(1),
+                via_mqtt: false,
+                position: None,
+                device: None,
+            }));
+        }
+        let nums: Vec<u32> = view.rows().iter().map(|row| row.num).collect();
+        assert_eq!(nums, [ME, 0x0bad_cafe]);
+        // Heard again, it is back, by the name it had.
+        view.on_update(MeshUpdate::Packet(packet(GATE, 36_020, telemetry())));
+        view.set_now(36_030);
+        let gate = view.rows()[1].clone();
+        assert_eq!(gate.num, GATE);
+        assert_eq!(gate.user.as_ref().unwrap().short_name, "HG1");
+        assert_eq!(view.packets(&gate), 1);
+    }
+
+    #[test]
+    fn an_erasing_of_an_earlier_run_still_holds() {
+        let mut view = MeshView::new(Link::Connecting("localhost:4403".into()));
+        view.set_now(36_000);
+        view.load_history(History {
+            me: Some(ME),
+            erased: Some(35_000),
+            ..History::default()
+        });
+        for (num, heard) in [(GATE, 34_000), (FAR, 35_500)] {
+            view.on_update(MeshUpdate::Node(Node {
+                num,
+                user: None,
+                last_heard: Some(heard),
+                snr: None,
+                hops_away: None,
+                via_mqtt: false,
+                position: None,
+                device: None,
+            }));
+        }
+        let nums: Vec<u32> = view.rows().iter().map(|row| row.num).collect();
+        assert_eq!(nums, [FAR]);
+        assert_eq!(view.erased(), Some(35_000));
+        // The node itself, though heard of only before, is the first row
+        // once it answers.
+        view.on_update(MeshUpdate::Node(Node {
+            num: ME,
+            user: Some(who(ME, "8900", "Meshtastic 8900")),
+            last_heard: Some(34_000),
+            snr: None,
+            hops_away: None,
+            via_mqtt: false,
+            position: None,
+            device: None,
+        }));
+        view.on_update(MeshUpdate::Ready(ready()));
+        let first = view.rows()[0];
+        assert_eq!(first.num, ME);
+        assert_eq!(first.user.as_ref().unwrap().short_name, "8900");
     }
 
     #[test]

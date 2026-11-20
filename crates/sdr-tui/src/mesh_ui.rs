@@ -6,9 +6,9 @@
 //! long ago it was heard, with the SNR, RSSI and hops of its last packet.
 //! The axis and the columns' names are on top; under the rows, what the
 //! list shows when not all, how to start `meshtasticd` when it does not
-//! answer, the last texts of every channel the node reads, and the
-//! selected node: its battery and airtime, where it is and how far, its
-//! last text and its last packet.
+//! answer, the last texts of every channel the node reads (of the selected
+//! node alone, while one is), and the selected node: its battery and
+//! airtime, where it is and how far, and its last packet.
 
 use std::time::Duration;
 
@@ -49,8 +49,22 @@ pub(crate) fn draw(frame: &mut Frame, view: &MeshView, area: Rect) {
     // The list keeps two thirds of what is left at least.
     let fixed = 2 + notes.len() + card.len();
     let room = usize::from(area.height).saturating_sub(fixed) / 3;
-    let texts = view.texts(FEED_LINES.min(room));
-    let feed: Vec<Line> = texts.iter().map(|text| feed_line(view, text)).collect();
+    let lines = FEED_LINES.min(room);
+    let feed: Vec<Line> = match view.selected() {
+        Some(row) => {
+            let texts = view.texts_from(row.num, lines);
+            let none = (texts.is_empty() && lines > 0 && !view.texts(1).is_empty()).then(|| {
+                let name = node_name(view, row.num);
+                Line::from(format!(" No text heard from {name}.")).dark_gray()
+            });
+            let texts = texts.into_iter().map(|text| feed_line(view, text));
+            texts.chain(none).collect()
+        }
+        None => {
+            let texts = view.texts(lines).into_iter();
+            texts.map(|text| feed_line(view, text)).collect()
+        }
+    };
     let [header, axis, list, notes_area, feed_area, card_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -359,8 +373,8 @@ fn draw_axis(frame: &mut Frame, view: &MeshView, columns: usize, area: Rect) {
     frame.render_widget(names.right_aligned(), figures);
 }
 
-/// Who the selected node is, its battery and airtime, where it is, its last
-/// text and what its last packet was.
+/// Who the selected node is, its battery and airtime, where it is and what
+/// its last packet was.
 fn card_lines(view: &MeshView, row: &NodeRow) -> Vec<Line<'static>> {
     let dim = |text: String| Span::raw(text).dark_gray();
     let mut who = vec![Span::raw(" ")];
@@ -412,7 +426,6 @@ fn card_lines(view: &MeshView, row: &NodeRow) -> Vec<Line<'static>> {
     }
     lines.extend(device_line(view, row));
     lines.extend(position_line(view, row));
-    lines.extend(text_line(view, row));
     lines.push(last);
     lines
 }
@@ -490,20 +503,6 @@ fn format_metres(metres: f64) -> String {
     } else {
         format!("{:.0} km", metres / 1_000.0)
     }
-}
-
-/// " text 09:59 to all: the gate is open".
-fn text_line(view: &MeshView, row: &NodeRow) -> Option<Line<'static>> {
-    let text = view.last_text(row.num)?;
-    let Content::Text(said) = &text.content else {
-        return None;
-    };
-    Some(Line::from(vec![
-        Span::raw(" text ").dark_gray(),
-        Span::raw(view.time_of_day(text.received)).dark_gray(),
-        Span::raw(format!(" to {}: ", to_name(view, text.to))).dark_gray(),
-        Span::raw(one_line(said)),
-    ]))
 }
 
 /// The node's own count of what it sent on the air, acknowledgements too.

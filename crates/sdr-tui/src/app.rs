@@ -150,6 +150,8 @@ pub enum Command {
     /// Forget the events that have ended: those not yet shown, and those
     /// in the database.
     EraseEvents,
+    /// Forget what the mesh told, in the database: the nodes were erased.
+    EraseMesh,
 }
 
 pub struct App {
@@ -433,6 +435,22 @@ impl App {
             KeyCode::Char('s') => self.mesh.next_order(),
             KeyCode::Char('a') => self.mesh.toggle_active(),
             KeyCode::Char('m') => self.mesh.start_afresh(),
+            // Not to be undone: asked twice.
+            KeyCode::Char('X') => match self.mesh.known() {
+                0 => self.notice = Some("no nodes: nothing to erase".into()),
+                known => {
+                    self.armed = Some(Screen::Mesh);
+                    let kept = if self.mesh.kept {
+                        ", in the database too"
+                    } else {
+                        ""
+                    };
+                    self.notice = Some(format!(
+                        "X again erases the {known} node{} and what was heard of them{kept}; those heard again come back",
+                        if known == 1 { "" } else { "s" }
+                    ));
+                }
+            },
             _ => {}
         }
     }
@@ -496,6 +514,14 @@ impl App {
                 let gone = self.log.clear();
                 self.commands.push(Command::EraseEvents);
                 self.done = Some(format!("{gone} events erased"));
+            }
+            Screen::Mesh => {
+                let gone = self.mesh.erase();
+                self.commands.push(Command::EraseMesh);
+                self.done = Some(format!(
+                    "{gone} node{} erased; those heard again come back",
+                    if gone == 1 { "" } else { "s" }
+                ));
             }
             _ => {}
         }
@@ -867,6 +893,40 @@ mod tests {
         press(&mut app, KeyCode::Char('5'));
         press(&mut app, KeyCode::Char('X'));
         assert_eq!(app.channels.rows().len(), 1);
+    }
+
+    #[test]
+    fn x_twice_on_the_pulse_erases_every_node() {
+        let mut app = app();
+        app.screen = Screen::Mesh;
+        press(&mut app, KeyCode::Char('X'));
+        assert_eq!(app.notice.as_deref(), Some("no nodes: nothing to erase"));
+        app.mesh = crate::mesh::tests::view();
+        press(&mut app, KeyCode::Char('X'));
+        assert_eq!(
+            app.notice.as_deref(),
+            Some(
+                "X again erases the 3 nodes and what was heard of them; those heard again come back"
+            )
+        );
+        assert!(app.commands.is_empty());
+        press(&mut app, KeyCode::Char('X'));
+        assert_eq!(app.mesh.known(), 1);
+        assert_eq!(app.commands, [Command::EraseMesh]);
+        assert_eq!(
+            app.done.as_deref(),
+            Some("3 nodes erased; those heard again come back")
+        );
+        // With a database it says so.
+        app.mesh = crate::mesh::tests::view();
+        app.mesh.kept = true;
+        press(&mut app, KeyCode::Char('X'));
+        assert_eq!(
+            app.notice.as_deref(),
+            Some(
+                "X again erases the 3 nodes and what was heard of them, in the database too; those heard again come back"
+            )
+        );
     }
 
     #[test]
