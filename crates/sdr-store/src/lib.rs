@@ -18,8 +18,8 @@ use sdr_detect::Event;
 const SCHEMA_VERSION: i64 = LAYOUTS.len() as i64;
 
 /// What each layout adds to the one before: the first the events, the
-/// second the mesh.
-const LAYOUTS: [&str; 2] = [EVENTS, mesh::TABLES];
+/// second the mesh, the third when the mesh was erased.
+const LAYOUTS: [&str; 3] = [EVENTS, mesh::TABLES, mesh::ERASED];
 
 const EVENTS: &str = "
 CREATE TABLE sessions (
@@ -449,7 +449,7 @@ mod tests {
         let err = Store::open(&db.0).err().expect("must be refused");
         assert_eq!(
             err.to_string(),
-            "made by a newer sdr-viewer (layout 7, this build knows 2)"
+            "made by a newer sdr-viewer (layout 7, this build knows 3)"
         );
         let connection = Connection::open(&db.0).unwrap();
         let version: i64 = connection
@@ -486,7 +486,10 @@ mod tests {
             .unwrap()
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
+        let mut store = Store::open(&db.0).unwrap();
+        store.erase_mesh(2_000).unwrap();
+        assert_eq!(store.mesh_since(0, 10).unwrap().erased, Some(2_000));
     }
 
     #[test]

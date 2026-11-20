@@ -29,6 +29,7 @@ use sdr_tui::channels::ChannelsView;
 use sdr_tui::log::WallClock;
 use sdr_tui::{App, Command, Screen, SourceState, ui};
 
+use crate::keep::MeshKept;
 use crate::reader::{Sinks, Update};
 
 /// How long the interface waits for a key before looking for new frames.
@@ -114,8 +115,9 @@ fn run(args: &cli::Args) -> Result<ExitCode, String> {
         // What earlier runs kept, before the node answers.
         if let Some(path) = cli::mesh_db_path(args, |name| std::env::var(name).ok()) {
             let kept = keep::keep_mesh(&path, mesh::unix_now(), updates_tx.clone())?;
-            let (me, listened, told) = mesh::for_the_pulse(kept.history);
-            app.mesh.load_history(me, listened, told);
+            app.mesh
+                .load_history(mesh::for_the_pulse(kept.history, kept.texts));
+            app.mesh.kept = true;
             kept_mesh = Some((kept.told, kept.writer));
         }
         // The client keeps nothing itself: it is not waited for at the end.
@@ -137,7 +139,7 @@ fn run(args: &cli::Args) -> Result<ExitCode, String> {
     if let Some((told, writer)) = kept_mesh {
         // The app listened until now.
         let quit = MeshUpdate::Lost("the app quit".into());
-        let _ = told.send(vec![(mesh::unix_now(), quit)]);
+        let _ = told.send(vec![MeshKept::told(mesh::unix_now(), quit)]);
         drop(told);
         let _ = writer.join();
     }
@@ -151,13 +153,14 @@ fn run(args: &cli::Args) -> Result<ExitCode, String> {
 }
 
 /// The terminal's loop, until the user quits. What the mesh's client tells
-/// is handed on to `kept_mesh` too, with the time.
+/// is handed on to `kept_mesh` too, with the time, and so is the erasing
+/// of the nodes.
 fn interface(
     app: &mut App,
     updates: &Receiver<Update>,
     reception: Option<&Reception>,
     mesh: bool,
-    kept_mesh: Option<&Sender<Vec<(u64, MeshUpdate)>>>,
+    kept_mesh: Option<&Sender<Vec<MeshKept>>>,
 ) -> std::io::Result<()> {
     let mut terminal = ratatui::init();
     let result = (|| -> std::io::Result<()> {
@@ -188,7 +191,7 @@ fn interface(
                     Update::Density(map) => app.on_density(map),
                     Update::Mesh(update) => {
                         if kept_mesh.is_some() {
-                            told.push((mesh::unix_now(), update.clone()));
+                            told.push(MeshKept::told(mesh::unix_now(), update.clone()));
                         }
                         app.on_mesh(update);
                     }
@@ -217,7 +220,12 @@ fn interface(
                     Event::Key(key) => {
                         app.on_key(key);
                         for command in app.commands.drain(..) {
-                            if let Some(reception) = reception {
+                            if command == Command::EraseMesh {
+                                if let Some(kept_mesh) = kept_mesh {
+                                    let erase = MeshKept::EraseAll(mesh::unix_now());
+                                    let _ = kept_mesh.send(vec![erase]);
+                                }
+                            } else if let Some(reception) = reception {
                                 let _ = reception.commands.send(command);
                             }
                         }

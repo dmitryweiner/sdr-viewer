@@ -19,12 +19,13 @@ Phases of the plan (its section 14 has the detail):
 | 2 Spectrum and waterfall | done on the generator, recordings and the RTL-SDR |
 | 3 Detector and log | done, and found working on the air on the device by the user (2026-11-13): the noise floor, the detector, the log screen, the SQLite event database (7 days kept), the log's history with wall-clock time, the detector's threshold line on the spectrum, the IQ ring buffer, the picture of the selected event and "save IQ" in the log work; the detector's regression tests on a piece of real air (`testdata/lpd433.cu8`) pass; the status line tells overload and lost samples |
 | 4 Accumulators | done: the spectral density (screen 4) and the channel strip (screen 2) were tried by the user on the air on the device and approved (2026-11-14) — with what that trial asked for: the detector's stuck events fixed, the receiver's spike kept off the strip, `X` twice on the strip and on the log, the band's name in the spectrum's header. Periodicity (screen 3, and the period in the strip's rows), built as the user decided (the plan's section 12), was tried by them on the air and "works well" (2026-11-15); its tab was then moved right after the channels', which it reads (it was screen 4, the density 3) |
-| 5 Meshtastic | started (2026-11-15): `meshtasticd` runs on the device's LoRa radio and the node is set up (`docs/hardware.md`, section 6); the user's decisions for the app are in the plan's section 12. Built: the client (`sdr-mesh`) and the pulse (`--mesh`, screen 6), tried by the user on the device (2026-11-15); what that trial asked for is built (the plan's section 12: the reminder to start `meshtasticd`, the axis on top with the time of day, the pulse stepping at once, no dots where the app was not listening, `s` `a` `m`; PR #32, merged into #31's branch) and the user found it "working great" (2026-11-20). On `main` (PR #31). The node's own row as the user decided (2026-11-20): what the node hands the app alone is a dim mark, not heard; what it sends of its own a tick in its colour, its own count of it in the card (PR #34, seen working by the user on the device, ticks too; merged). The mesh's packets in the database, as the user decided (built 2026-11-20): `events.db` layout 2, on by default with `--mesh`, the pulse starting with the last day of it |
+| 5 Meshtastic | started (2026-11-15): `meshtasticd` runs on the device's LoRa radio and the node is set up (`docs/hardware.md`, section 6); the user's decisions for the app are in the plan's section 12. Built: the client (`sdr-mesh`) and the pulse (`--mesh`, screen 6), tried by the user on the device (2026-11-15); what that trial asked for is built (the plan's section 12: the reminder to start `meshtasticd`, the axis on top with the time of day, the pulse stepping at once, no dots where the app was not listening, `s` `a` `m`; PR #32, merged into #31's branch) and the user found it "working great" (2026-11-20). On `main` (PR #31). The node's own row as the user decided (2026-11-20): what the node hands the app alone is a dim mark, not heard; what it sends of its own a tick in its colour, its own count of it in the card (PR #34, seen working by the user on the device, ticks too; merged). The mesh's packets in the database, as the user decided: `events.db` layout 2, on by default with `--mesh`, the pulse starting with the last day of it (PR #35, the history seen by the user on the device; merged). Texts, telemetry and positions as the user decided (built 2026-11-20): the card's battery, airtime, position and distance, the feed of texts under the list (PR #36); with what the user asked after seeing it on the device: `X` twice erases every node (layout 3 keeps when), and the feed has the selected node's texts alone |
 | 6–8 | not started |
 
-Next: the user tries the mesh's database on the device (the pulse
-starting with what earlier runs kept); then texts, telemetry and
-positions (the plan's section 14). How each of them looks is the user's decision
+Next: the user tries the texts, telemetry and positions on the device;
+that completes phase 5. Then phase 6 (the panorama, the novelty
+detector, alerts, recording on an event — the plan's section 8): ask the
+user what comes first. How each of them looks is the user's decision
 of 2026-11-20 (the plan's section 12); SDR and LoRa stay apart (asked
 again that day: never together).
 
@@ -130,11 +131,14 @@ touching USB.
   the air there and found them working. Saving IQ was tried there on the recording with
   `--iq-dir iq-test`, removed afterwards; the default
   `~/.local/share/sdr-viewer/iq` does not exist yet.
-  Since 2026-11-20 `sdr-viewer` there is PR #35's build (the mesh's
+  Since 2026-11-20 `sdr-viewer` there is PR #36's build with `X` twice
+  on the pulse and the selected node's feed (its first run brings
+  `events.db` to layout 3); its first commit's (texts, telemetry and
+  positions) is `sdr-viewer.before-erase`, PR #35's (the mesh's
   database: its first run with `--mesh` or `--rtlsdr` brings the user's
   `events.db` up to layout 2, which the older builds below then refuse —
   they run with `--no-db`; `events.db.before-mesh-db` there is a copy of
-  the user's file before it, 3.9 MB). PR #34's (the node's own
+  the user's file before it, 3.9 MB) is `sdr-viewer.before-texts`. PR #34's (the node's own
   row: its `--snapshot --screen 6 -- --mesh` there showed the node's
   minute telemetry as `•` and `→ this app`, not heard) is
   `sdr-viewer.before-mesh-db`; PR #32's (the
@@ -215,8 +219,8 @@ a crate is added in the phase that needs it):
   compiled in), `sessions` and `events`, the layout's version in
   `user_version` (`LAYOUTS`: what each adds; an older file is brought
   up to date); `mesh`: the mesh's tables (`mesh_listened`,
-  `mesh_packets` with the decrypted `Data`, `mesh_sent`) and
-  `MeshHistory`, what they hold of a time; `sigmf`: a recording as a `.sigmf-data` + `.sigmf-meta`
+  `mesh_packets` with the decrypted `Data`, `mesh_sent`, `mesh_erased`)
+  and `MeshHistory`, what they hold of a time; `sigmf`: a recording as a `.sigmf-data` + `.sigmf-meta`
   pair (the JSON is written by hand); `channels`: the channels file
   (TOML read with the `toml` crate, additions written by hand to the end
   of the text as it is).
@@ -231,7 +235,8 @@ a crate is added in the phase that needs it):
   `update` (the plain types the interface gets: `MeshUpdate`, `Ready`,
   `Node`, `NodeUser`, `Packet` — `app_only`: made by the node for its
   clients alone; `Payload`: its port and its `Data` encoded again, what
-  is kept — `Content`, `LocalStats`, `Sent`: a packet of its own
+  is kept — `Content` (a text, a `Position`, `DeviceMetrics`, the
+  node's `LocalStats`, or the kind), `Sent`: a packet of its own
   queued for the air), `session::read` (a kept `Payload`'s `Content`),
   `client` (`run`: connect,
   read, heartbeat a minute, connect again after 5 s; `tcp`).
@@ -251,8 +256,10 @@ a crate is added in the phase that needs it):
   (`MeshView`: the link, what the node told, a `NodeRow` per node with
   the times of its packets of the last day — of the node itself, what it
   sent and handed the app alone, and its `TxCount` — when the app was listening
-  (`load_history`: what earlier runs kept, before the node answers),
-  the counts of the last 24 h,
+  (`load_history`: what earlier runs kept, a `History`, before the node
+  answers), the counts of the last 24 h, each node's last position and
+  device metrics, the feed of texts (all, or one node's), the distance
+  from the node itself, `erase` (the names kept for nodes heard again),
   the order and what is shown, the selection, the time scale of the wall
   clock and its marks), `mesh_ui`.
   Snapshot tests in
@@ -269,8 +276,9 @@ a crate is added in the phase that needs it):
   only the last), `save` (a `Cut` to a SigMF pair), `fragment` (a `Cut`
   to a `Fragment`), `keep` (open the database, read the
   week's history, start the writer thread, which first deletes what is
-  older; `keep_mesh`: the same for the mesh, the last day read, the
-  writer told the client's updates with their time), `writer` (the loop of a thread that writes: one write a second),
+  older; `keep_mesh`: the same for the mesh, the last day read and the
+  week's texts before it, the writer told `MeshKept`: the client's
+  updates with their time, and the erasing), `writer` (the loop of a thread that writes: one write a second),
   `channels` (read the channels file; the thread that adds to it),
   `mesh` (the client's thread, its updates as `Update::Mesh`;
   `for_the_pulse`: the kept history as the view takes it; the pulse's
@@ -359,8 +367,12 @@ a crate is added in the phase that needs it):
   twice, and then only `[[channel]]` tables without `name` and `hide`
   whose channel has no signal on.
 - `X` twice is the only thing that destroys what is kept (channels of
-  the file, events of the database); it always asks once, and the answer
-  counts only on the screen that asked (`App::armed`).
+  the file, events of the database, the mesh's packets); it always asks
+  once, and the answer counts only on the screen that asked
+  (`App::armed`). The pulse's goes to the mesh's writer in order with
+  the client's updates (`MeshKept::EraseAll`), and its moment is kept
+  (`mesh_erased`): a node the node's database knows from before it is
+  no row until it is heard again.
 - The help shows the open screen's keys and the global ones: all keys at
   once do not fit 80×24 (a test renders every screen's help there).
 - `unsafe_code = "forbid"` across the workspace.

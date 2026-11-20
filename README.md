@@ -217,7 +217,15 @@ minute: it was not on the air. The node's card adds its own count of
 what it sent on the air, acknowledgements too, which it tells every 15
 minutes. `meshtasticd` serves one client at a time: a phone app on the
 node's API and the pulse take turns.
-The card counts a node's packets in the last 24 hours, or since `m`.
+The card counts a node's packets in the last 24 hours, or since `m`, and
+tells what the node last told of itself: its battery (or "powered"),
+voltage, how busy the channel is and its own airtime; where it is (to
+the metre or, when its sender rounded it, "±365 m"), and how far that is
+from where the node itself is, when it has told that.
+Under the list are the last texts of every channel the node reads, the
+newest last — those of the last week in the database too:
+`09:59  HG1 → all · MediumFast  the gate is open`. While a node is
+selected, they are its texts alone.
 Packets on a channel the node has no key for count too: their header is
 in the clear. The selected node's card names its id, hardware and role,
 and tells its last packet: what it was, to whom, on which channel (or the
@@ -231,6 +239,7 @@ last.
 | `s` | sort by the last heard, or by hops: the fewest first (0 is heard directly), the unknown last |
 | `a` | only the nodes heard in the last 15 minutes, or all |
 | `m` | start the list afresh: only the nodes heard from now on, and their packets, as if the app had started now (nothing is forgotten; names stay known) |
+| `X` `X` | erase every node (it asks once): the list, the ticks, the texts, and the mesh's packets in the database too. The moment is kept: after a new connection or start only the nodes heard again come back, by their names |
 
 The node itself stays on top whatever is chosen; under the rows a line
 tells what the list shows when it is not everything.
@@ -278,8 +287,8 @@ or of the generator too, which are not kept otherwise; `--no-db` keeps
 nothing. Events and packets are written once a second; events still on
 when the app quits are ended there and written. What is older than 7 days
 is deleted when the app starts. A file this build has brought up to date
-(the mesh's tables were added to it) is refused by older builds: they say
-so, and run with `--no-db`.
+(the mesh's tables were added to it, and when it was erased) is refused
+by older builds: they say so, and run with `--no-db`.
 
 With a database the log shows the local date and time of day instead of
 the time in the stream, and starts with what earlier runs found in the

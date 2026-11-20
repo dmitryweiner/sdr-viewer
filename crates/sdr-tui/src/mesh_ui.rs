@@ -6,7 +6,9 @@
 //! long ago it was heard, with the SNR, RSSI and hops of its last packet.
 //! The axis and the columns' names are on top; under the rows, what the
 //! list shows when not all, how to start `meshtasticd` when it does not
-//! answer, and the selected node with its last packet.
+//! answer, the last texts of every channel the node reads (of the selected
+//! node alone, while one is), and the selected node: its battery and
+//! airtime, where it is and how far, and its last packet.
 
 use std::time::Duration;
 
@@ -15,7 +17,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
-use sdr_mesh::update::{BROADCAST, Content, Packet};
+use sdr_mesh::update::{BROADCAST, Content, DeviceMetrics, Packet, Position};
 
 use crate::channels::format_ago;
 use crate::mesh::{ACTIVE_S, Link, MeshView, NodeRow, Order};
@@ -32,28 +34,51 @@ const OWN: Color = Color::Cyan;
 /// What the node handed this app alone: dim, not a tick of the air.
 const APP_ONLY: Color = Color::Rgb(90, 120, 140);
 
+/// The most texts under the list; fewer on a small screen.
+const FEED_LINES: usize = 5;
+
 pub(crate) fn draw(frame: &mut Frame, view: &MeshView, area: Rect) {
     let rows = view.rows();
     let notes: Vec<Line> = [start_hint(view), shown_line(view, rows.len())]
         .into_iter()
         .flatten()
         .collect();
-    let card = match view.selected() {
-        Some(row) if is_own(view, row) => 3,
-        Some(_) => 2,
-        None => 0,
+    let card = view
+        .selected()
+        .map_or_else(Vec::new, |row| card_lines(view, row));
+    // The list keeps two thirds of what is left at least.
+    let fixed = 2 + notes.len() + card.len();
+    let room = usize::from(area.height).saturating_sub(fixed) / 3;
+    let lines = FEED_LINES.min(room);
+    let feed: Vec<Line> = match view.selected() {
+        Some(row) => {
+            let texts = view.texts_from(row.num, lines);
+            let none = (texts.is_empty() && lines > 0 && !view.texts(1).is_empty()).then(|| {
+                let name = node_name(view, row.num);
+                Line::from(format!(" No text heard from {name}.")).dark_gray()
+            });
+            let texts = texts.into_iter().map(|text| feed_line(view, text));
+            texts.chain(none).collect()
+        }
+        None => {
+            let texts = view.texts(lines).into_iter();
+            texts.map(|text| feed_line(view, text)).collect()
+        }
     };
-    let [header, axis, list, notes_area, card_area] = Layout::vertical([
+    let [header, axis, list, notes_area, feed_area, card_area] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Fill(1),
         Constraint::Length(notes.len() as u16),
-        Constraint::Length(card),
+        Constraint::Length(feed.len() as u16),
+        Constraint::Length(card.len() as u16),
     ])
     .areas(area);
     let columns = usize::from(area.width - LABEL - FIGURES);
     frame.render_widget(header_line(view), header);
     frame.render_widget(Paragraph::new(notes), notes_area);
+    frame.render_widget(Paragraph::new(feed), feed_area);
+    frame.render_widget(Paragraph::new(card), card_area);
     if rows.is_empty() {
         let text = Paragraph::new(empty_text(&view.link))
             .centered()
@@ -84,8 +109,47 @@ pub(crate) fn draw(frame: &mut Frame, view: &MeshView, area: Rect) {
         };
         draw_row(frame, view, row, selected == Some(y), &ticks, area);
     }
-    if let Some(row) = view.selected() {
-        draw_card(frame, view, row, card_area);
+}
+
+/// " 09:59  HG1 → all · MediumFast  the gate is open".
+fn feed_line(view: &MeshView, text: &Packet) -> Line<'static> {
+    let said = match &text.content {
+        Content::Text(said) => one_line(said),
+        _ => String::new(),
+    };
+    Line::from(vec![
+        Span::raw(format!(" {}  ", view.time_of_day(text.received))).dark_gray(),
+        Span::raw(node_name(view, text.from)).bold(),
+        Span::raw(format!(
+            " → {} · {}  ",
+            to_name(view, text.to),
+            view.channel_name(text)
+        ))
+        .dark_gray(),
+        Span::raw(said),
+    ])
+}
+
+/// A text as one line: its line breaks are spaces.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A node by its short name, or its number.
+fn node_name(view: &MeshView, num: u32) -> String {
+    view.rows()
+        .into_iter()
+        .find(|row| row.num == num)
+        .and_then(|row| row.user.as_ref().map(|user| user.short_name.clone()))
+        .unwrap_or_else(|| format!("!{num:08x}"))
+}
+
+/// Whom a packet was for: all, this node, or another.
+fn to_name(view: &MeshView, to: u32) -> String {
+    match to {
+        BROADCAST => "all".to_string(),
+        to if Some(to) == view.me() => "this node".to_string(),
+        to => node_name(view, to),
     }
 }
 
@@ -309,8 +373,9 @@ fn draw_axis(frame: &mut Frame, view: &MeshView, columns: usize, area: Rect) {
     frame.render_widget(names.right_aligned(), figures);
 }
 
-/// Who the selected node is, and what its last packet was.
-fn draw_card(frame: &mut Frame, view: &MeshView, row: &NodeRow, area: Rect) {
+/// Who the selected node is, its battery and airtime, where it is and what
+/// its last packet was.
+fn card_lines(view: &MeshView, row: &NodeRow) -> Vec<Line<'static>> {
     let dim = |text: String| Span::raw(text).dark_gray();
     let mut who = vec![Span::raw(" ")];
     if let Some(user) = &row.user {
@@ -359,8 +424,85 @@ fn draw_card(frame: &mut Frame, view: &MeshView, row: &NodeRow, area: Rect) {
     if own {
         lines.push(count_line(view, row));
     }
+    lines.extend(device_line(view, row));
+    lines.extend(position_line(view, row));
     lines.push(last);
-    frame.render_widget(Paragraph::new(lines), area);
+    lines
+}
+
+/// " · 2 m ago", when it is known when.
+fn told_ago(view: &MeshView, at: Option<u64>) -> Option<Span<'static>> {
+    let ago = Duration::from_secs(view.now().saturating_sub(at?));
+    Some(Span::raw(format!(" · {} ago", format_ago(ago))).dark_gray())
+}
+
+/// " battery 80% 3.95 V · channel 12.5% · air 1.5% · 2 m ago".
+fn device_line(view: &MeshView, row: &NodeRow) -> Option<Line<'static>> {
+    let (device, at): &(DeviceMetrics, Option<u64>) = row.device.as_ref()?;
+    let dim = |text: String| Span::raw(text).dark_gray();
+    let mut spans = vec![Span::raw(" ")];
+    let mut part = |label: &str, value: String| {
+        if spans.len() > 1 {
+            spans.push(dim(" · ".into()));
+        }
+        spans.push(dim(label.into()));
+        spans.push(Span::raw(value).bold());
+    };
+    match (device.battery, device.voltage) {
+        (Some(percent), _) if percent > 100 => part("", "powered".into()),
+        (Some(percent), voltage) => {
+            let volts = voltage.map_or(String::new(), |volts| format!(" {volts:.2} V"));
+            part("battery ", format!("{percent}%{volts}"));
+        }
+        (None, Some(volts)) => part("", format!("{volts:.2} V")),
+        (None, None) => {}
+    }
+    if let Some(busy) = device.channel_utilization {
+        part("channel ", format!("{busy:.1}%"));
+    }
+    if let Some(own) = device.air_util_tx {
+        part("air ", format!("{own:.1}%"));
+    }
+    if spans.len() == 1 {
+        return None;
+    }
+    spans.extend(told_ago(view, *at));
+    Some(Line::from(spans))
+}
+
+/// " at 32.82000, 34.99000 ±365 m · 1.1 km away · 10 m ago".
+fn position_line(view: &MeshView, row: &NodeRow) -> Option<Line<'static>> {
+    let (position, at): &(Position, Option<u64>) = row.position.as_ref()?;
+    let dim = |text: String| Span::raw(text).dark_gray();
+    let mut spans = vec![
+        dim(" at ".into()),
+        Span::raw(format!(
+            "{:.5}, {:.5}",
+            position.latitude, position.longitude
+        ))
+        .bold(),
+    ];
+    if let Some(within) = position.within_m {
+        spans.push(dim(format!(" ±{}", format_metres(within))));
+    }
+    if let Some(distance) = view.distance_m(row) {
+        spans.push(dim(" · ".into()));
+        spans.push(Span::raw(format_metres(distance)).bold());
+        spans.push(dim(" away".into()));
+    }
+    spans.extend(told_ago(view, *at));
+    Some(Line::from(spans))
+}
+
+/// "850 m", "1.1 km", "23 km".
+fn format_metres(metres: f64) -> String {
+    if metres < 1_000.0 {
+        format!("{metres:.0} m")
+    } else if metres < 10_000.0 {
+        format!("{:.1} km", metres / 1_000.0)
+    } else {
+        format!("{:.0} km", metres / 1_000.0)
+    }
 }
 
 /// The node's own count of what it sent on the air, acknowledgements too.
@@ -399,19 +541,13 @@ fn packet_line(view: &MeshView, packet: &Packet) -> Line<'static> {
         Content::Encrypted => "encrypted".to_string(),
         Content::User(_) => "node info".to_string(),
         Content::LocalStats(_) => "local stats".to_string(),
+        Content::Text(_) => "text".to_string(),
+        Content::Position(_) => "position".to_string(),
+        Content::Device(_) => "telemetry".to_string(),
         Content::Other { name, .. } => name.clone(),
     };
     let me = view.me();
-    let to = match packet.to {
-        BROADCAST => "all".to_string(),
-        to if Some(to) == me => "this node".to_string(),
-        to => view
-            .rows()
-            .into_iter()
-            .find(|row| row.num == to)
-            .and_then(|row| row.user.as_ref().map(|user| user.short_name.clone()))
-            .unwrap_or_else(|| format!("!{to:08x}")),
-    };
+    let to = to_name(view, packet.to);
     let ago = Duration::from_secs(view.now().saturating_sub(packet.received));
     if packet.app_only {
         return Line::from(vec![

@@ -50,6 +50,13 @@ CREATE TABLE mesh_sent (
 CREATE INDEX mesh_sent_by_time ON mesh_sent(at_s);
 ";
 
+/// The table layout 3 adds: when the user last erased the mesh.
+pub(crate) const ERASED: &str = "
+CREATE TABLE mesh_erased (
+    at_s INTEGER NOT NULL
+);
+";
+
 /// One time the app listened to a node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ListenId(i64);
@@ -69,6 +76,8 @@ pub struct MeshHistory {
     pub packets: Vec<Packet>,
     /// What a node queued of its own, and which node it was.
     pub sent: Vec<(u32, Sent)>,
+    /// When the user last erased the mesh: what was heard before is gone.
+    pub erased: Option<u64>,
 }
 
 impl Store {
@@ -185,11 +194,44 @@ impl Store {
             })?
             .collect::<Result<_, _>>()?;
         sent.reverse();
+        let erased: Option<i64> =
+            self.connection
+                .query_row("SELECT MAX(at_s) FROM mesh_erased", [], |row| row.get(0))?;
         Ok(MeshHistory {
             listened,
             packets,
             sent,
+            erased: erased.map(unsigned),
         })
+    }
+
+    /// Deletes everything the mesh told, and notes that it was erased at
+    /// `at`; returns how many packets went.
+    pub fn erase_mesh(&mut self, at: u64) -> Result<u64, StoreError> {
+        let transaction = self.connection.transaction()?;
+        let removed = transaction.execute("DELETE FROM mesh_packets", [])?;
+        transaction.execute("DELETE FROM mesh_sent", [])?;
+        transaction.execute("DELETE FROM mesh_listened", [])?;
+        transaction.execute("DELETE FROM mesh_erased", [])?;
+        transaction.execute("INSERT INTO mesh_erased (at_s) VALUES (?1)", [signed(at)])?;
+        transaction.commit()?;
+        Ok(removed as u64)
+    }
+
+    /// The last `limit` texts heard from `from` on and before `until`, the
+    /// oldest first.
+    pub fn texts(&self, from: u64, until: u64, limit: usize) -> Result<Vec<Packet>, StoreError> {
+        let mut select = self.connection.prepare_cached(
+            "SELECT received_s, from_node, to_node, channel, packet_id, snr, rssi, hops,
+                    hop_start, relay, via_mqtt, app_only, port, data
+             FROM mesh_packets WHERE received_s >= ?1 AND received_s < ?2 AND port = ?3
+             ORDER BY received_s DESC, id DESC LIMIT ?4",
+        )?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let span = params![signed(from), signed(until), session::TEXT_PORT, limit];
+        let mut texts: Vec<Packet> = select.query_map(span, packet)?.collect::<Result<_, _>>()?;
+        texts.reverse();
+        Ok(texts)
     }
 
     /// Deletes what the mesh told before `before`; returns how many
@@ -282,13 +324,7 @@ mod tests {
         let mut minute = heard(ME, 36_030, None);
         (minute.snr, minute.rssi, minute.relay, minute.app_only) = (0.0, 0, 0, true);
         let packets = [heard(GATE, 36_005, Some(text())), sealed, minute];
-        assert_eq!(
-            packets[0].content,
-            Content::Other {
-                port: 1,
-                name: "text message".into()
-            }
-        );
+        assert_eq!(packets[0].content, Content::Text("hi".into()));
         store.add_packets(&packets).unwrap();
         store
             .add_sent(&[(
@@ -351,6 +387,56 @@ mod tests {
         let received: Vec<u64> = history.packets.iter().map(|p| p.received).collect();
         assert_eq!(received, [36_010, 36_050]);
         assert_eq!(history.sent.len(), 2);
+    }
+
+    #[test]
+    fn the_texts_of_a_span_are_its_last_the_oldest_first() {
+        let mut store = Store::in_memory().unwrap();
+        let telemetry = Payload {
+            port: 67,
+            data: vec![0x08, 67],
+        };
+        store
+            .add_packets(&[
+                heard(GATE, 1_000, Some(text())),
+                heard(GATE, 2_000, Some(text())),
+                heard(GATE, 2_500, Some(telemetry)),
+                heard(GATE, 2_600, None),
+                heard(GATE, 3_000, Some(text())),
+                heard(GATE, 4_000, Some(text())),
+            ])
+            .unwrap();
+        let at = |texts: Vec<Packet>| -> Vec<u64> { texts.iter().map(|p| p.received).collect() };
+        assert_eq!(at(store.texts(1_500, 4_000, 10).unwrap()), [2_000, 3_000]);
+        assert_eq!(at(store.texts(0, 4_000, 2).unwrap()), [2_000, 3_000]);
+    }
+
+    #[test]
+    fn erasing_the_mesh_deletes_all_of_it_and_remembers_when() {
+        let mut store = Store::in_memory().unwrap();
+        assert_eq!(store.mesh_since(0, 10).unwrap().erased, None);
+        let listening = store.begin_listening(ME, 1_000).unwrap();
+        store.listened_until(listening, 2_000).unwrap();
+        store
+            .add_packets(&[heard(GATE, 1_500, Some(text())), heard(GATE, 1_600, None)])
+            .unwrap();
+        store.add_sent(&[(ME, Sent { at: 1_700, id: 1 })]).unwrap();
+        assert_eq!(store.erase_mesh(2_000).unwrap(), 2);
+        let history = store.mesh_since(0, 10).unwrap();
+        assert_eq!(
+            history,
+            MeshHistory {
+                erased: Some(2_000),
+                ..MeshHistory::default()
+            }
+        );
+        assert!(store.texts(0, 3_000, 10).unwrap().is_empty());
+        // Erased again later: the later time.
+        store.erase_mesh(2_500).unwrap();
+        assert_eq!(store.mesh_since(0, 10).unwrap().erased, Some(2_500));
+        // Pruning does not forget it.
+        store.prune_mesh(3_000).unwrap();
+        assert_eq!(store.mesh_since(0, 10).unwrap().erased, Some(2_500));
     }
 
     #[test]

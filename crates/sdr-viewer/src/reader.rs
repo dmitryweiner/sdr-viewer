@@ -192,6 +192,8 @@ pub fn run(
                     }
                     Ok(None)
                 }
+                // The mesh's writer's, not the source's.
+                Command::EraseMesh => Ok(None),
             };
             // The answer to a key press must not get lost: wait for room.
             let _ = match done {

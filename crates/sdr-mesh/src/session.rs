@@ -8,7 +8,8 @@ use crate::lora::{self, Radio};
 use crate::proto::config::device_config::Role;
 use crate::proto::{self, PortNum, from_radio, mesh_packet, to_radio};
 use crate::update::{
-    Content, LocalStats, MeshUpdate, Node, NodeUser, Packet, Payload, Ready, Sent,
+    Content, DeviceMetrics, LocalStats, MeshUpdate, Node, NodeUser, Packet, Payload, Position,
+    Ready, Sent,
 };
 
 /// What the node kept for a client that was not connected comes right
@@ -145,6 +146,40 @@ fn node(info: proto::NodeInfo) -> Node {
         snr: (info.snr != 0.0).then_some(info.snr),
         hops_away: info.hops_away,
         via_mqtt: info.via_mqtt,
+        position: info.position.and_then(position),
+        device: info.device_metrics.map(device),
+    }
+}
+
+/// None when it tells no place.
+fn position(position: proto::Position) -> Option<Position> {
+    let (latitude, longitude) = position.latitude_i.zip(position.longitude_i)?;
+    if (latitude, longitude) == (0, 0) {
+        return None;
+    }
+    // The firmware keeps the top bits of each coordinate (in 1e-7 degrees)
+    // and moves it to the middle of the cell they leave: half a cell off at
+    // most, a degree of latitude being some 111 km. Firmware before 2.3
+    // tells 0: exact.
+    let bits = position.precision_bits;
+    let within_m = (1..32).contains(&bits).then(|| {
+        let cell_degrees = f64::from(1u32 << (32 - bits)) / 1e7;
+        cell_degrees * 111_320.0 / 2.0
+    });
+    Some(Position {
+        latitude: f64::from(latitude) / 1e7,
+        longitude: f64::from(longitude) / 1e7,
+        altitude_m: position.altitude,
+        within_m,
+    })
+}
+
+fn device(metrics: proto::DeviceMetrics) -> DeviceMetrics {
+    DeviceMetrics {
+        battery: metrics.battery_level,
+        voltage: metrics.voltage,
+        channel_utilization: metrics.channel_utilization,
+        air_util_tx: metrics.air_util_tx,
     }
 }
 
@@ -199,6 +234,9 @@ fn packet(packet: proto::MeshPacket, received: u64, me: Option<u32>) -> Packet {
     }
 }
 
+/// The port of text messages, which a kept packet is found by.
+pub const TEXT_PORT: i32 = PortNum::TextMessageApp as i32;
+
 /// What a kept payload says: what its packet said when it came.
 pub fn read(payload: &Payload) -> Content {
     proto::Data::decode(&payload.data[..]).map_or_else(
@@ -218,12 +256,28 @@ fn content(data: proto::Data) -> Content {
     }
     if data.portnum == PortNum::TelemetryApp as i32
         && let Ok(telemetry) = proto::Telemetry::decode(&data.payload[..])
-        && let Some(proto::telemetry::Variant::LocalStats(stats)) = telemetry.variant
     {
-        return Content::LocalStats(LocalStats {
-            sent: stats.num_packets_tx,
-            uptime_s: stats.uptime_seconds,
-        });
+        match telemetry.variant {
+            Some(proto::telemetry::Variant::LocalStats(stats)) => {
+                return Content::LocalStats(LocalStats {
+                    sent: stats.num_packets_tx,
+                    uptime_s: stats.uptime_seconds,
+                });
+            }
+            Some(proto::telemetry::Variant::DeviceMetrics(metrics)) => {
+                return Content::Device(device(metrics));
+            }
+            _ => {}
+        }
+    }
+    if data.portnum == PortNum::TextMessageApp as i32 {
+        return Content::Text(String::from_utf8_lossy(&data.payload).into_owned());
+    }
+    if data.portnum == PortNum::PositionApp as i32
+        && let Ok(told) = proto::Position::decode(&data.payload[..])
+        && let Some(position) = position(told)
+    {
+        return Content::Position(position);
     }
     Content::Other {
         port: data.portnum,
@@ -545,6 +599,121 @@ mod tests {
                 uptime_s: 975
             })
         );
+    }
+
+    /// Haifa, rounded by the sender to 13 bits.
+    fn haifa(precision_bits: u32) -> proto::Position {
+        proto::Position {
+            latitude_i: Some(327_941_200),
+            longitude_i: Some(349_892_000),
+            altitude: Some(240),
+            time: 1_794_726_000,
+            precision_bits,
+            ..proto::Position::default()
+        }
+    }
+
+    fn metrics() -> proto::DeviceMetrics {
+        proto::DeviceMetrics {
+            battery_level: Some(87),
+            voltage: Some(4.05),
+            channel_utilization: Some(12.25),
+            air_util_tx: Some(1.5),
+            uptime_seconds: Some(3600),
+        }
+    }
+
+    #[test]
+    fn texts_positions_and_device_metrics_are_read() {
+        let mut session = Session::new(77);
+        let telemetry = proto::Telemetry {
+            time: 0,
+            variant: Some(proto::telemetry::Variant::DeviceMetrics(metrics())),
+        };
+        let mut nowhere = haifa(32);
+        (nowhere.latitude_i, nowhere.longitude_i) = (None, None);
+        let payloads = [
+            data(PortNum::TextMessageApp, "shalom\nall".as_bytes().to_vec()),
+            data(PortNum::PositionApp, haifa(13).encode_to_vec()),
+            data(PortNum::PositionApp, haifa(32).encode_to_vec()),
+            data(PortNum::PositionApp, nowhere.encode_to_vec()),
+            data(PortNum::TelemetryApp, telemetry.encode_to_vec()),
+        ];
+        let stream: Vec<u8> = payloads
+            .into_iter()
+            .flat_map(|payload| framed(from_radio::PayloadVariant::Packet(packet(payload))))
+            .collect();
+        let contents: Vec<Content> = session
+            .on_bytes(&stream, 2000)
+            .into_iter()
+            .map(|update| match update {
+                MeshUpdate::Packet(packet) => packet.content,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(contents[0], Content::Text("shalom\nall".into()));
+        let Content::Position(rounded) = &contents[1] else {
+            panic!("{:?}", contents[1]);
+        };
+        assert_eq!(
+            (rounded.latitude, rounded.longitude, rounded.altitude_m),
+            (32.79412, 34.9892, Some(240))
+        );
+        // 13 bits keep a cell some 5.8 km across: 2.9 km off at most.
+        let within = rounded.within_m.unwrap();
+        assert!((within - 2918.0).abs() < 1.0, "{within}");
+        let Content::Position(exact) = &contents[2] else {
+            panic!("{:?}", contents[2]);
+        };
+        assert_eq!(exact.within_m, None);
+        // A position without one: only its kind.
+        assert_eq!(
+            contents[3],
+            Content::Other {
+                port: PortNum::PositionApp as i32,
+                name: "position".into()
+            }
+        );
+        assert_eq!(
+            contents[4],
+            Content::Device(DeviceMetrics {
+                battery: Some(87),
+                voltage: Some(4.05),
+                channel_utilization: Some(12.25),
+                air_util_tx: Some(1.5),
+            })
+        );
+    }
+
+    #[test]
+    fn the_nodes_database_tells_where_a_node_is_and_its_battery() {
+        let mut session = Session::new(77);
+        let info = proto::NodeInfo {
+            num: 0xbfb5_4553,
+            position: Some(haifa(32)),
+            device_metrics: Some(metrics()),
+            ..proto::NodeInfo::default()
+        };
+        let updates = session.on_bytes(&framed(from_radio::PayloadVariant::NodeInfo(info)), 2000);
+        let [MeshUpdate::Node(node)] = &updates[..] else {
+            panic!("{updates:?}");
+        };
+        let position = node.position.as_ref().unwrap();
+        assert_eq!((position.latitude, position.longitude), (32.79412, 34.9892));
+        assert_eq!(node.device.as_ref().unwrap().battery, Some(87));
+        // Nothing told is nothing.
+        let bare = session.on_bytes(
+            &framed(from_radio::PayloadVariant::NodeInfo(proto::NodeInfo {
+                num: 1,
+                position: Some(proto::Position::default()),
+                ..proto::NodeInfo::default()
+            })),
+            2000,
+        );
+        let [MeshUpdate::Node(bare)] = &bare[..] else {
+            panic!("{bare:?}");
+        };
+        assert_eq!((&bare.position, &bare.device), (&None, &None));
     }
 
     #[test]

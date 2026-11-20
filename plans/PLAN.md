@@ -328,6 +328,7 @@ The first useful version comes after phase 3.
 | The node's own transmissions on its row | The user's decision (2026-11-20, after seeing the dim marks on the device and asking whether the radio packets show): the received ones do (the ticks of the other rows); of its own, a tick in the node's colour when it queues a packet of its own for the air — `meshtasticd` tells a client each one with a `QueueStatus` carrying the packet's number (`MeshService::sendToMesh`), not its acknowledgements, which the router sends itself — and in the card its own exact count from its local stats, every 15 minutes (`num_packets_tx`, acknowledgements too). Not taken: the ticks alone, the count alone, nothing. The height of a tick stays: one packet half a cell, two three quarters, three and more the whole |
 | The mesh's packets in the database | The user's decision (2026-11-20): every packet is kept with its header (time, from, to, channel, SNR, RSSI, hops, relay, kind) and its decoded payload as bytes, so the texts, telemetry and positions of the week show as soon as the app reads them; in the same `events.db`, and with `--mesh` the database is on by default, as with the RTL-SDR. Not taken: the header alone; a file of its own. As built (2026-11-20): the decrypted payload is Meshtastic's whole `Data` message (the port, the bytes, what it answers or reacts to), and the times the app listened are kept too, so the pulse starts with the last day of them before the node answers |
 | Texts, telemetry and positions on the pulse | The user's decision (2026-11-20): the selected node's card gives its last text, battery, channel utilisation, position and the distance to it; under the list of nodes a feed of the latest texts of every channel the node reads. Not taken: the card alone; a key switching the screen between the pulse and the messages |
+| Erasing the pulse's nodes; the texts of the selected node | The user's asks after seeing the texts on the device (2026-11-20), and their decisions: `X` twice on the pulse, as on the channel strip, erases every node — the list, the ticks, the feed and the mesh's packets in the database (`X` asks once). The moment is kept in the database (layout 3), so after a new connection or a new start only the nodes heard again come back as rows; who they are stays known, so one heard again has its name. Not taken: forgetting only what the app keeps (the node's database would bring every node back at the next connection, grey); resetting the node's own database (a command to the node, which would empty a phone app's list too). While a node is selected, the feed under the list has its texts alone (up to 5; "No text heard from …" when it has none); without a selection, every channel's. Not taken: its last texts in the card under a feed of all. The card's line of its last text went: the feed has it |
 | Language | UI in English; docs, README and code comments in English (the shared conventions in `~/projects/CLAUDE.md`) |
 | aarch64 build | Static musl binary built on GitHub's native arm64 runner instead of `cross` |
 | Weak one-frame events | The detector's threshold stays at 8 dB and everything it finds goes into the database; the log hides the weak ones with a filter (minimum level above the floor) whose threshold the user changes from the log screen |
@@ -382,7 +383,7 @@ As of 2026-11-20.
 | 2 | Spectrum and waterfall | Done on the generator, recordings and the RTL-SDR: bars with max hold, waterfall, a scale that follows the noise floor, cursor, tuning (`f`, `[` `]`, Enter), gain, zoom, pause, `--snapshot` |
 | 3 | Detector and log | Done; the user ran it on the air on the device on 2026-11-13 and found it working. Built: the noise floor per bin, the event detector on 100 frames a second, events listed by `--snapshot`, screen 5.5 with the level filter, sorting and tuning to an event (events in memory, stream time), the SQLite event database (`sessions`, `events`; written once a second by its own thread; kept by default only for the RTL-SDR). Events older than 7 days are deleted at the start; with a database the log shows the local time of day and starts with the week's history. The spectrum shows the detector's threshold as a line and the dB above the floor in its header. The last 30 s of samples are held in a ring buffer; the log shows the picture of the selected event made of them, and `r` saves them as SigMF. The detector has regression tests on a piece of real air (`testdata/`). The status line tells overload (`clip`) and lost samples. |
 | 4 | Accumulators | Done: the spectral density (screen 5.3) and the channel strip (5.2) — their decisions are in section 12 — were tried on the air and approved by the user on 2026-11-14, together with `X` twice on the strip and the log and the band's name in the header. Periodicity (5.4), built the same day (its decision is in section 12), finds on the device's LPD433 recording that the hopper comes back to each channel every 2.92 s; the user tried it on the air on 2026-11-15 ("works well") and asked for its tab to come right after the strip's |
-| 5 | Meshtastic | Started 2026-11-15: `meshtasticd` runs on the device's LoRa radio and the node is set up (section 12). Planned order, each its own pull request: the client and the pulse (`--mesh`, screen 5.6 with the nodes, their packets, SNR and hops) — built and tried by the user on the device (2026-11-15), then changed as that trial asked (section 12) and found "working great" (2026-11-20); the node's own row as the user decided (2026-11-20: what only the app gets is a mark of its own; what it sends a tick in its colour, and its own count of it in the card) — tried by the user on the device, ticks too; the packets in the database, built 2026-11-20 (layout 2 of `events.db`: the times the app listened, every packet with its decrypted `Data`, the node's own queued; the pulse starts with the last day of them); then texts, telemetry and positions |
+| 5 | Meshtastic | Started 2026-11-15: `meshtasticd` runs on the device's LoRa radio and the node is set up (section 12). Planned order, each its own pull request: the client and the pulse (`--mesh`, screen 5.6 with the nodes, their packets, SNR and hops) — built and tried by the user on the device (2026-11-15), then changed as that trial asked (section 12) and found "working great" (2026-11-20); the node's own row as the user decided (2026-11-20: what only the app gets is a mark of its own; what it sends a tick in its colour, and its own count of it in the card) — tried by the user on the device, ticks too; the packets in the database, built 2026-11-20 (layout 2 of `events.db`: the times the app listened, every packet with its decrypted `Data`, the node's own queued; the pulse starts with the last day of them) — tried by the user on the device, the history seen; texts, telemetry and positions as the user decided, built 2026-11-20 (the card: battery and airtime, where the node is and how far, its last text; under the list the last texts of every channel the node reads, those of the week from the database too). Phase 5 is complete once the user has tried this |
 | 6–8 | | Not started |
 
 Known limits of the channel strip as built:
@@ -438,11 +439,29 @@ Known limits of the Meshtastic pulse as built (5.6):
   here.
 - Only what the node hands this app is kept: what it heard while another
   client was connected (a phone app on its API) went to that client.
-  `X` twice erases events, never the mesh's packets.
-- What a packet says is not read yet but for node info (the name) and
-  the node's local stats: texts, telemetry and positions are the next
-  pull request — their payloads are kept already. Its kind ("telemetry",
-  "position", "encrypted") is told.
+  `X` twice on the pulse erases every node and all the mesh's packets,
+  in the database too; on the log, the events alone. After the pulse's,
+  the node's own database still knows the nodes: one heard before the
+  erasing comes back as a row only when it is heard again, by its name.
+- What a packet says is read for node info (the name), texts, positions,
+  the device's telemetry (battery, voltage, the channel's utilisation and
+  the node's own airtime) and the node's local stats; anything else is
+  told by its kind ("environment" telemetry, "neighborinfo",
+  "encrypted"). Compressed texts (`TEXT_MESSAGE_COMPRESSED_APP`) are
+  not read; a reaction is a text of its emoji, without what it reacts to.
+- The feed holds the last 200 texts (at the start those of the last week
+  in the database), in the order the node heard them; `m` starts it
+  afresh too. A direct message to the node is "→ this node". While a
+  node is selected, the feed is its texts alone: of a quiet node only
+  those among the last 200.
+- A node's battery, airtime and position are the last its packets told,
+  or the node's database at a connection when it tells another (then
+  without a time: "2 m ago" is only for what came here). A position is
+  often rounded by its sender on purpose (the channel's position
+  precision): the card says by how much ("±365 m").
+- The distance is from where the node itself last told it was; it has
+  no GPS of its own, so without a fixed position set on the node there
+  is none. The uConsole's GPS (`gpsd`, phase 8) would give one.
 - `meshtasticd` hands a client the packets it kept while none was
   connected — up to 100 (`MaxMessageQueue`) — at the next connection;
   once 100 wait it drops the new ones, so of a long absence only the

@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use sdr_core::SourceInfo;
 use sdr_detect::Event as Detected;
-use sdr_mesh::update::MeshUpdate;
+use sdr_mesh::update::{MeshUpdate, Packet};
 use sdr_store::mesh::{ListenId, MeshHistory};
 use sdr_store::{Store, StoredEvent};
 
@@ -84,17 +84,34 @@ pub fn keep_events(
     })
 }
 
+/// What the interface hands the mesh's writer, in order.
+#[derive(Debug, Clone)]
+pub enum MeshKept {
+    /// What the client told, and when.
+    Told(u64, Box<MeshUpdate>),
+    /// The user erased the nodes then: what was kept goes.
+    EraseAll(u64),
+}
+
+impl MeshKept {
+    pub fn told(at: u64, update: MeshUpdate) -> Self {
+        MeshKept::Told(at, Box::new(update))
+    }
+}
+
 /// The mesh in the database at work: where the interface sends what the
-/// client told, each with the time it was told, the thread that writes it,
-/// and what earlier runs kept of the last day.
+/// client told and when the nodes were erased, the thread that writes it,
+/// what earlier runs kept of the last day, and the texts of the week before
+/// it.
 pub struct KeptMesh {
-    pub told: Sender<Vec<(u64, MeshUpdate)>>,
+    pub told: Sender<Vec<MeshKept>>,
     pub writer: JoinHandle<()>,
     pub history: MeshHistory,
+    pub texts: Vec<Packet>,
 }
 
 /// Opens the database at `path` for the mesh at `now` (Unix seconds), reads
-/// the last day, and starts the thread that deletes what is older than
+/// the last day and the texts of the week before it, and starts the thread that deletes what is older than
 /// `KEEP_EVENTS` and then writes what is told: when the app listened to
 /// which node (from its `Ready` to its `Lost`, or to the last thing told
 /// if the app was stopped short), the packets and the node's own queued.
@@ -106,19 +123,40 @@ pub fn keep_mesh(path: &Path, now: u64, updates: SyncSender<Update>) -> Result<K
     let history = store
         .mesh_since(day_ago, MAX_HISTORY)
         .map_err(|err| failed(path, &err))?;
-    let (told, rx) = channel::<Vec<(u64, MeshUpdate)>>();
+    let week_ago = now.saturating_sub(KEEP_EVENTS.as_secs());
+    let texts = store
+        .texts(week_ago, day_ago, sdr_tui::mesh::MAX_TEXTS)
+        .map_err(|err| failed(path, &err))?;
+    let (told, rx) = channel::<Vec<MeshKept>>();
     let writer = std::thread::spawn(move || {
-        if let Err(err) = store.prune_mesh(now.saturating_sub(KEEP_EVENTS.as_secs())) {
+        if let Err(err) = store.prune_mesh(week_ago) {
             let _ = updates.send(Update::Notice(format!(
                 "old packets are not deleted: {err}"
             )));
         }
         let mut me = None;
         let mut listening: Option<ListenId> = None;
-        let mut write = |told: &[(u64, MeshUpdate)]| {
+        let mut write = |told: &[MeshKept]| {
             let mut packets = Vec::new();
             let mut sent = Vec::new();
-            for (at, update) in told {
+            let mut last = None;
+            for kept in told {
+                let (at, update) = match kept {
+                    MeshKept::Told(at, update) => (at, update.as_ref()),
+                    MeshKept::EraseAll(at) => {
+                        // What came before it goes with what is kept; the
+                        // app listens on from then.
+                        packets.clear();
+                        sent.clear();
+                        store.erase_mesh(*at)?;
+                        if let (Some(_), Some(me)) = (listening, me) {
+                            listening = Some(store.begin_listening(me, *at)?);
+                        }
+                        last = Some(*at);
+                        continue;
+                    }
+                };
+                last = Some(*at);
                 match update {
                     MeshUpdate::Ready(ready) => {
                         if let Some(before) = listening.take() {
@@ -139,12 +177,12 @@ pub fn keep_mesh(path: &Path, now: u64, updates: SyncSender<Update>) -> Result<K
             }
             store.add_packets(&packets)?;
             store.add_sent(&sent)?;
-            match (listening, told.last()) {
-                (Some(going_on), Some((at, _))) => store.listened_until(going_on, *at),
+            match (listening, last) {
+                (Some(going_on), Some(at)) => store.listened_until(going_on, at),
                 _ => Ok(()),
             }
         };
-        let write = |told: &[(u64, MeshUpdate)]| write(told).map_err(|err| err.to_string());
+        let write = |told: &[MeshKept]| write(told).map_err(|err| err.to_string());
         if let Err(message) = writer::run(rx, write) {
             let _ = updates.send(Update::Notice(format!("packets are not kept: {message}")));
         }
@@ -153,6 +191,7 @@ pub fn keep_mesh(path: &Path, now: u64, updates: SyncSender<Update>) -> Result<K
         told,
         writer,
         history,
+        texts,
     })
 }
 
@@ -174,7 +213,7 @@ fn failed(path: &Path, err: &dyn std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sdr_mesh::update::{BROADCAST, Content, Packet, Ready, Sent};
+    use sdr_mesh::update::{BROADCAST, Content, Packet, Payload, Ready, Sent};
     use sdr_store::mesh::Listened;
     use std::sync::mpsc::sync_channel;
     use std::time::UNIX_EPOCH;
@@ -347,18 +386,99 @@ mod tests {
         })
     }
 
+    /// A text heard at `received`.
+    fn text(received: u64) -> MeshUpdate {
+        let MeshUpdate::Packet(mut packet) = heard(received) else {
+            unreachable!()
+        };
+        packet.payload = Some(Payload {
+            port: 1,
+            data: vec![0x08, 0x01, 0x12, 0x02, b'h', b'i'],
+        });
+        packet.content = Content::Text("hi".into());
+        MeshUpdate::Packet(packet)
+    }
+
     /// One run of the app: `told` sent to its writer, which is then
     /// waited for; what it read at its start.
     fn run(path: &Path, now: u64, told: Vec<Vec<(u64, MeshUpdate)>>) -> MeshHistory {
+        run_for_texts(path, now, told).0
+    }
+
+    /// The same, with the texts of the week before the day it read.
+    fn run_for_texts(
+        path: &Path,
+        now: u64,
+        told: Vec<Vec<(u64, MeshUpdate)>>,
+    ) -> (MeshHistory, Vec<Packet>) {
         let (updates, notices) = sync_channel(8);
         let kept = keep_mesh(path, now, updates).unwrap();
         for batch in told {
-            kept.told.send(batch).unwrap();
+            let batch = batch
+                .into_iter()
+                .map(|(at, update)| MeshKept::told(at, update));
+            kept.told.send(batch.collect()).unwrap();
         }
         drop(kept.told);
         kept.writer.join().unwrap();
         assert!(notices.try_recv().is_err());
-        kept.history
+        (kept.history, kept.texts)
+    }
+
+    #[test]
+    fn erasing_deletes_what_was_kept_and_the_next_run_knows_when() {
+        let dir = TempDir::new("mesh-erase");
+        let path = dir.0.join("events.db");
+        let at = NOON_S - 3600;
+        let (updates, notices) = sync_channel(8);
+        let kept = keep_mesh(&path, at, updates).unwrap();
+        // Erased amid a batch: what came before goes, what came after stays.
+        let told = vec![
+            MeshKept::told(at, ready()),
+            MeshKept::told(at + 10, heard(at + 9)),
+            MeshKept::told(at + 20, MeshUpdate::Sent(Sent { at: at + 20, id: 7 })),
+            MeshKept::EraseAll(at + 30),
+            MeshKept::told(at + 40, heard(at + 39)),
+        ];
+        kept.told.send(told).unwrap();
+        drop(kept.told);
+        kept.writer.join().unwrap();
+        assert!(notices.try_recv().is_err());
+        let history = run(&path, NOON_S, Vec::new());
+        assert_eq!(history.erased, Some(at + 30));
+        let received: Vec<u64> = history.packets.iter().map(|p| p.received).collect();
+        assert_eq!(received, [at + 39]);
+        assert!(history.sent.is_empty());
+        // It goes on listening from then.
+        assert_eq!(
+            history.listened,
+            [Listened {
+                node: ME,
+                from: at + 30,
+                until: at + 40
+            }]
+        );
+    }
+
+    #[test]
+    fn the_next_run_reads_the_texts_of_the_week_before_its_day_too() {
+        let dir = TempDir::new("mesh-texts");
+        let path = dir.0.join("events.db");
+        for ago in [8 * DAY_S, 3 * DAY_S, 2 * 3600] {
+            let at = NOON_S - ago;
+            let told = vec![vec![
+                (at, ready()),
+                (at + 1, text(at)),
+                (at + 2, heard(at + 2)),
+            ]];
+            run(&path, at, told);
+        }
+        let (history, texts) = run_for_texts(&path, NOON_S, Vec::new());
+        let received: Vec<u64> = texts.iter().map(|text| text.received).collect();
+        assert_eq!(received, [NOON_S - 3 * DAY_S]);
+        assert_eq!(texts[0].content, Content::Text("hi".into()));
+        // The day's are among the day's packets.
+        assert_eq!(history.packets.len(), 2);
     }
 
     #[test]

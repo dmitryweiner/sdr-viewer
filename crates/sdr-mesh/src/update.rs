@@ -58,6 +58,35 @@ pub struct Node {
     pub snr: Option<f32>,
     pub hops_away: Option<u32>,
     pub via_mqtt: bool,
+    /// Where it last told it was, and its last device metrics.
+    pub position: Option<Position>,
+    pub device: Option<DeviceMetrics>,
+}
+
+/// Where a node is, as it tells it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Position {
+    /// Degrees, north and east positive.
+    pub latitude: f64,
+    pub longitude: f64,
+    /// Metres above sea level.
+    pub altitude_m: Option<i32>,
+    /// How far from where it is it may be: a node rounds its position on
+    /// purpose before it sends it on a channel. None when it is exact.
+    pub within_m: Option<f64>,
+}
+
+/// What a node tells of itself every so often.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceMetrics {
+    /// Percent; over 100 when it is powered from outside.
+    pub battery: Option<u32>,
+    pub voltage: Option<f32>,
+    /// How busy the channel is, percent of the time: every node's
+    /// transmissions it hears, and noise.
+    pub channel_utilization: Option<f32>,
+    /// Its own transmissions, percent of the time in the last hour.
+    pub air_util_tx: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,7 +161,15 @@ pub enum Content {
     User(NodeUser),
     /// The node's own counts.
     LocalStats(LocalStats),
+    /// A text message (or a reaction to one: its emoji).
+    Text(String),
+    Position(Position),
+    /// Telemetry of the device: battery and airtime.
+    Device(DeviceMetrics),
     /// Anything else, by its port: the number and a short name ("text
     /// message", "telemetry", "position").
-    Other { port: i32, name: String },
+    Other {
+        port: i32,
+        name: String,
+    },
 }
